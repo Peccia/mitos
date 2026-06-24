@@ -1,0 +1,51 @@
+# Declarative project metadata. The SUPPORTED workflow is the virtualenv + build/requirements.txt
+# documented in the README and CONTRIBUTING.md — run commands with the venv interpreter directly.
+# This file is not yet wired for `pip install` (the flat layout has no package config), so don't
+# rely on an editable/packaged install; it exists for metadata, tooling, and future packaging.
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mitos"
+version = "0.1.0"
+description = "A human-agentic registry and compiler that materializes identity, skills, and context across AI tools."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Paul Peccia" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+# Keep in sync with build/requirements.txt (the canonical install list).
+dependencies = [
+    "pyyaml>=6.0",
+    "ruamel.yaml>=0.18",
+    "rdflib>=7.0",
+]
+
+[project.optional-dependencies]
+# The test suite runs with the stdlib runner (`python build/tests/test_compiler.py`); pytest is
+# only needed if you prefer to run it under pytest.
+dev = [
+    "pytest>=8.0",
+]
+# Workspace connector backends are lazy-imported, optional, and installed only if you use them:
+#   gws (direct OAuth): google-api-python-client, google-auth-oauthlib
+#   mcp (talk to a running MCP server): requests
+connectors = [
+    "requests>=2.31",
+    "google-api-python-client>=2.0",
+    "google-auth-oauthlib>=1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["build/tests"]

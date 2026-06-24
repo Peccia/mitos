@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m venv build/.venv
+          build/.venv/bin/python -m pip install -r build/requirements.txt
+
+      - name: Validate registry schema
+        run: build/.venv/bin/python build/compile.py compile
+
+      - name: Run test suite
+        run: build/.venv/bin/python build/tests/test_compiler.py
+
+      - name: Self-drift guard — check AGENTS.md is current
+        run: |
+          # Compile the mitos project's builder section from core sources only (no
+          # private overlay) and verify it matches the committed AGENTS.md builder
+          # section. Fails loudly when a registry edit isn't reflected in the artifact.
+          build/.venv/bin/python - <<'EOF'
+          import re, sys
+          from pathlib import Path
+
+          root = Path(".")
+
+          def strip_fm(text):
+              m = re.match(r"^---\n.*?\n---\n?(.*)", text, re.DOTALL)
+              return m.group(1) if m else text
+
+          builder_src = strip_fm(
+              (root / "registry/context/projects/mitos.md").read_text(encoding="utf-8")
+          ).strip()
+
+          agents_md = (root / "AGENTS.md").read_text(encoding="utf-8")
+
+          marker = "# Mitos — Builder Context"
+          idx = agents_md.find(marker)
+          if idx == -1:
+              print("ERROR: '# Mitos — Builder Context' not found in AGENTS.md", file=sys.stderr)
+              sys.exit(1)
+
+          committed_builder = agents_md[idx:].rstrip("\n")
+
+          if committed_builder != builder_src:
+              print("ERROR: AGENTS.md builder section is stale.", file=sys.stderr)
+              print("The committed AGENTS.md does not match registry/context/projects/mitos.md.", file=sys.stderr)
+              print("Run deploy for the mitos project and commit the result.", file=sys.stderr)
+              import difflib
+              diff = difflib.unified_diff(
+                  builder_src.splitlines(keepends=True),
+                  committed_builder.splitlines(keepends=True),
+                  fromfile="registry/context/projects/mitos.md (source)",
+                  tofile="AGENTS.md (committed)",
+                  n=3,
+              )
+              sys.stderr.writelines(diff)
+              sys.exit(1)
+
+          print("AGENTS.md builder section matches registry source. OK.")
+          EOF

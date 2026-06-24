@@ -1,0 +1,77 @@
+# Target: Hermes (the assistant agent on the Linux box).
+# Hermes consumes: SOUL.md (system prompt), a skills tree, an MCP block merged into its
+# own config.yaml, and the assistant AGENTS.md tree (produced by the agents-md target,
+# deployed to the same machine — see machines/example-linux.yaml).
+
+target: hermes
+
+# SOUL.md — Hermes's system prompt, from the universal identity partials.
+# Order is deliberate (the less-is-more lesson from the pre-Mitos PoC): persona first,
+# the core working rules immediately after, then security/comms, session protocol last.
+context_file:
+  sources: [identity/who-i-am.md, identity/operating-rules.md, identity/security.md, identity/comms-style.md, identity/session-protocol.md]
+  deploy_to_key: hermes_home        # resolved per machine
+  filename: SOUL.md
+  drift_policy: protect
+
+# Skills — copied (not symlinked) so Hermes's curator can mutate deployed copies;
+# those mutations are harvested back, never silently lost.
+skills:
+  include_target: hermes            # ship skills whose `targets:` contains "hermes"
+  # Optional curation (pull side) — limit this tool's skill set in ONE place instead
+  # of editing each skill's `targets:` frontmatter (push side). Names are validated
+  # against registry/skills/ at compile. After deselecting, run
+  # `deploy --machine <m> --prune` to remove the already-deployed copies.
+  # include: [plan, gws]            # ONLY these (of the compatible ones)
+  # exclude: [example-ops-logs]      # all compatible ones EXCEPT these
+  mode: copy
+  deploy_to_key: hermes_home
+  subdir: skills/{category}/{name}  # preserves the devops/productivity grouping
+  # Emit Hermes-native frontmatter: name, description, version, author, license,
+  # platforms, and metadata.hermes.tags (reconstructed from the canonical `hermes` key
+  # merged with `category`).
+  frontmatter: hermes
+  drift_policy: harvest
+
+# MCP — surgical merge of the canonical servers into Hermes's existing config.yaml.
+# Only `owned_keys` are touched; comments/order preserved via ruamel.yaml.
+mcp:
+  mode: yaml_merge
+  file_key: hermes_config           # resolved per machine
+  owned_keys: [mcp_servers]
+  server_alias: gws                 # Hermes refers to the server as `gws`
+  # Hermes expects: mcp_servers.<alias>.url + .tools.include (flat tool list)
+  render: hermes_mcp_servers
+  drift_policy: protect
+
+# Settings — surgical merge of machine-declared runtime knobs into the same config.yaml,
+# reasserted on EVERY deploy (unlike protect/harvest files, a merge is never paused for
+# drift review — see docs/managing-state.md). Two ownership shapes:
+#   - dotted LEAF paths, for a key living inside an otherwise Hermes/user-owned block
+#     (e.g. agent.max_turns) — only that leaf is touched, siblings (agent.verbose, ...)
+#     are left alone;
+#   - whole top-level keys (fallback_providers, fallback_model, custom_providers), for
+#     blocks dedicated entirely to this purpose — same shape as the mcp: block above.
+# Content comes from render.hermes_settings_block, sourced from the machine's own
+# hermes_settings: block (see machines/example-linux.yaml) plus paths.assistant_root for
+# terminal.cwd. Deliberately excludes model.default/model.provider — a `/model` switch may
+# persist back to config.yaml, and reasserting here would fight normal daily use.
+# Add a new leaf/key by (1) listing it in owned_keys and (2) teaching
+# hermes_settings_block where its value comes from.
+settings:
+  mode: yaml_merge
+  file_key: hermes_config
+  owned_keys:
+    - terminal.cwd
+    - memory.memory_enabled
+    - memory.user_profile_enabled
+    - agent.max_turns
+    - agent.restart_drain_timeout
+    - agent.disabled_toolsets
+    - platform_toolsets.cli
+    - platform_toolsets.telegram
+    - session_reset.mode
+    - fallback_providers
+    - fallback_model
+    - custom_providers
+  drift_policy: protect

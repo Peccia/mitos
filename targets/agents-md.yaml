@@ -1,0 +1,41 @@
+# Target: AGENTS.md — the generic, tool-neutral context format.
+# Consumed by anything that reads AGENTS.md (Antigravity IDE, Hermes assistant tree,
+# Claude Code as a fallback). Renders one or more context trees from registry partials.
+#
+# An "output" = one rendered file: a template fed by registry sources, deployed to a
+# path (resolved per machine), with a drift policy.
+
+target: agents-md
+# Each output is the raw concatenation of its registry source partials — no banners,
+# no provenance markers, no per-file template (invariant #5). render.plain_document
+# joins the sections; there is no .j2 layer.
+
+# Tree 1 — the personal-assistant context tree (Hermes / Antigravity assistant root).
+# `root` is a machine path key resolved in machines/*.yaml.
+trees:
+  assistant:
+    root_key: assistant_root
+    drift_policy: protect
+    files:
+      # Root entry point: the first file new-session reads. Lean routing + personal-context
+      # bridge only — no org/domain detail (wasted context on Assistant requests).
+      "AGENTS.md": [context/agentic-root.md]
+      # Projects branch root: the roster + org/domain structure (where org context belongs,
+      # per the routing model — only loaded when entering project work).
+      "Projects/AGENTS.md": [context/projects-index.md]
+      # Assistant branch root: domain-agnostic one-shot workflows.
+      "Assistant/AGENTS.md": [context/assistant.md]
+    # Dynamic per-project entries: for each project that declares context.<key>,
+    # generate "Projects/<project.name>/AGENTS.md" from that partial.
+    project_context_key: assistant
+
+# Tree 2 — per code-project root AGENTS.md (builder context). Emitted for projects
+# whose context declares a `builder` partial and which have a local_path on the machine.
+project_agents:
+  drift_policy: protect
+  # filename at the project's local_path root:
+  filename: AGENTS.md
+  # On machines that also deploy hermes, the identity/* sources are dropped at plan
+  # time (planner._plan_agents_md): SOUL.md already carries the persona on every
+  # request, so repeating it here would only tax context.
+  sources: [identity/who-i-am.md, identity/security.md, identity/comms-style.md, identity/operating-rules.md, "{project.context.builder}"]
