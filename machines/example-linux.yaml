@@ -1,0 +1,28 @@
+# Example: Linux machine running the Hermes assistant gateway.
+# Copy to registry/local/machines/ and customize for your setup.
+name: example-linux
+example: true   # template — copy into registry/local/machines/ and rename; not a live machine
+os: linux
+targets: [hermes, agents-md]
+paths:
+  hermes_home: "~/.hermes"
+  hermes_config: "~/.hermes/config.yaml"
+  assistant_root: "~/MitosAgent"
+
+# Runtime config.yaml knobs Mitos owns via targets/hermes.yaml's `settings:` merge —
+# terminal.cwd is derived automatically from paths.assistant_root above and needs no
+# field here; hermes_settings only carries knobs with no other source. Full key list
+# (memory/agent/toolset/fallback knobs) is documented in registry/README.md.
+# hermes_settings:
+#   memory_enabled: true
+#   disabled_toolsets: [image_gen, video, tts]
+
+# How `mitos sync --machine example-linux` reaches this box. Uncomment and set your own hub.
+# Sync is git-only: the overlay (registry/local/) is a git repo synced to `hub` — any git URL
+# (a server you host or a private GitHub repo). Secrets never go here. See docs/lan-sync.md.
+# sync:
+#   git:
+#     hub: "ssh://you@gitserver/mitos-local.git"   # or git@github.com:you/mitos-local.git
+#     # remote: origin            # optional (default origin)
+#     # branch: main              # optional (default main)
+#     # ssh_key: "~/.ssh/mitos"   # optional: a specific private key for an ssh hub

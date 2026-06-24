@@ -1,0 +1,27 @@
+# Compiler output — generated, never committed (V2 may opt into a build branch)
+dist/
+.claude/
+
+# Per-machine deploy state (content hashes for drift detection)
+.deploy-lock.json
+
+# Local secrets overlay — merged into env templates at deploy time
+.local/
+
+# Mitos personal overlay — private identity/projects/graph/skills (the Mitos overlay design).
+# The public core ships neutral defaults; a user's personalization lives here, untracked.
+registry/local/
+
+# Real secret files (only *.example templates are tracked)
+*.env
+!*.env.example
+
+# Python compiler tooling
+build/__pycache__/
+build/.venv/
+__pycache__/
+*.pyc
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

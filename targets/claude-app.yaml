@@ -1,0 +1,57 @@
+# Target: Claude consumer app — the claude.ai account surface, shared by the web app
+# AND the Windows/macOS Desktop app. Skills and connectors configured on the account
+# appear in BOTH; they are not separate products. This is the MANUAL Claude target;
+# `claude-code` is the automated one (it writes a real filesystem `.claude/` tree).
+#
+# It emits two independent, opt-in-by-path-key halves:
+#
+# 1) SKILLS (content lane) — claude.ai exposes no filesystem the compiler can reach and
+#    no upload API, so `deploy` STAGES ready-to-upload skill zips (`<name>.zip` holding
+#    `<name>/SKILL.md`, per https://support.claude.com/en/articles/12512180) at the
+#    machine's `claude_skills_staging` path. The last mile is MANUAL: claude.ai →
+#    Customize > Skills → Upload a skill (syncs to web + Desktop). The lockfile closes
+#    half the loop: after a registry edit the staged zip classifies `pending` on the
+#    next deploy — the re-upload reminder. No harvest loop (account state is invisible);
+#    staged zips are protected build artifacts.
+#
+# 2) MCP CONFIG (connections lane) — the account Connectors UI accepts remote servers
+#    by URL but ONLY over https, so a LAN/HTTP server (e.g. gws on 192.168.x.x) cannot
+#    be added there. As a Desktop-only workaround Mitos writes claude_desktop_config.json
+#    with an `npx mcp-remote` stdio bridge (a local process that connects out to the
+#    server; https is not required for a local hop). REQUIRES Node.js / npx on the box.
+#    Emitted only when `claude_desktop_config` is set. OWNERSHIP: kind json_merge owning
+#    just the `mcpServers` key — Desktop stores its own preferences in the same file, so
+#    a whole-file write would erase them. The bridge package is PINNED to an exact
+#    version in build/agentic/render.py (MCP_REMOTE_SPEC) to block supply-chain hijack.
+#
+# Each half is independent: a web-only machine sets `claude_skills_staging` only; a Desktop
+# machine that needs LAN MCP tools sets `claude_desktop_config` too.
+#
+# WHAT IT DOES NOT DO:
+#   - Prompts: no native prompt slot (console Prompt Library = copy-paste)
+#   - Project instructions: UI-only, no filesystem path
+#
+# claude_desktop_config PATH KEY (machine profile) depends on the install:
+#   Windows (classic .exe): "~/AppData/Roaming/Claude/claude_desktop_config.json"
+#   Windows (MSIX / Store):  "~/AppData/Local/Packages/<PackageFamilyName>/LocalCache/
+#                             Roaming/Claude/claude_desktop_config.json"
+#                             (family name: `Get-AppxPackage *Claude* | Select PackageFamilyName`)
+#   macOS:                   "~/Library/Application Support/Claude/claude_desktop_config.json"
+#   Use the leading "~" form — io.expand() does NOT expand %APPDATA%.
+
+target: claude-app
+
+skills:
+  include_target: claude-app        # ship skills whose `targets:` contains "claude-app"
+  mode: zip                         # one deterministic <name>.zip per skill
+  deploy_to_key: claude_skills_staging  # resolved per machine
+  frontmatter: claude-app           # Agent Skills standard: name + description
+  drift_policy: protect
+  include: [gws]
+
+server_alias: gws-mcp-local
+
+mcp_config:
+  filename: claude_desktop_config.json
+  deploy_to_key: claude_desktop_config
+  drift_policy: protect
