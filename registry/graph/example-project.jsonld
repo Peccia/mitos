@@ -1,0 +1,35 @@
+{
+  "@context": {
+    "@vocab": "https://schema.org/"
+  },
+  "@graph": [
+    {
+      "@id": "http://peccia.net/project/example-project",
+      "@type": "Project",
+      "name": "Example Project",
+      "description": "A sample project mapping its Workspace documents into the knowledge graph."
+    },
+    {
+      "@id": "http://peccia.net/document/EXAMPLE_DRIVE_ID_1",
+      "@type": "DigitalDocument",
+      "identifier": "EXAMPLE_DRIVE_ID_1",
+      "name": "Project Brief",
+      "description": "The one-page brief describing this example project.",
+      "dateModified": "2026-06-20",
+      "isPartOf": {
+        "@id": "http://peccia.net/project/example-project"
+      }
+    },
+    {
+      "@id": "http://peccia.net/document/EXAMPLE_DRIVE_ID_2",
+      "@type": "DigitalDocument",
+      "identifier": "EXAMPLE_DRIVE_ID_2",
+      "name": "Requirements Doc",
+      "description": "Working requirements and open questions for the example project.",
+      "dateModified": "2026-06-18",
+      "isPartOf": {
+        "@id": "http://peccia.net/project/example-project"
+      }
+    }
+  ]
+}

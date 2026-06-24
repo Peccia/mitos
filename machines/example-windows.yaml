@@ -1,0 +1,13 @@
+# Example: Windows workstation with Gemini, Claude, and agents-md.
+# Copy to registry/local/machines/ and customize for your setup.
+name: example-windows
+example: true   # template — copy into registry/local/machines/ and rename; not a live machine
+os: windows
+targets: [gemini, claude-ai, claude-code, agents-md, claude-desktop]
+paths:
+  projects_root: "C:/Projects"
+  gemini_config: "~/.gemini/config"
+  antigravity_skills: "~/.gemini/skills"
+  claude_ai_staging: "~/ClaudeSkills"
+  agentic_context_root: "C:/Mitos"
+  # claude_desktop_config: "%APPDATA%/Claude/claude_desktop_config.json"

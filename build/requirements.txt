@@ -1,0 +1,13 @@
+# Canonical install list for the compiler + deterministic verbs. Keep in sync with the
+# [project] dependencies in pyproject.toml.
+pyyaml>=6.0
+ruamel.yaml>=0.18
+# Knowledge graph (the knowledge-graph design): load/validate/query the
+# schema.org JSON-LD project graphs. Imported lazily — only when registry/graph/
+# holds files — so the compiler stays lean where the graph is unused.
+rdflib>=7.0
+
+# Optional workspace-connector backends are NOT installed here — they are lazy-imported only
+# when used. Install them on demand (see pyproject.toml [connectors]):
+#   mcp connector (talk to a running MCP server):  pip install requests
+#   gws connector (direct Google OAuth):           pip install google-api-python-client google-auth-oauthlib

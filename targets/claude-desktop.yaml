@@ -1,0 +1,29 @@
+# Target: Claude Desktop — MCP server configuration (connections lane only).
+#
+# Claude Desktop shares skills with claude.ai web (already handled by the claude-ai
+# target — skill zip uploads sync via the shared account). This target handles one thing:
+# writing the Desktop MCP config file so users don't have to wire servers by hand.
+#
+# WHAT IT DOES NOT DO:
+#   - Prompts: no native prompt slot on Desktop (console Prompt Library = copy-paste)
+#   - Project instructions: UI-only, no filesystem path (set via Desktop > Projects UI)
+#   - Skills: already covered by the claude-ai target
+#
+# MACHINE PATH KEY:
+#   Add `claude_desktop_config` to your machine profile paths:
+#     Windows: "%APPDATA%/Claude/claude_desktop_config.json"
+#     macOS:   "~/Library/Application Support/Claude/claude_desktop_config.json"
+#   When the key is absent, this target produces no outputs — a safe no-op.
+#
+# OWNERSHIP: Mitos writes the entire mcpServers block (kind: json, not json_merge).
+#   Servers added outside connections/servers.yaml will be overwritten on next deploy
+#   and flagged as drift. Add all MCP servers to connections/servers.yaml instead.
+
+target: claude-desktop
+
+server_alias: gws-mcp-local
+
+mcp_config:
+  filename: claude_desktop_config.json
+  deploy_to_key: claude_desktop_config
+  drift_policy: protect

@@ -1,0 +1,12 @@
+# The registry manages itself — this repo is the first project the system manages.
+name: Mitos
+slug: mitos
+stage: build              # ideation | speccing | build | maintain
+repo: "git@github.com:Peccia/mitos.git"
+local_path:
+  example-windows: mitos        # the repo manages itself at <projects_root>/mitos
+# No Google Drive collaboration footprint — this project lives in git, not Drive.
+drive: {}
+agents: [code-reviewer]
+context:
+  builder: registry/context/projects/mitos.md   # → root AGENTS.md

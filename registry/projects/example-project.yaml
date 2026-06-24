@@ -1,0 +1,17 @@
+# Example project manifest — demonstrates all available fields.
+# Copy to registry/local/projects/ and customize for your own projects.
+name: Example Project
+slug: example-project
+stage: build              # ideation | speccing | build | maintain
+repo: ""                  # set the git URL once the project is published
+document_store: none      # MCP server (from connections/servers.yaml) that backs graph init;
+                          # e.g. `gws`. `none` = no document store mapped for this project.
+local_path:
+  example-windows: example-project   # checkout dir under the machine's projects_root
+drive:
+  root_folder: ""
+  artifacts: {}
+agents: [code-reviewer]   # a subagent reused across projects, authored once
+context:
+  assistant: registry/context/projects/example-project.md
+  repo: registry/context/projects/example-project-repo.md

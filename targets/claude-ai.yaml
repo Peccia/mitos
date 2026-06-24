@@ -1,0 +1,24 @@
+# Target: Claude.ai — the web app + the Windows Desktop app (one account surface;
+# uploaded skills sync across both).
+#
+# DIFFERENT DEPLOY CONTRACT than every other target, on purpose: claude.ai exposes no
+# filesystem the compiler can reach and no consumer upload API. `deploy` therefore
+# ends at STAGING ready-to-upload skill zips (`<name>.zip` containing
+# `<name>/SKILL.md`, per https://support.claude.com/en/articles/12512180) at the
+# machine's `claude_ai_staging` path. The last mile is manual: claude.ai →
+# Customize > Skills → Upload a skill.
+#
+# The lockfile still closes half the loop: after a registry edit, the staged zip
+# classifies `pending` on the next deploy — that is the re-upload reminder list.
+# There is NO harvest loop for this surface (account-side state is invisible), so
+# staged zips are protected build artifacts, never an intake field.
+
+target: claude-ai
+
+skills:
+  include_target: claude-ai         # ship skills whose `targets:` contains "claude-ai"
+  mode: zip                         # one deterministic <name>.zip per skill
+  deploy_to_key: claude_ai_staging  # resolved per machine
+  frontmatter: claude-ai            # Agent Skills standard: name + description
+  drift_policy: protect
+  include: [gws]

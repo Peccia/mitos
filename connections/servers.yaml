@@ -1,0 +1,64 @@
+# Canonical MCP server definitions — the ONLY place a server is described.
+# Connections live outside registry/ (the moat content): wiring doesn't compound,
+# has no harvest story, and deploys on its own lane (`deploy --lane connections`).
+#
+# Each server is an EXTERNAL TOOL with an upstream repo that defines its config
+# contract (env vars, credential files, transport).
+
+servers:
+  gws:
+    description: Google Workspace suite — the source of truth for user data.
+    repo: https://github.com/taylorwilsdon/google_workspace_mcp
+    setup_docs: docs/connectors/google-workspace.md
+    transport: streamable-http
+    url: http://localhost:8000/mcp
+    urls: {}
+    env_template: connections/env/gws.env.example
+    env_local: .local/gws.env
+    hosted_on: []
+    # How the backend-agnostic `mcp` connector enumerates this store's documents for
+    # knowledge-graph init: the MCP tool to call, optional default scope/query, and how the
+    # tool's returned fields map onto the lean graph shape. The connector calls `list_tool`
+    # over this server's `url` (no second OAuth) and reads each result's fields per `fields`.
+    graph_enum:
+      list_tool: search_drive_files
+      query_arg: query                 # the tool argument that carries a folder/name scope
+      default_query: ""               # sent when no --folder-id/--query is given; empty = broad listing
+      fields:
+        id: id
+        name: name
+        dateModified: modifiedTime
+        webUrl: webViewLink
+      # google_workspace_mcp returns search_drive_files results as human-readable text, not JSON.
+      # Each item line looks like: - Name: "file" (ID: <id>, ..., Modified: <date>, ...) Link: <url>
+      # text_fields maps each raw field name to a one-capture-group regex that extracts it from a line.
+      text_fields:
+        id: 'ID: ([^\s,)]+)'
+        name: 'Name: "([^"]+)"'
+        modifiedTime: 'Modified: ([^,)]+)'
+        webViewLink: 'Link: (\S+)'
+      # Pagination: request up to 1000 per page and follow nextPageToken until exhausted.
+      page_size_arg: page_size           # argument name that sets results per call (server default: 10)
+      page_size: 1000                    # request the maximum per call; server may cap lower
+      page_token_arg: page_token         # argument name for the continuation token
+      text_next_token: 'nextPageToken: (\S+)'  # regex to extract the token from the text response
+    tools:
+      calendar: [list_calendars, get_events, manage_event]
+      contacts: [list_contacts, get_contact, search_contacts]
+      docs: [get_doc_content, create_doc, modify_doc_text, import_to_google_doc]
+      drive:
+        [
+          search_drive_files,
+          get_drive_file_content,
+          get_drive_file_download_url,
+          get_drive_shareable_link,
+          create_drive_file,
+          create_drive_folder,
+        ]
+      forms: [create_form, get_form]
+      gmail:
+        [search_gmail_messages, get_gmail_message_content, get_gmail_messages_content_batch]
+      sheets:
+        [read_sheet_values, modify_sheet_values, create_spreadsheet, import_to_google_sheets]
+      slides: [create_presentation, get_presentation, import_to_google_slides]
+      tasks: [list_tasks, get_task, manage_task]

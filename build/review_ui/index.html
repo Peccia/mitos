@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator Console — Mitos</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="sidebar-brand" title="Mitos">
+    <svg class="brand-icon" width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="14" cy="7" r="4.5" fill="#34d399"/>
+      <circle cx="6.5" cy="21" r="3.5" fill="#34d399" opacity=".6"/>
+      <circle cx="21.5" cy="21" r="3.5" fill="#34d399" opacity=".6"/>
+      <line x1="14" y1="11.5" x2="8.5" y2="17.5" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="14" y1="11.5" x2="19.5" y2="17.5" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    <div class="brand-text">
+      <span class="brand-name">Operator</span>
+      <span class="brand-sub">REGISTRY &amp; COMPILER</span>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <button id="nav-graph" class="nav-item" type="button" title="Knowledge Graph">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="3.5" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="2.5" cy="13" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="13.5" cy="13" r="2" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="5.5" x2="4" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="5.5" x2="12" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="nav-prompts" class="nav-item" type="button" title="Prompt Library">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5"/><line x1="5.5" y1="6" x2="10.5" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="5.5" y1="9" x2="10.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="nav-inbox" class="nav-item" type="button" title="Inbox">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M2 9.5h3.5L7 12h2l1.5-2.5H14" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <span id="inbox-count" class="nav-pill"></span>
+    </button>
+  </nav>
+
+  <div class="sidebar-footer">
+    <span id="root" class="sidebar-root"></span>
+  </div>
+</aside>
+
+<div id="workspace">
+  <header id="topbar">
+    <div id="topbar-title" class="topbar-title">Operator Console</div>
+    <div class="topbar-search">
+      <span class="search-icon">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" stroke-width="1.5"/><line x1="8.5" y1="8.5" x2="12" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </span>
+      <input id="search" type="search" placeholder="Search registry…" autocomplete="off"
+             title="Ctrl+K / ⌘K · / focuses · ↑↓ navigate · Enter copies">
+      <kbd class="search-kbd">⌘K</kbd>
+    </div>
+    <div class="topbar-right">
+      <button id="refresh" type="button" class="ghost topbar-btn" title="Reload from disk">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11.5 6.5a5 5 0 1 1-.9-2.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="9,2 10.6,3.6 12,2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-inbox" hidden></section>
+    <section id="view-graph" hidden></section>
+    <section id="view-prompts" hidden>
+      <div id="prompt-toolbar">
+        <div id="filter-chips"></div>
+      </div>
+      <div id="prompt-split">
+        <aside id="prompt-list"></aside>
+        <section id="prompt-detail"></section>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="graph-dock" hidden>
+  <div id="graph-dock-bar">
+    <span id="graph-dock-summary"></span>
+    <span class="graph-dock-actions">
+      <input id="graph-dock-reason" type="text" placeholder="Reason (optional — logged on accept)" autocomplete="off">
+      <button id="graph-dock-discard" type="button" class="ghost">Discard</button>
+      <button id="graph-dock-propose" type="button" class="accept">Propose all to inbox</button>
+    </span>
+  </div>
+</div>
+
+<div id="compose" hidden>
+  <div id="compose-bar">
+    <button id="compose-toggle" type="button" class="ghost" title="Show/hide composed text">▸</button>
+    <span id="compose-info"></span>
+    <span class="compose-actions">
+      <button id="compose-copy" type="button">Copy composed</button>
+      <button id="compose-clear" type="button" class="ghost">Clear</button>
+    </span>
+  </div>
+  <div id="compose-body" hidden>
+    <div id="compose-parts"></div>
+    <div class="compose-subbar">
+      <button id="compose-rebuild" type="button" class="ghost" title="Regenerate the text below from the parts above, in order">↻ Rebuild from parts</button>
+      <span class="muted">Edit below freely — "Copy composed" copies exactly what you see.</span>
+    </div>
+    <textarea id="compose-text" spellcheck="false"></textarea>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
