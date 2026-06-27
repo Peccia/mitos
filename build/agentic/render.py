@@ -17,6 +17,29 @@ from .loader import Agent, Prompt, Registry, Skill
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
 
+# The source label for a generated section inside an otherwise user-owned document
+# (e.g. the knowledge-graph document block appended after a project's prose). It is NOT a
+# registry partial — it routes to no file. Recording it as a `section_bodies` source lets
+# adopt/drift treat that region as machine-owned (skip it) while protecting the prose
+# sections around it, all WITHOUT any marker in the deployed file (invariant #5).
+GENERATED_SECTION = "<generated>"
+
+
+def is_generated_source(src: str) -> bool:
+    return src == GENERATED_SECTION
+
+
+def prose_sections(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The user-owned sections of a (possibly mixed) document — everything that is NOT a
+    generated block. Drift/adopt compare and route only these."""
+    return [(s, b) for s, b in sections if not is_generated_source(s)]
+
+
+def join_prose(sections: list[tuple[str, str]]) -> str:
+    """The prose-only projection of a section list, joined exactly as plain_document joins,
+    so two section lists compare equal iff their prose is identical."""
+    return "\n\n".join(b for s, b in sections if not is_generated_source(s))
+
 
 # ── Documents ────────────────────────────────────────────────────────────────
 def plain_document(sections: list[tuple[str, str]]) -> str:

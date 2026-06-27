@@ -2,7 +2,7 @@
 
 Mitos keeps your machines in sync with **git**. Your private overlay (`registry/local/`) is its
 own git repository, synced to a **hub** you choose — any git remote: a server you host, a bare
-repo on a box/NAS, or a private GitHub repo. (`inbox/` proposals ride a separate companion repo.)
+repo on a box/NAS, or a private GitHub repo. (`inbox/` proposals live within the overlay repo itself.)
 Secrets in `.local/` are never synced.
 
 ## Running these commands — what `mitos` means

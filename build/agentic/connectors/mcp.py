@@ -184,7 +184,8 @@ class MCPConnector(WorkspaceConnector):
                 f"document store {self.server_name!r} has no graph_enum.list_tool — it can't "
                 f"be enumerated for the knowledge graph")
 
-        if tool != "search_drive_files":
+        if self.enum.get("query_syntax") != "google-drive":
+            # Generic path: pass scope verbatim through query_arg; no Drive-specific syntax.
             scope = folder_id or query
             args: dict = {}
             qarg = self.enum.get("query_arg")
@@ -192,7 +193,7 @@ class MCPConnector(WorkspaceConnector):
                 args[qarg] = scope if scope is not None else self.enum.get("default_query", "")
             return self._map_rows(self._invoke(tool, args))
 
-        # ── Google Drive query construction ──────────────────────────────────────
+        # ── Google Drive query construction (query_syntax: google-drive) ─────────
         excl_ids: set[str] = set()
         if exclude_folders:
             excl_ids = self._get_excluded_folder_ids_recursive(exclude_folders)

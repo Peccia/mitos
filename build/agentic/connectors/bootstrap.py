@@ -20,10 +20,11 @@ _UNASSIGNED = "unassigned"
 
 
 def files_to_documents(files: list[dict]) -> list[dict]:
-    """Map a connector's ``[{'id','name','dateModified',...}]`` to the document shape
-    `review.propose_graph_change` expects. Descriptions default to ``""`` — short,
+    """Map a connector's ``[{'id','name','dateModified','webUrl',...}]`` to the document
+    shape `review.propose_graph_change` expects. Descriptions default to ``""`` — short,
     human-gated summaries are added later in the console, never scraped (keeps the index
-    lean and the prompt small)."""
+    lean and the prompt small). The connector-provided webUrl is carried through so the
+    registry stores a store-agnostic link rather than a synthesized Drive URL."""
     docs: list[dict] = []
     for f in files:
         fid = str(f.get("id", "")).strip()
@@ -35,6 +36,7 @@ def files_to_documents(files: list[dict]) -> list[dict]:
             "name": name,
             "description": str(f.get("description", "")).strip(),
             "dateModified": str(f.get("dateModified", "")).strip(),
+            "webUrl": str(f.get("webUrl", "")).strip(),
         })
     return docs
 
@@ -108,4 +110,4 @@ def bootstrap_to_inbox(reg: Registry, connector: WorkspaceConnector, slug: str,
         return {"ok": False, "error": "connector returned no usable documents"}
     why = reason or (f"bootstrapped from the {connector.name} connector "
                      f"(folder {folder_id or '(scoped)'})")
-    return review.propose_graph_change(reg, slug, documents, why)
+    return review.propose_graph_change(reg, slug, documents, reason=why)

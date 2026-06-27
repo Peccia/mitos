@@ -1,22 +1,32 @@
 # Connectors & document stores
 
-A **document store** is an external system that holds a project's real documents (Google
-Workspace, etc.). Mitos never copies those documents — it keeps a lean knowledge-graph *index*
-of where each one lives. A **connector** is what reads a store to build that index.
+A **document store** is the system that holds a project's real documents (a local directory,
+Google Workspace, Notion, etc.). Mitos never copies those documents — it keeps a lean
+knowledge-graph *index* of where each one lives. A **connector** is what reads a store to build
+that index.
 
-## The one thing people miss: bind the store by name
+Three built-in connector backends:
+- **`local`** — local filesystem (the default; no credentials needed). Used automatically when no
+  `document_store` is set.
+- **`mcp`** — any MCP server that declares a `graph_enum:` block in `connections/servers.yaml`;
+  Mitos reuses the server you already run, no second OAuth.
+- **`mock`** — in-process demo for tests and dry runs.
 
-Every store is an MCP server defined in [`../../connections/servers.yaml`](../../connections/servers.yaml).
-Its **name is the top-level key under `servers:`** (the shipped default is `gws`). You point a
-project at a store by putting that name in the project manifest:
+## Binding a store (optional for local-file users)
+
+If your documents live on a local disk, you don't need to set anything — `mitos connect` will use
+the local-file connector by default, scoped to whatever folder you pass.
+
+To use an MCP-backed store, define it in
+[`../../connections/servers.yaml`](../../connections/servers.yaml) and point the project at it:
 
 ```yaml
 # registry/local/projects/<slug>.yaml
-document_store: gws        # ← the server name from connections/servers.yaml; 'none' = no store
+document_store: gws        # ← the server name from connections/servers.yaml
 ```
 
-Without this line (or with `document_store: none`), `mitos connect --project <slug>` has nothing
-to map and will stop with the exact servers, file path, and line to add.
+Without this line (or with `document_store: none`), `mitos connect` defaults to the
+local-file connector.
 
 ## The three stages (each separate, each optional)
 
@@ -32,13 +42,17 @@ to map and will stop with the exact servers, file path, and line to add.
 
 ## How a store is enumerated
 
-Every document store is an **MCP server** (Google Workspace is the first official offering;
-more follow). Mitos reads it through the generic **`mcp` connector** — no second login, no
-credentials of its own. The server says *how* to enumerate itself with a `graph_enum:` block in
-`servers.yaml` (which tool lists files and how its fields map). The output is the lean graph
-shape: each document's id, title, modified date, link, and an optional human-written
-description, mapped to the project. (`--backend mock` swaps in an in-process demo connector for
-tests and dry runs.)
+**Local-file connector (the default):** Mitos walks a local directory with `os.walk`, emitting
+one graph record per file: a SHA-1 id (URL-safe, satisfies the IRI invariant), the filename,
+mtime as ISO date, and a `file://` URL. `--recursive` includes nested subdirectories.
+
+**MCP connector:** For a store with a `graph_enum:` block in `connections/servers.yaml`, Mitos
+calls the server's `list_tool` and maps the returned fields onto the lean graph shape
+(`id`, `name`, `dateModified`, `webUrl`). The `query_syntax: google-drive` flag enables
+Drive-specific query construction (folder parents, `mimeType` filter, recursive BFS); without it,
+scope is passed verbatim through `query_arg`. The output's `webUrl` is stored as-is in the graph
+as a `schema:url` field — no URL is synthesized from an id. (`--backend mock` swaps in an
+in-process demo connector for tests and dry runs.)
 
 ### Recursive folder scope
 
@@ -113,5 +127,6 @@ so they cannot be accidentally chosen as the staging scope.
 
 | Store / Connection | Guide |
 |---|---|
+| Local filesystem (default) | [local-file.md](local-file.md) |
 | Google Workspace (Drive/Docs/…) | [google-workspace.md](google-workspace.md) |
 | Custom MCP Servers | [custom-servers.md](custom-servers.md) |

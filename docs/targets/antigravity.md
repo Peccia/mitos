@@ -33,7 +33,7 @@ paths:
   antigravity_skills: "~/.gemini/skills"
   
   # The root directory for your personal assistant context tree
-  assistant_root: "~/Mitos"
+  assistant_root: "~/MitosAgent"
   
   # The base directory where your codebase checkouts reside
   projects_root: "~/Projects"
@@ -48,7 +48,7 @@ paths:
 
 ### 1. Context delivery (`AGENTS.md`)
 Antigravity natively reads `AGENTS.md` files to understand identity and project background. Mitos writes context in two places:
-- **Assistant tree**: Deployed to `assistant_root` containing structured registries (`AGENTS.md`, `Collaboration/AGENTS.md`, `Family/AGENTS.md`, and `Projects/AGENTS.md`).
+- **Assistant tree**: Deployed to `assistant_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster + org structure) with a `Projects/<project>/AGENTS.md` per project.
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
 
 ### 2. Custom skills & prompts

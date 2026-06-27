@@ -60,7 +60,8 @@ def load_candidates(reg: Registry) -> list[dict]:
         # proposes, and the IDs it removes, so the Knowledge Graph tab can flag in-flight
         # documents without parsing the jsonld (and its IRI scheme) client-side. Empty for
         # non-graph candidates.
-        project, doc_ids, removal_ids = _graph_candidate_targets(reg, meta, payload)
+        project, doc_ids, removal_ids, effort_ids, effort_removal_ids = \
+            _graph_candidate_targets(reg, meta, payload)
         out.append({
             "id": folder.name,
             "registry_path": meta.get("registry_path") or "",
@@ -68,6 +69,8 @@ def load_candidates(reg: Registry) -> list[dict]:
             "project": project,
             "doc_ids": doc_ids,
             "removal_ids": removal_ids,
+            "effort_ids": effort_ids,
+            "effort_removal_ids": effort_removal_ids,
             "source": meta.get("source") or {},
             "deploy_path": meta.get("deploy_path", ""),
             "captured_at": meta.get("captured_at", ""),
@@ -82,21 +85,22 @@ def load_candidates(reg: Registry) -> list[dict]:
 
 
 def _graph_candidate_targets(reg: Registry, meta: dict,
-                             payload: str) -> tuple[str, list[str], list[str]]:
-    """(project_slug, [upserted_drive_id, …], [removed_drive_id, …]) a graph candidate
-    proposes; ("", [], []) for non-graph. Removals live in meta (the fragment carries only
-    upserts), so a removed doc is flagged in-flight just like an upserted one. Computed
-    server-side where the graph schema is known."""
+                             payload: str) -> tuple[str, list[str], list[str], list[str], list[str]]:
+    """(project_slug, [upserted_drive_id, …], [removed_drive_id, …],
+        [upserted_effort_id, …], [removed_effort_id, …]) a graph candidate proposes;
+    ("", [], [], [], []) for non-graph. Removals live in meta (the fragment carries only
+    upserts), so removed docs/efforts are flagged in-flight just like upserted ones."""
     if meta.get("kind") != "graph":
-        return "", [], []
+        return "", [], [], [], []
     slug = meta.get("project") or ""
     removals = [str(r) for r in (meta.get("removals") or [])]
+    effort_removals = [str(r) for r in (meta.get("effort_removals") or [])]
     try:
         from . import graph as graphmod
-        _name, _desc, docs = graphmod.parse_fragment(payload, slug)
-        return slug, [d.drive_id for d in docs], removals
+        _name, _desc, docs, efforts = graphmod.parse_fragment(payload, slug)
+        return slug, [d.drive_id for d in docs], removals, [e.id for e in efforts], effort_removals
     except Exception:
-        return slug, [], removals
+        return slug, [], removals, [], effort_removals
 
 
 def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, str]:
@@ -288,13 +292,16 @@ def _graph_file(reg: Registry, slug: str) -> Path:
 
 
 def _merged_graph(reg: Registry, slug: str, fragment_text: str,
-                  removals: list[str] | None = None):
+                  removals: list[str] | None = None,
+                  effort_removals: list[str] | None = None):
     """The project graph as it WOULD be after accepting this candidate: the existing
-    graph (or a fresh one) with the fragment's documents upserted and `removals` dropped.
+    graph (or a fresh one) with the fragment's documents and efforts upserted, `removals`
+    dropped, and `effort_removals` removed (resetting their child docs to project root).
     Pure — writes nothing. Raises graph.GraphError on an invalid fragment or a missing-name
-    new project."""
+    new project. Effort removals are applied before doc upserts so any re-parented docs
+    in the fragment land cleanly."""
     from . import graph as graphmod
-    name, desc, docs = graphmod.parse_fragment(fragment_text, slug)
+    name, desc, docs, efforts = graphmod.parse_fragment(fragment_text, slug)
     path = _graph_file(reg, slug)
     if slug in reg.graphs:
         base = reg.graphs[slug]
@@ -312,6 +319,14 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
         base.name = name
     if desc:
         base.description = desc
+    # effort removals first — resets child docs before any upserts land
+    for eid in (effort_removals or []):
+        eid = str(eid).strip()
+        if eid:
+            base = graphmod.remove_effort(base, eid)
+    for e in efforts:
+        base = graphmod.upsert_effort(base, graphmod.CreativeWork(
+            id=e.id, name=e.name, description=e.description, is_part_of=base.iri))
     for d in docs:
         base = graphmod.upsert_document(base, d)
     for rid in (removals or []):
@@ -331,59 +346,106 @@ def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[lis
     if slug not in reg.projects:
         return [], f"unknown project {slug!r} for graph candidate"
     try:
-        merged = _merged_graph(reg, slug, payload, meta.get("removals"))
+        merged = _merged_graph(reg, slug, payload, meta.get("removals"),
+                               meta.get("effort_removals"))
         write_text(_graph_file(reg, slug), graphmod.canonical_jsonld(merged))
     except graphmod.GraphError as e:
         return [], f"invalid graph fragment: {e}"
     return [_graph_rel(reg, slug)], None
 
 
-def _graph_note(n_docs: int, n_removals: int) -> str:
+def _graph_note(n_docs: int, n_removals: int,
+                n_efforts: int = 0, n_effort_removals: int = 0) -> str:
     """Human-readable summary of a graph candidate for the inbox card."""
     parts = []
     if n_docs:
         parts.append(f"{n_docs} document mapping(s)")
     if n_removals:
         parts.append(f"{n_removals} removal(s)")
+    if n_efforts:
+        parts.append(f"{n_efforts} effort(s)")
+    if n_effort_removals:
+        parts.append(f"{n_effort_removals} effort removal(s)")
     return (" + ".join(parts) or "no changes") + " proposed in the operator console"
 
 
 def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
-                         removals: list[str] | None = None, reason: str = "") -> dict:
-    """Save proposed document mappings as a `kind: graph` inbox candidate — the producer
-    the console's Knowledge Graph editor (and tests) call. Writes only inbox/, never
-    registry/ (invariant #3); accept upserts/removes it via _apply_graph_candidate.
+                         removals: list[str] | None = None, reason: str = "",
+                         efforts: list[dict] | None = None,
+                         effort_removals: list[str] | None = None) -> dict:
+    """Save proposed document and effort mappings as a `kind: graph` inbox candidate.
+    Writes only inbox/, never registry/ (invariant #3).
 
-    `documents` is a list of {id, name, description, dateModified} to upsert; `removals`
-    is a list of Drive IDs to drop. A candidate may carry only removals (no upserts).
-    Returns {ok, id, registry_path} or {ok: False, error}."""
+    `documents` is a list of {id, name, description, dateModified, parentId?} to upsert;
+    `removals` is a list of Drive IDs to drop. `efforts` is a list of {id, name,
+    description} to upsert; `effort_removals` is a list of effort IDs to remove.
+    A candidate may carry only removals (no upserts). `parentId` in a document dict is
+    the effort ID (or "" / omitted for project root).
+
+    The fragment always includes ALL current + proposed efforts so that document
+    isPartOf links validate self-consistently. Returns {ok, id, registry_path} or
+    {ok: False, error}."""
     from . import graph as graphmod
     if slug not in reg.projects:
         return {"ok": False, "error": f"unknown project {slug!r}"}
+
+    # ── parse document dicts ──────────────────────────────────────────────────
     docs = []
     for d in documents:
         try:
+            parent_id = str(d.get("parentId", "")).strip()
+            parent_iri = (graphmod.CREATIVE_WORK_NS + parent_id) if parent_id else ""
             docs.append(graphmod.Document(
                 drive_id=str(d["id"]).strip(), name=str(d["name"]).strip(),
                 description=str(d.get("description", "")).strip(),
-                date_modified=str(d["dateModified"]).strip()))
+                date_modified=str(d["dateModified"]).strip(),
+                is_part_of=parent_iri,
+                keywords=str(d.get("keywords", "")).strip(),
+                web_url=str(d.get("webUrl", "")).strip()))
         except KeyError as e:
             return {"ok": False, "error": f"document missing required field {e}"}
+
     removals = [r for r in (str(x).strip() for x in (removals or [])) if r]
-    # A removal whose ID is also being upserted is contradictory — the upsert wins, so
-    # drop it from removals rather than add-then-immediately-delete on accept.
+    effort_removals = [r for r in (str(x).strip() for x in (effort_removals or [])) if r]
+
+    # A removal whose ID is also being upserted is contradictory — the upsert wins.
     upsert_ids = {d.drive_id for d in docs}
     removals = [r for r in removals if r not in upsert_ids]
-    if not docs and not removals:
+
+    # ── build effective efforts for the fragment ──────────────────────────────
+    # Start with existing efforts, apply proposed upserts, remove deleted ones.
+    # This ensures the fragment is self-consistent so parse_fragment can validate it.
+    existing_pg = reg.graphs.get(slug)
+    proj_iri = graphmod.PROJECT_NS + slug
+    effective_efforts: dict[str, graphmod.CreativeWork] = {
+        e.id: e for e in (existing_pg.efforts if existing_pg else [])}
+    for e_dict in (efforts or []):
+        try:
+            eid = str(e_dict["id"]).strip()
+            effective_efforts[eid] = graphmod.CreativeWork(
+                id=eid, name=str(e_dict["name"]).strip(),
+                description=str(e_dict.get("description", "")).strip(),
+                is_part_of=proj_iri)
+        except KeyError as ex:
+            return {"ok": False, "error": f"effort missing required field {ex}"}
+    for eid in effort_removals:
+        effective_efforts.pop(eid, None)
+    # Also remove from effort_removals any effort that is simultaneously being upserted.
+    upsert_effort_ids = {str(e["id"]).strip() for e in (efforts or []) if "id" in e}
+    effort_removals = [r for r in effort_removals if r not in upsert_effort_ids]
+
+    if not docs and not removals and not efforts and not effort_removals:
         return {"ok": False, "error": "no documents to propose"}
+
     name = (reg.projects[slug].get("name")) or slug
     desc = reg.graphs[slug].description if slug in reg.graphs else ""
     fragment = graphmod.canonical_jsonld(
-        graphmod.ProjectGraph(slug=slug, name=name, description=desc, documents=docs))
+        graphmod.ProjectGraph(slug=slug, name=name, description=desc,
+                              documents=docs, efforts=list(effective_efforts.values())))
     try:
         graphmod.parse_fragment(fragment, slug)          # defensive: must round-trip
     except graphmod.GraphError as e:
-        return {"ok": False, "error": f"invalid document(s): {e}"}
+        return {"ok": False, "error": f"invalid document(s) or effort(s): {e}"}
     inbox = loader.inbox_dir(reg)
     inbox.mkdir(parents=True, exist_ok=True)
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ")
@@ -401,10 +463,13 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         "base_hash": "",
         "deploy_path": "",
         "captured_at": _now(),
-        "note": _graph_note(len(docs), len(removals)),
+        "note": _graph_note(len(docs), len(removals),
+                            len(efforts or []), len(effort_removals)),
     }
     if removals:
         meta["removals"] = removals
+    if effort_removals:
+        meta["effort_removals"] = effort_removals
     if reason:
         meta["reason"] = reason
     folder.mkdir()
@@ -602,16 +667,28 @@ def graph_index(reg: Registry) -> list[dict]:
     has_local = any(p.get("_is_local") for p in reg.projects.values())
     slugs = sorted(
         s for s, p in reg.projects.items()
-        if not has_local or p.get("_is_local")
+        if (not has_local or p.get("_is_local")) and (p.get("drive") or {})
     )
+    from . import graph as graphmod
     for slug in slugs:
         pg = reg.graphs.get(slug)
+
+        def _parent_id(d) -> str:
+            if not d.is_part_of:
+                return ""
+            return d.is_part_of[len(graphmod.CREATIVE_WORK_NS):] if d.is_part_of.startswith(
+                graphmod.CREATIVE_WORK_NS) else ""
+
         out.append({
             "slug": slug,
             "name": reg.projects[slug].get("name") or slug,
             "has_graph": pg is not None,
+            "efforts": [{"id": e.id, "name": e.name, "description": e.description}
+                        for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
-                           "description": d.description, "dateModified": d.date_modified}
+                           "description": d.description, "dateModified": d.date_modified,
+                           "webUrl": d.drive_url, "parentId": _parent_id(d),
+                           "keywords": d.keywords}
                           for d in (pg.documents if pg else [])],
         })
     return out
@@ -679,15 +756,19 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                       str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph":
-                # propose document mapping(s)/removal(s) as a kind:graph candidate —
+                # propose document/effort mapping(s)/removal(s) as a kind:graph candidate —
                 # only writes inbox/
                 docs = body.get("documents")
                 rem = body.get("removals")
+                effs = body.get("efforts")
+                eff_rem = body.get("effortRemovals")
                 result = propose_graph_change(
                     holder["reg"], str(body.get("slug", "")),
                     docs if isinstance(docs, list) else [],
                     rem if isinstance(rem, list) else [],
-                    str(body.get("reason", "") or ""))
+                    str(body.get("reason", "") or ""),
+                    effs if isinstance(effs, list) else [],
+                    eff_rem if isinstance(eff_rem, list) else [])
                 return self._json(200 if result.get("ok") else 400, result)
             result = decide(holder["reg"], str(body.get("id", "")),
                             str(body.get("decision", "")),

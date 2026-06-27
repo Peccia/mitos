@@ -31,9 +31,12 @@ let stagedData = null;   // { ok, slug, documents, staged_at } from /api/graph/s
 let stagedSel = new Set(); // drive IDs checked in the staged checklist
 let stagedFilter = "";     // client-side search text for the staged list
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
-let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified}, lockId }
+let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified,keywords}, lockId }
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
-// graphDrafts[slug] = { add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}} } — local, persisted
+// graphDrafts[slug] = {
+//   add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}},
+//   effortAdd:{id:effort}, effortEdit:{id:effort}, effortRemove:{id:{id,name}}
+// } — local, persisted
 let graphDrafts = store.get(LS.graphDrafts, {});
 
 const $ = (id) => document.getElementById(id);
@@ -260,17 +263,24 @@ function todayISO() {
 function draftFor(slug) {
   const d = graphDrafts[slug] || (graphDrafts[slug] = {});
   d.add = d.add || {}; d.edit = d.edit || {}; d.remove = d.remove || {};
+  d.effortAdd = d.effortAdd || {}; d.effortEdit = d.effortEdit || {};
+  d.effortRemove = d.effortRemove || {};
   return d;
 }
 function saveDrafts() { store.set(LS.graphDrafts, graphDrafts); }
 function draftCounts(slug) {
   const d = draftFor(slug);
-  return { adds: Object.keys(d.add).length, edits: Object.keys(d.edit).length,
-           removes: Object.keys(d.remove).length };
+  return {
+    adds: Object.keys(d.add).length, edits: Object.keys(d.edit).length,
+    removes: Object.keys(d.remove).length,
+    effortAdds: Object.keys(d.effortAdd).length,
+    effortEdits: Object.keys(d.effortEdit).length,
+    effortRemoves: Object.keys(d.effortRemove).length,
+  };
 }
 function draftTotal(slug) {
   const c = draftCounts(slug);
-  return c.adds + c.edits + c.removes;
+  return c.adds + c.edits + c.removes + c.effortAdds + c.effortEdits + c.effortRemoves;
 }
 // Upsert a doc into the draft. `isAdd` routes it to add (a new mapping) vs edit (an existing
 // one); either way a pending removal of the same id is cancelled — you can't both keep and drop.
@@ -290,6 +300,24 @@ function draftRemove(slug, doc) {
 function draftUndo(slug, id) {
   const d = draftFor(slug);
   delete d.add[id]; delete d.edit[id]; delete d.remove[id];
+  saveDrafts();
+}
+function effortDraftUpsert(slug, effort, isAdd) {
+  const d = draftFor(slug);
+  delete d.effortRemove[effort.id];
+  delete (isAdd ? d.effortEdit : d.effortAdd)[effort.id];
+  (isAdd ? d.effortAdd : d.effortEdit)[effort.id] = effort;
+  saveDrafts();
+}
+function effortDraftRemove(slug, effort) {
+  const d = draftFor(slug);
+  delete d.effortAdd[effort.id]; delete d.effortEdit[effort.id];
+  d.effortRemove[effort.id] = { id: effort.id, name: effort.name };
+  saveDrafts();
+}
+function effortDraftUndo(slug, id) {
+  const d = draftFor(slug);
+  delete d.effortAdd[id]; delete d.effortEdit[id]; delete d.effortRemove[id];
   saveDrafts();
 }
 function draftClear(slug) {
@@ -524,17 +552,21 @@ function renderStagedRows(g) {
       if (isPending) {
         meta.append(el("span", "muted", "awaiting review"));
       } else if (inDraft) {
+        const actions = el("span", "row-actions");
         const undo = el("button", "ghost tiny", "Undo");
         undo.onclick = () => { draftUndo(g.slug, d.id); renderGraph(); };
-        meta.append(undo);
+        actions.append(undo);
+        meta.append(actions);
       } else {
+        const actions = el("span", "row-actions");
         const map = el("button", "ghost tiny", "Map");
         map.title = "Add this document to the draft with its staged values";
         map.onclick = () => { draftUpsert(g.slug, stagedDoc(d), true); renderGraph(); };
         const tweak = el("button", "ghost tiny", "Tweak & map");
         tweak.title = "Edit the title/description before adding to the draft";
         tweak.onclick = () => openTweak(g, d);
-        meta.append(map, tweak);
+        actions.append(map, tweak);
+        meta.append(actions);
       }
       if (d.webUrl) {
         const a = el("a", "staged-link", "Open");
@@ -552,7 +584,7 @@ function renderStagedRows(g) {
 
 function stagedDoc(d) {
   return { id: d.id, name: d.name, description: d.description || "",
-           dateModified: d.dateModified || todayISO() };
+           dateModified: d.dateModified || todayISO(), keywords: d.keywords || "" };
 }
 
 function updateStagedMeta(g) {
@@ -578,21 +610,27 @@ function addSelectedStaged(g) {
   renderGraph();
 }
 
-// ── right pane: the project's mapped documents + draft adds (the resulting graph) ──
+// ── right pane: the project's mapped documents + draft adds, grouped by effort ──
 function buildRegistryPane(container, g) {
   const head = el("div", "pane-head");
   head.append(el("strong", "", "Registry"));
-  const addBtn = el("button", "ghost tiny", "+ Add document");
-  addBtn.title = "Map a document by hand (e.g. a Drive ID that isn't staged)";
-  addBtn.onclick = () => {
-    openEditor = { where: "registry", lockId: false,
-                   vals: { id: "", name: "", description: "", dateModified: todayISO() } };
+  const addDocBtn = el("button", "ghost tiny", "+ Doc");
+  addDocBtn.title = "Map a document by hand (e.g. a Drive ID that isn't staged)";
+  addDocBtn.onclick = () => {
+    openEditor = { where: "registry", lockId: false, kind: "doc",
+                   vals: { id: "", name: "", description: "", dateModified: todayISO(), keywords: "", parentId: "" } };
     renderRegistryRows(g);
   };
-  head.append(addBtn);
+  const addEffortBtn = el("button", "ghost tiny", "+ Work");
+  addEffortBtn.title = "Add a new effort grouping to this project";
+  addEffortBtn.onclick = () => {
+    openEditor = { where: "registry", lockId: false, kind: "effort",
+                   vals: { id: "", name: "", description: "" } };
+    renderRegistryRows(g);
+  };
+  head.append(addDocBtn, addEffortBtn);
   container.append(head);
   container.append(el("div", "registry-rows"));
-  // Defer until the workspace is in the DOM (querySelector needs #graph-workspace present)
   setTimeout(() => renderRegistryRows(g), 0);
 }
 
@@ -603,34 +641,127 @@ function renderRegistryRows(g) {
   const draft = draftFor(g.slug);
   const pending = pendingDocIds(g.slug);
 
-  // The registry editor is "unplaced" (a fresh manual add) when its id matches neither a
-  // mapped doc nor a pending add — those two cases are rendered in-place by the loops below.
-  const eid = openEditor && openEditor.where === "registry" ? openEditor.vals.id : null;
-  const editorUnplaced = openEditor && openEditor.where === "registry"
-    && !g.documents.some((d) => d.id === eid) && !draft.add[eid];
-  if (editorUnplaced) box.append(editorCard(g));
+  // ── unplaced editor: a fresh add (doc or effort) with no matching existing row ──
+  const isEditorOpen = openEditor && openEditor.where === "registry";
+  const editorId = isEditorOpen ? openEditor.vals.id : null;
+  const isEffortEditor = isEditorOpen && openEditor.kind === "effort";
+  const isDocEditor = isEditorOpen && openEditor.kind === "doc";
+  const editorUnplaced = isEditorOpen && editorId === ""
+    || (isDocEditor && !g.documents.some((d) => d.id === editorId) && !draft.add[editorId])
+    || (isEffortEditor && !g.efforts.some((e) => e.id === editorId) && !draft.effortAdd[editorId]);
+  if (editorUnplaced && isEffortEditor) box.append(effortEditorCard(g));
+  else if (editorUnplaced && isDocEditor) box.append(editorCard(g));
 
-  // pending adds (manual + from staged) — shown first as the freshest intent
-  for (const id of Object.keys(draft.add)) {
-    if (openEditor && openEditor.where === "registry" && openEditor.vals.id === id) {
-      box.append(editorCard(g));
-    } else {
-      box.append(registryRow(g, draft.add[id], "add", pending));
+  // ── effort-grouped rendering ──────────────────────────────────────────────
+  // Effective efforts = registry + draft adds/edits, minus draft removes
+  const effMap = {};
+  for (const e of (g.efforts || [])) effMap[e.id] = { ...e };
+  for (const e of Object.values(draft.effortAdd)) effMap[e.id] = { ...e, _status: "add" };
+  for (const e of Object.values(draft.effortEdit)) effMap[e.id] = { ...effMap[e.id], ...e, _status: "edit" };
+  for (const id of Object.keys(draft.effortRemove)) {
+    if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
+  }
+
+  // "project root" section: draft adds without a parentId, then docs with parentId=""
+  const rootDraftAdds = Object.values(draft.add).filter((d) => !d.parentId);
+  const rootDocs = (g.documents || []).filter((d) => !d.parentId);
+  const hasEfforts = Object.keys(effMap).length > 0;
+
+  if (hasEfforts) {
+    const rootSection = el("div", "effort-section");
+    const rootHead = el("div", "effort-header");
+    rootHead.append(el("span", "effort-name", "Project Documents"));
+    rootSection.append(rootHead);
+    const rootDocs2 = el("div", "effort-docs");
+    _renderDocGroup(rootDocs2, g, rootDraftAdds, rootDocs, draft, pending, false);
+    rootSection.append(rootDocs2);
+    box.append(rootSection);
+  } else {
+    // No efforts — flat list with pending doc adds first
+    _renderDocGroup(box, g, Object.values(draft.add), g.documents || [], draft, pending, true);
+    if (!(g.documents || []).length && !Object.keys(draft.add).length && !isEditorOpen) {
+      box.append(el("div", "empty-state", "No documents mapped yet — Add one or Map from Discovery."));
     }
   }
 
-  if (!g.documents.length && !Object.keys(draft.add).length && !openEditor) {
-    box.append(el("div", "empty-state", "No documents mapped yet — Add one or Map from Discovery."));
-  }
+  // ── effort sections ───────────────────────────────────────────────────────
+  for (const effort of Object.values(effMap).sort((a, b) =>
+      (a.name || "").localeCompare(b.name || ""))) {
+    const status = effort._status || "mapped";
+    const section = el("div", "effort-section" + (status === "remove" ? " effort-remove" : ""));
 
-  for (const doc of g.documents) {
-    if (openEditor && openEditor.where === "registry" && openEditor.vals.id === doc.id) {
-      box.append(editorCard(g)); continue;
+    // effort header row
+    const head = el("div", "effort-header");
+    const nameSpan = el("span", "effort-name" + (status === "remove" ? " struck" : ""), effort.name);
+    head.append(nameSpan);
+    if (status !== "mapped") {
+      const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
+      head.append(el("span", "badge draft", label));
+    }
+    const actions = el("span", "row-actions");
+    if (status === "add" || status === "edit" || status === "remove") {
+      const undo = el("button", "ghost tiny", "Undo");
+      undo.onclick = () => { effortDraftUndo(g.slug, effort.id); renderGraph(); };
+      actions.append(undo);
+    }
+    if (status !== "remove") {
+      const edit = el("button", "ghost tiny", "Edit");
+      edit.onclick = () => {
+        openEditor = { where: "registry", lockId: true, kind: "effort",
+                       vals: { id: effort.id, name: effort.name, description: effort.description || "" } };
+        renderRegistryRows(g);
+      };
+      actions.append(edit);
+      if (status !== "add") {
+        const rm = el("button", "ghost tiny danger", "Remove");
+        rm.title = "Schedule this effort for removal (its documents reset to Project root)";
+        rm.onclick = () => { effortDraftRemove(g.slug, effort); renderGraph(); };
+        actions.append(rm);
+      }
+    }
+    head.append(actions);
+    section.append(head);
+
+    if (effort.description) {
+      section.append(el("div", "effort-desc muted", effort.description));
+    }
+
+    // effort editor in-place
+    if (isEffortEditor && editorId === effort.id) {
+      section.append(effortEditorCard(g));
+    }
+
+    // documents belonging to this effort
+    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
+    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
+    const docBox = el("div", "effort-docs");
+    _renderDocGroup(docBox, g, effortDraftAdds, effortDocs, draft, pending, false);
+    section.append(docBox);
+
+    box.append(section);
+  }
+}
+
+function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, showEmpty) {
+  const isEditorOpen = openEditor && openEditor.where === "registry" && openEditor.kind === "doc";
+  for (const doc of draftAdds) {
+    if (isEditorOpen && openEditor.vals.id === doc.id) {
+      container.append(editorCard(g));
+    } else {
+      container.append(registryRow(g, doc, "add", pending));
+    }
+  }
+  if (showEmpty && !registryDocs.length && !draftAdds.length && !openEditor) {
+    container.append(el("div", "empty-state", "No documents mapped yet — Add one or Map from Discovery."));
+  }
+  for (const doc of registryDocs) {
+    if (isEditorOpen && openEditor.vals.id === doc.id) {
+      container.append(editorCard(g)); continue;
     }
     const removed = !!draft.remove[doc.id];
     const edited = draft.edit[doc.id];
     const status = removed ? "remove" : (edited ? "edit" : "mapped");
-    box.append(registryRow(g, edited || doc, status, pending));
+    container.append(registryRow(g, edited || doc, status, pending));
   }
 }
 
@@ -647,37 +778,52 @@ function registryRow(g, doc, status, pending) {
   body.append(nameLine);
 
   if (doc.description) body.append(el("div", "registry-desc muted", doc.description));
+  if (doc.keywords) {
+    const chips = el("div", "doc-tags");
+    doc.keywords.split(",").forEach((t) => {
+      const c = t.trim(); if (c) chips.append(el("span", "tag-chip muted", c));
+    });
+    body.append(chips);
+  }
   const meta = el("div", "staged-meta");
   if (doc.dateModified) meta.append(el("span", "muted staged-mod", doc.dateModified));
   meta.append(el("span", "muted mono registry-id", doc.id));
 
+  const openUrl = doc.webUrl || `https://drive.google.com/open?id=${doc.id}`;
+  const openLink = el("a", "staged-link", "Open");
+  openLink.target = "_blank"; openLink.rel = "noopener"; openLink.href = openUrl;
+  meta.append(openLink);
+
+  const actions = el("span", "row-actions");
   if (status === "remove" || status === "add" || status === "edit") {
     const undo = el("button", "ghost tiny", "Undo");
     undo.onclick = () => { draftUndo(g.slug, doc.id); renderGraph(); };
-    meta.append(undo);
+    actions.append(undo);
   }
   if (status !== "remove" && !isPending) {
     const edit = el("button", "ghost tiny", "Edit");
     edit.onclick = () => {
-      openEditor = { where: "registry", lockId: true,
+      openEditor = { where: "registry", lockId: true, kind: "doc",
                      vals: { id: doc.id, name: doc.name,
-                             description: doc.description || "", dateModified: doc.dateModified } };
+                             description: doc.description || "", dateModified: doc.dateModified,
+                             keywords: doc.keywords || "", parentId: doc.parentId || "" } };
       renderRegistryRows(g);
     };
-    meta.append(edit);
+    actions.append(edit);
     if (status !== "add") {   // a draft add is undone, not removed — it isn't in the registry yet
       const rm = el("button", "ghost tiny danger", "Remove");
       rm.title = "Schedule this mapping for removal from the registry";
       rm.onclick = () => { draftRemove(g.slug, doc); renderGraph(); };
-      meta.append(rm);
+      actions.append(rm);
     }
   }
+  meta.append(actions);
   body.append(meta);
   row.append(body);
   return row;
 }
 
-// One inline editor, reused for manual add, staged "Tweak & map", and editing a mapped doc.
+// One inline editor for a document: manual add, staged "Tweak & map", or editing a mapped doc.
 // Inputs are local until Apply, so typing never triggers a re-render (focus-safe).
 function editorCard() {
   const g = (STATE.graphs || []).find((x) => x.slug === graphSlug);
@@ -699,6 +845,30 @@ function editorCard() {
   field("name", "Title", "Forecast UI Spec");
   field("description", "Description", "one-line summary");
   field("dateModified", "Modified", "", "date");
+  field("keywords", "Tags", "strategy, Q4, draft");
+
+  // Parent effort dropdown
+  const draft = draftFor(g.slug);
+  const effMap = {};
+  for (const e of (g.efforts || [])) effMap[e.id] = e;
+  for (const e of Object.values(draft.effortAdd)) effMap[e.id] = e;
+  for (const e of Object.values(draft.effortEdit)) effMap[e.id] = { ...effMap[e.id], ...e };
+  for (const id of Object.keys(draft.effortRemove)) delete effMap[id];
+  const effortList = Object.values(effMap).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  if (effortList.length) {
+    const wrap = el("div", "graph-field");
+    wrap.append(el("label", "", "Parent"));
+    const sel = el("select", "graph-select");
+    const rootOpt = el("option"); rootOpt.value = ""; rootOpt.textContent = "Project root";
+    sel.append(rootOpt);
+    for (const e of effortList) {
+      const opt = el("option"); opt.value = e.id; opt.textContent = e.name;
+      if ((vals.parentId || "") === e.id) opt.selected = true;
+      sel.append(opt);
+    }
+    wrap.append(sel); card.append(wrap); inputs.parentId = sel;
+  }
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -706,7 +876,9 @@ function editorCard() {
   apply.onclick = () => {
     const doc = { id: inputs.id.value.trim(), name: inputs.name.value.trim(),
                   description: inputs.description.value.trim(),
-                  dateModified: inputs.dateModified.value.trim() };
+                  dateModified: inputs.dateModified.value.trim(),
+                  keywords: inputs.keywords.value.trim(),
+                  parentId: inputs.parentId ? inputs.parentId.value : "" };
     if (!doc.id || !doc.name || !doc.dateModified) {
       toast("Drive ID, Title, and Modified are required."); return;
     }
@@ -722,8 +894,51 @@ function editorCard() {
   return card;
 }
 
+// Inline editor for adding or editing an effort.
+function effortEditorCard(g) {
+  const card = el("div", "inline-editor");
+  const vals = openEditor.vals;
+  const inputs = {};
+  const field = (key, label, ph, readonly) => {
+    const wrap = el("div", "graph-field");
+    wrap.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text"; inp.value = vals[key] || "";
+    if (ph) inp.placeholder = ph;
+    if (readonly) { inp.readOnly = true; inp.classList.add("ro"); }
+    wrap.append(inp); card.append(wrap); inputs[key] = inp;
+    return inp;
+  };
+  field("id", "Effort ID (slug)", "auth-rework", openEditor.lockId);
+  field("name", "Name", "Auth Rework");
+  field("description", "Description", "short summary (optional)");
+  inputs.name.focus();
+
+  const actions = el("div", "inline-actions");
+  const apply = el("button", "accept tiny", "Apply");
+  apply.onclick = () => {
+    const effort = { id: inputs.id.value.trim().toLowerCase(),
+                     name: inputs.name.value.trim(),
+                     description: inputs.description.value.trim() };
+    if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
+      toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
+      return;
+    }
+    const isAdd = !g.efforts.some((e) => e.id === effort.id);
+    effortDraftUpsert(g.slug, effort, isAdd);
+    openEditor = null;
+    renderGraph();
+  };
+  const cancel = el("button", "ghost tiny", "Cancel");
+  cancel.onclick = () => { openEditor = null; renderGraph(); };
+  actions.append(apply, cancel);
+  card.append(actions);
+  return card;
+}
+
 function openTweak(g, d) {
-  openEditor = { where: "staged", lockId: true, vals: stagedDoc(d) };
+  openEditor = { where: "staged", lockId: true, kind: "doc", vals: stagedDoc(d) };
   renderStagedRows(g);
 }
 
@@ -733,14 +948,17 @@ function updateGraphDock() {
   if (!dock) return;
   const onGraph = !$("view-graph").hidden;
   const c = graphSlug ? draftCounts(graphSlug) : { adds: 0, edits: 0, removes: 0 };
-  const total = c.adds + c.edits + c.removes;
+  const total = c.adds + c.edits + c.removes + (c.effortAdds || 0) + (c.effortEdits || 0) + (c.effortRemoves || 0);
   if (!onGraph || !total) { dock.hidden = true; return; }
   dock.hidden = false;
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   const parts = [];
-  if (c.adds) parts.push(plural(c.adds, "addition"));
-  if (c.edits) parts.push(plural(c.edits, "modification"));
-  if (c.removes) parts.push(plural(c.removes, "removal"));
+  if (c.adds) parts.push(plural(c.adds, "doc addition"));
+  if (c.edits) parts.push(plural(c.edits, "doc edit"));
+  if (c.removes) parts.push(plural(c.removes, "doc removal"));
+  if (c.effortAdds) parts.push(plural(c.effortAdds, "effort"));
+  if (c.effortEdits) parts.push(plural(c.effortEdits, "effort edit"));
+  if (c.effortRemoves) parts.push(plural(c.effortRemoves, "effort removal"));
   $("graph-dock-summary").textContent = `${graphSlug}: ${parts.join(" · ")}`;
 }
 
@@ -749,13 +967,19 @@ async function proposeGraphDraft() {
   if (!slug) return;
   const d = draftFor(slug);
   const documents = [...Object.values(d.add), ...Object.values(d.edit)].map((x) => ({
-    id: x.id, name: x.name, description: x.description || "", dateModified: x.dateModified }));
+    id: x.id, name: x.name, description: x.description || "",
+    dateModified: x.dateModified, keywords: x.keywords || "", parentId: x.parentId || "" }));
   const removals = Object.keys(d.remove);
-  if (!documents.length && !removals.length) { toast("No changes to propose."); return; }
+  const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => ({
+    id: x.id, name: x.name, description: x.description || "" }));
+  const effortRemovals = Object.keys(d.effortRemove);
+  if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {
+    toast("No changes to propose."); return;
+  }
   const reason = $("graph-dock-reason").value.trim();
   const res = await fetch("/api/graph", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, documents, removals, reason }),
+    body: JSON.stringify({ slug, documents, removals, efforts, effortRemovals, reason }),
   });
   const out = await res.json();
   if (out.ok) {
@@ -994,6 +1218,8 @@ function renderDetail() {
   box.append(editorWrap);
   syncGutter();
 
+  box.append(el("div", "detail-status muted"));
+
   const actions = el("div", "detail-actions");
   const left = el("span", "action-group");
   const copy = el("button", "", "Copy");
@@ -1027,8 +1253,6 @@ function renderDetail() {
   right.append(reason, save, revert);
   actions.append(left, right);
   box.append(actions);
-
-  box.append(el("div", "detail-status muted"));
   updateDetailStatus(p);
 }
 

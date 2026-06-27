@@ -71,7 +71,6 @@ def _init_dispatch() -> int:
 
 def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     templates = initmod.org_templates(REPO_ROOT)
-    default_org = templates[0] if templates else "solo-assistant"
     given = _ask("Given (first) name: ")
     family = _ask("Family (last) name: ")
     default_addr = given or family or "your name"
@@ -79,8 +78,15 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         or given or family
     email = _ask("Your email: ")
     location = _ask("Location (optional): ")
-    print(f"\nOrg templates: {', '.join(templates) or '(none found)'}")
-    org = _ask(f"Org template [{default_org}]: ") or default_org
+    print(f"\nOrg routing (optional):")
+    print(f"  blank (recommended) — dynamic multi-org router: all three domain orgs are")
+    print(f"    available and the correct one activates per-project via each project's")
+    print(f"    org: field. Best for mixed-domain work.")
+    print(f"  a template name — locks the assistant to one domain's delegation chain")
+    print(f"    for all project work, regardless of the project's org: field.")
+    print(f"  Available templates: {', '.join(templates) or '(none found)'}")
+    org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
+    org = org_raw if org_raw else None
     backend = _ask("Workspace backend [gws]: ") or "gws"
     try:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,

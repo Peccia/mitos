@@ -205,6 +205,12 @@ def classify_output(reg: Registry, machine: str, o: Output, lock: dict,
         if new_hash == locked.get("source_hash") and live_hash == locked.get("deployed_hash"):
             return Status(o, "unchanged")
         return Status(o, "resolved", "live already matches registry; relock")
+    # mixed prose+generated file: protect only the prose, let the generated block (graph
+    # regen, or a hand-edit of it) pass through without blocking. Falls back to the
+    # whole-file compare below when there is no recorded section base or an edit straddles.
+    sa = _section_aware_status(o, locked, dest, new_hash)
+    if sa is not None:
+        return sa
     drifted = live_hash != locked.get("deployed_hash")
     pending = new_hash != locked.get("source_hash")
     if drifted and pending:
@@ -213,6 +219,39 @@ def classify_output(reg: Registry, machine: str, o: Output, lock: dict,
         return Status(o, "drift", f"edited in place ({o.drift_policy})")
     if pending:
         return Status(o, "pending", "registry changed")
+    return Status(o, "unchanged")
+
+
+def _section_aware_status(o: Output, locked: dict, dest: Path, new_hash: str) -> Status | None:
+    """Drift/pending for an AGENTS.md that is user prose followed by a generated document
+    block (tagged render.GENERATED_SECTION). Compares ONLY the prose sections against what
+    we deployed, so:
+      - a prose edit  -> drift (adoptable, protected);
+      - graph regen   -> pending (redeploys, overwrites the block);
+      - a hand-edit of the generated block only -> unchanged (silently regenerated).
+    Returns None (fall back to whole-file compare) when there's no recorded section base,
+    or an edit straddles the prose/generated boundary so it can't be attributed cleanly."""
+    if o.kind != "text" or not any(render.is_generated_source(s) for s, _ in o.section_bodies):
+        return None
+    base = locked.get("sections")
+    if not base:
+        return None
+    base_sections = [(s["source"], s["text"]) for s in base]
+    if not any(render.is_generated_source(s) for s, _ in base_sections):
+        return None
+    carved = render.split_live_sections(base_sections, dest.read_text(encoding="utf-8"))
+    if carved is None:
+        return None
+    deployed_prose = render.join_prose(base_sections)
+    live_prose = "\n\n".join(carved.get(s, "") for s, _ in render.prose_sections(base_sections))
+    drifted = live_prose != deployed_prose
+    pending = new_hash != locked.get("source_hash")
+    if drifted and pending:
+        return Status(o, "conflict", "prose edited AND registry/graph changed")
+    if drifted:
+        return Status(o, "drift", f"prose edited ({o.drift_policy})")
+    if pending:
+        return Status(o, "pending", "registry or graph changed")
     return Status(o, "unchanged")
 
 
@@ -242,11 +281,14 @@ def _capture_to_inbox(reg: Registry, machine: str, s: Status, lock: dict,
     while folder.exists():
         folder = inbox / f"{ts}--{machine}--{_slug(o)}-{n}"
         n += 1
+    # a mixed prose+generated file routes via `sections` (the generated half maps to no
+    # partial), so its single prose source must NOT become a one-path registry_path.
+    has_generated = any(render.is_generated_source(s) for s, _ in o.section_bodies)
     meta = {
         # the single registry file this wants to land in — empty for multi-source
         # documents, whose routing comes from `sections` below instead (one path
         # would misdirect an accept into the first partial)
-        "registry_path": o.sources[0] if len(o.sources) == 1 else "",
+        "registry_path": o.sources[0] if (len(o.sources) == 1 and not has_generated) else "",
         "kind": "drift",
         "source": {"machine": machine, "tool": o.target},
         "base_hash": locked.get("source_hash", ""),
@@ -576,17 +618,20 @@ def cmd_adopt(reg: Registry, path: str) -> int:
         return 1
     live = resolved.read_text(encoding="utf-8")
 
-    if len(o.sources) == 1:
+    # Prefer the recorded per-section base whenever the file has more than one section
+    # (a multi-partial doc, OR prose + a generated block). Only a genuinely single-source
+    # file routes the whole body to one partial.
+    base = _lock_sections(reg, machine, o.deploy_path) or (o.section_bodies or None)
+    if base and len(base) > 1:
+        # reconstruct the per-section split (no in-file markers) using the base recorded
+        # at deploy; the generated section maps to no partial and is skipped.
+        changed, warnings, err = route_into_registry(reg, "", live, sections=base)
+    elif len(o.sources) == 1:
         changed, warnings, err = route_into_registry(reg, o.sources[0], live)
     else:
-        # multi-source doc: reconstruct the per-section split (no in-file markers) using
-        # the base recorded at deploy; fall back to the current registry render if unrecorded
-        base = _lock_sections(reg, machine, o.deploy_path) or o.section_bodies
-        if not base:
-            print("no per-section record for this file — resolve by editing the registry "
-                  "partials directly.")
-            return 1
-        changed, warnings, err = route_into_registry(reg, "", live, sections=base)
+        print("no per-section record for this file — resolve by editing the registry "
+              "partials directly.")
+        return 1
     for w in warnings:
         print(f"  warn: {w}")
     if err:
@@ -620,6 +665,8 @@ def route_into_registry(reg: Registry, registry_path: str, payload_text: str,
                             f"cleanly. Apply it by hand to the relevant partial(s):\n{srcs}")
         changed, warnings = [], []
         for src, new_body in mapping.items():
+            if render.is_generated_source(src):
+                continue   # a generated block routes to no registry partial — never adopted
             partial = reg.partials.get(src)
             if partial is None:
                 warnings.append(f"section {src!r} maps to no registry partial; skipped")

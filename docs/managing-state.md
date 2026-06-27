@@ -102,10 +102,18 @@ when its deployed copy drifts:
 - **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill Hermes tunes).
   On drift, deploy **captures the edit to `inbox/` and then overwrites** (registry wins), so the
   proposal is preserved for you to accept later, and the machine still converges on the registry.
-- **`generated`** — the knowledge-graph project tree (`AGENTS.md`/`AGENTS_DETAILS.md` under the
-  Agentic Context tree). Regenerated from `registry/graph/` on every deploy; in-place edits are
+- **`generated`** — knowledge-graph-derived files with no human prose: the Agentic Context
+  **roster** (`AGENTS.md` at the tree root) and, on the agents-md/Hermes side, each project's
+  `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
   **overwritten silently** and are **non-adoptable** (there's no registry partial to route an edit
   back to — edit `registry/graph/<slug>.jsonld` instead).
+
+  A project's **`AGENTS.md`** is a special case: it is the project's prose (a registry partial,
+  **`protect`**) followed by a generated document block. The two are split in the lockfile, not by
+  any in-file marker (invariant #5): only the **prose** is protected and adoptable, while the
+  generated block regenerates every deploy — a hand-edit of the block never blocks a deploy and is
+  silently overwritten, exactly as a `generated` file would be. So one file carries both policies,
+  section by section.
 
 **Capture exemptions:** `env` files (the intake queue must never hold secrets — their canonical
 source is your `.local/` overlay), staged `.zip` skills (binary build artifacts), and
@@ -215,6 +223,11 @@ everything else you have in those files.
 - **Example-machine guard.** The shipped `machines/example-*.yaml` are templates (`example: true`).
   A real deploy of one is refused; copy it into `registry/local/machines/`, rename it, drop
   `example: true`, and deploy that. Once you have a real machine, `compile` skips the examples.
+- **Example-project guard.** The shipped `registry/projects/example-project.yaml` is a sample
+  (`example: true`). It renders on a fresh clone (so the quick-start shows a worked example), but
+  steps aside automatically as soon as you add your own projects under `registry/local/projects/`
+  — so a configured fleet's roster and assistant tree never list the sample. Same spirit as the
+  machine guard, but keyed off "you have overlay projects" rather than a per-deploy refusal.
 - **Lanes.** `--lane content` touches only prose; `--lane connections` touches only MCP wiring +
   env files; default `all` does both. Orphans are always computed against the **full** plan, so a
   lane/target-filtered deploy never falsely reports or deletes the other lane's files.

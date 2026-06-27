@@ -14,7 +14,7 @@ import yaml
 
 from . import render
 from .io import safe_rel
-from .loader import Registry, RegistryError, resolve_local_path
+from .loader import Registry, RegistryError, resolve_local_path, _repo_basename
 
 
 def _selected_prompts(reg: Registry, pr_spec: dict) -> list:
@@ -138,38 +138,75 @@ def _plan_env(reg: Registry, machine_name: str, paths: dict) -> list[Output]:
 class CloneSpec:
     slug: str
     repo: str          # git URL from the manifest
-    dest: str          # POSIX checkout dir under <agentic_context_root>/Projects/<slug>/
+    dest: str          # POSIX checkout dir — under agentic_context_root or local_path
 
 
-def _repo_basename(repo: str) -> str:
-    """The checkout directory name for a git URL: the last path segment, minus `.git`.
-    Handles scp-style (`git@host:owner/name.git`) and URL (`https://…/name.git`) forms."""
-    s = repo.strip().rstrip("/")
-    if s.endswith(".git"):
-        s = s[:-4]
-    # split on both ':' (scp form) and '/' so owner/name and host:owner/name both work
-    return s.replace(":", "/").rsplit("/", 1)[-1] or "repo"
+def _project_repos(proj: dict) -> list[str]:
+    """Normalized list of git URLs from a project manifest's `repo:` field.
+    Accepts either a single string or a list of strings; always returns a list."""
+    raw = proj.get("repo")
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        url = raw.strip()
+        return [url] if url else []
+    return [u.strip() for u in raw if isinstance(u, str) and u.strip()]
+
+
+def _reg_root_norm(reg: Registry) -> str:
+    """Normalised, slash-terminated registry root for guard comparisons."""
+    return str(reg.root).replace("\\", "/").rstrip("/")
 
 
 def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
-    """Repos to clone into the Agentic Context tree, on Claude Code environments only.
+    """Repos to clone on Claude Code environments, absent-only / non-destructive.
 
-    One per project that declares a non-empty `repo:`. The deploy executor clones each
-    only when its checkout is ABSENT — never pulling, resetting, or deleting an existing
-    tree (design rule #8). Planning-only machines (no claude-code target) get nothing.
+    Two lanes:
+    - agentic_context_root (Hermes + claude-code machines): clone into
+      <agentic_context_root>/Projects/<slug>/<basename> — the separate context tree.
+    - local_path (non-Hermes claude-code machines, i.e. agents-md NOT in targets):
+      clone into <local_path>/<basename> — co-located with the project workspace.
+
+    The deploy executor clones each only when its checkout is ABSENT — never pulling,
+    resetting, or deleting an existing tree (design rule #8). Planning-only machines
+    (no claude-code target) get nothing.
     """
     machine = reg.machines.get(machine_name) or {}
-    root = (machine.get("paths") or {}).get("agentic_context_root")
-    if not root or "claude-code" not in machine.get("targets", []):
+    targets = machine.get("targets", [])
+    if "claude-code" not in targets:
         return []
-    root = str(root).rstrip("/")
+
     out: list[CloneSpec] = []
-    for slug, proj in sorted(reg.projects.items()):
-        repo = str(proj.get("repo") or "").strip()
-        if not repo:
-            continue
-        dest = f"{root}/Projects/{slug}/{_repo_basename(repo)}"
-        out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+
+    # agentic_context_root lane (Hermes machines that also run claude-code)
+    root = (machine.get("paths") or {}).get("agentic_context_root")
+    if root:
+        root = str(root).rstrip("/")
+        for slug, proj in sorted(reg.projects.items()):
+            for repo in _project_repos(proj):
+                dest = f"{root}/Projects/{slug}/{_repo_basename(repo)}"
+                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+
+    # local_path lane (workstation machines without agents-md)
+    if "agents-md" not in targets:
+        reg_root = _reg_root_norm(reg)
+        suppressed = _suppressed_examples(reg)
+        for slug, proj in sorted(reg.projects.items()):
+            if slug in suppressed:
+                continue
+            repos = _project_repos(proj)
+            if not repos:
+                continue
+            local = _local(reg, machine_name, proj)
+            if not local:
+                continue
+            local_norm = local.replace("\\", "/").rstrip("/")
+            if local_norm == reg_root:
+                continue  # guard: never clone into the Mitos repo itself
+            for repo in repos:
+                dest = f"{local_norm}/{_repo_basename(repo)}"
+                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+
     return out
 
 
@@ -197,6 +234,12 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
     from . import graph as graphmod
     root = str(root).rstrip("/")
 
+    # Example sample projects step aside once the user supplies their own (overlay) projects
+    # — the same guard the assistant tree applies, so the graph roster never lists samples
+    # on a configured fleet. On a fresh clone the set is empty and examples render.
+    suppressed = _suppressed_examples(reg)
+    active_graphs = {slug: g for slug, g in reg.graphs.items() if slug not in suppressed}
+
     def _generated(deploy_path: str, content: str) -> Output:
         return Output(
             target="agentic-graph", kind="text", deploy_path=deploy_path,
@@ -205,17 +248,42 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
 
     outputs: list[Output] = [
         _generated(f"{root}/AGENTS.md",
-                   graphmod.roster_markdown(list(reg.graphs.values())))]
-    for slug, pg in sorted(reg.graphs.items()):
+                   graphmod.roster_markdown(list(active_graphs.values())))]
+    for slug, pg in sorted(active_graphs.items()):
         base = f"{root}/Projects/{slug}"
-        outputs.append(_generated(f"{base}/AGENTS.md",
-                                  graphmod.project_index_markdown(pg)))
-        outputs.append(_generated(f"{base}/{graphmod.DETAILS_FILENAME}",
-                                  graphmod.project_details_markdown(pg)))
+        proj = reg.projects.get(slug) or {}
+        agents_path = f"{base}/AGENTS.md"
+        # full document context inline + repos cloned beside this file (no details file)
+        repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
+        gen_body = graphmod.project_full_markdown(pg, repos or None)
+        prose_src, prose = _project_prose(reg, proj, "agents-md")
+        # the Domain line is machine-derived (manifest org:), so it rides in the GENERATED
+        # half — never the prose section, or adopt would leak it into the prose partial.
+        gen_body = _domain_line(proj) + gen_body
+        if prose_src:
+            # prose header (protected) + generated doc block in one AGENTS.md
+            outputs.append(_mixed_doc_output(
+                "agentic-graph", agents_path, prose, gen_body, prose_src, "protect"))
+        else:
+            # no human prose for this project → the file is wholly generated
+            outputs.append(_generated(agents_path, gen_body))
     return outputs
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+def _suppressed_examples(reg: Registry) -> set[str]:
+    """Slugs of `example: true` sample projects to hide once the user supplies their own.
+
+    Mirrors the machine guard in cmd_compile: shipped examples step aside as soon as real
+    (overlay) content exists, so they never pollute a configured fleet. A fresh clone with no
+    overlay projects renders them for the quick-start. Driven off `_is_local` (any overlay
+    project present), not off graphs — so an overlay project without a graph still suppresses.
+    """
+    if not any(p.get("_is_local") for p in reg.projects.values()):
+        return set()
+    return {slug for slug, p in reg.projects.items() if p.get("example")}
+
+
 def _sections(reg: Registry, source_rels: list[str], target: str) -> list[tuple[str, str]]:
     """Resolve registry-relative partial paths to (source, body) sections, honoring
     each partial's audience for this target."""
@@ -235,6 +303,46 @@ def _multi(sections: list[tuple[str, str]]) -> list:
     """Per-section breakdown to record in the lockfile, only when a document is fed by
     more than one partial (single-source files route trivially in adopt)."""
     return list(sections) if len(sections) > 1 else []
+
+
+def _mixed_doc_output(target: str, deploy_path: str, prose_body: str, gen_body: str,
+                      prose_src: str, drift_policy: str) -> "Output":
+    """One AGENTS.md that is user prose FOLLOWED BY a machine-generated document block.
+
+    The two are recorded as `section_bodies` with the generated half tagged
+    `render.GENERATED_SECTION` — so adopt routes only the prose back to its partial and
+    drift detection protects only the prose, while the doc block regenerates every deploy.
+    No marker is written into the file (invariant #5); the split lives in the lockfile.
+    The file is `protect` (its prose is the user's), but its generated tail is never
+    captured as drift (see commands.classify_output)."""
+    sections = [(prose_src, prose_body.rstrip("\n")),
+                (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
+    return Output(
+        target=target, kind="text", deploy_path=deploy_path,
+        dist_rel=f"{target}/{safe_rel(deploy_path)}",
+        content=render.plain_document(sections), drift_policy=drift_policy,
+        sources=[prose_src], section_bodies=sections)
+
+
+def _domain_line(proj: dict) -> str:
+    """The one-line domain pointer prepended to a project's prose when `org:` is set."""
+    org = proj.get("org", "")
+    return (f"**Domain:** {org} — load the `org-{org}` skill for project work.\n\n"
+            if org else "")
+
+
+def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None, str]:
+    """A project's human-authored context prose for a target audience: (source_rel, body),
+    or (None, "") if the manifest declares no context partial visible to this audience.
+    Tries the `assistant` key, then `builder` (the mitos self-hosting key)."""
+    ctx = proj.get("context") or {}
+    for key in ("assistant", "builder"):
+        if key in ctx:
+            src_rel = _strip_reg(ctx[key])
+            sections = _sections(reg, [src_rel], audience)
+            if sections:
+                return src_rel, render.plain_document(sections).rstrip("\n")
+    return None, ""
 
 
 def _selected_skills(reg: Registry, sk_spec: dict) -> list:
@@ -290,9 +398,15 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
             ))
         # Dynamic per-project entries: generate "Projects/<name>/AGENTS.md" for each
         # project whose manifest declares context.<project_context_key>.
+        # When the project also has a knowledge graph, append the titles-index and
+        # emit a companion AGENTS_DETAILS.md (non-adoptable, drift_policy generated).
         ctx_key = tree.get("project_context_key")
         if ctx_key:
+            from . import graph as graphmod
+            suppressed = _suppressed_examples(reg)
             for slug, proj in sorted(reg.projects.items()):
+                if slug in suppressed:
+                    continue
                 ctx = proj.get("context") or {}
                 if ctx_key not in ctx:
                     continue
@@ -302,13 +416,34 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 sections = _sections(reg, [src_rel], "agents-md")
                 if not sections:
                     continue
+                domain_line = _domain_line(proj)
                 deploy_path = f"{root.rstrip('/')}/{rel_file}"
-                outputs.append(Output(
-                    target="agents-md", kind="text", deploy_path=deploy_path,
-                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                    content=render.plain_document(sections), drift_policy=policy,
-                    sources=[src_rel], section_bodies=_multi(sections),
-                ))
+                pg = reg.graphs.get(slug)
+                if pg:
+                    # prose header (protected) + lightweight titles index (generated);
+                    # full per-document detail lives in the companion AGENTS_DETAILS.md.
+                    # The Domain line is machine-derived → it rides in the generated half.
+                    prose_body = render.plain_document(sections).rstrip("\n")
+                    outputs.append(_mixed_doc_output(
+                        "agents-md", deploy_path, prose_body,
+                        domain_line + graphmod.project_index_markdown(pg), src_rel, policy))
+                else:
+                    outputs.append(Output(
+                        target="agents-md", kind="text", deploy_path=deploy_path,
+                        dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                        content=domain_line + render.plain_document(sections),
+                        drift_policy=policy,
+                        sources=[src_rel], section_bodies=_multi(sections),
+                    ))
+                if pg:
+                    details_path = (f"{root.rstrip('/')}/Projects/{name}/"
+                                    f"{graphmod.DETAILS_FILENAME}")
+                    outputs.append(Output(
+                        target="agents-md", kind="text", deploy_path=details_path,
+                        dist_rel=f"agents-md/{safe_rel(details_path)}",
+                        content=graphmod.project_details_markdown(pg),
+                        drift_policy="generated", sources=[],
+                    ))
     # per-project root AGENTS.md (builder context)
     pa = spec.get("project_agents")
     if pa:
@@ -379,31 +514,72 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
 # ── claude-code ──────────────────────────────────────────────────────────────
 def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
     outputs: list[Output] = []
+    machine = reg.machines[machine_name]
+    is_hermes_machine = "agents-md" in machine.get("targets", [])
     cf = spec["context_file"]
     stub_map = cf.get("stub_import") or {}
+    reg_root = _reg_root_norm(reg)
+    suppressed = _suppressed_examples(reg) if not is_hermes_machine else set()
+
     for slug, proj in reg.projects.items():
         local = _local(reg, machine_name, proj)
         if not local:
             continue
-        deploy_path = f"{local.rstrip('/')}/{cf['filename']}"
-        section_bodies: list = []
-        if slug in stub_map:
-            content, sources = render.stub_document(stub_map[slug]), []
+        local = local.rstrip("/")
+        local_norm = local.replace("\\", "/").rstrip("/")
+
+        pg = reg.graphs.get(slug) if not is_hermes_machine and slug not in suppressed else None
+
+        if pg and local_norm != reg_root:
+            # Non-Hermes workstation + project has a knowledge graph: emit a self-contained
+            # AGENTS.md (full doc context + prose header) and a stub CLAUDE.md → @AGENTS.md.
+            # The prose is resolved under the agents-md audience so that shared context
+            # partials (audience: [hermes, agents-md]) are visible without requiring a
+            # separate claude-code audience declaration on each partial.
+            from . import graph as graphmod
+            repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
+            gen_body = _domain_line(proj) + graphmod.project_full_markdown(pg, repos or None)
+            prose_src, prose = _project_prose(reg, proj, "agents-md")
+            agents_path = f"{local}/AGENTS.md"
+            if prose_src:
+                outputs.append(_mixed_doc_output(
+                    "claude-code", agents_path, prose, gen_body, prose_src, "protect"))
+            else:
+                outputs.append(Output(
+                    target="claude-code", kind="text", deploy_path=agents_path,
+                    dist_rel=f"claude-code/{safe_rel(agents_path)}",
+                    content=gen_body, drift_policy="generated", sources=[],
+                ))
+            claude_path = f"{local}/{cf['filename']}"
+            outputs.append(Output(
+                target="claude-code", kind="text",
+                deploy_path=claude_path,
+                dist_rel=f"claude-code/{safe_rel(claude_path)}",
+                content=render.stub_document("@AGENTS.md"),
+                drift_policy=cf.get("drift_policy", "protect"), sources=[],
+            ))
         else:
-            ctx = proj.get("context") or {}
-            if "repo" not in ctx:
-                continue  # no code-structure context → no CLAUDE.md
-            srcs = [(_strip_reg(ctx["repo"]) if s == "{project.context.repo}" else s)
-                    for s in cf["sources"]]
-            sections = _sections(reg, srcs, "claude-code")
-            content, sources, section_bodies = (
-                render.plain_document(sections), srcs, _multi(sections))
-        outputs.append(Output(
-            target="claude-code", kind="text", deploy_path=deploy_path,
-            dist_rel=f"claude-code/{safe_rel(deploy_path)}",
-            content=content, drift_policy=cf.get("drift_policy", "protect"),
-            sources=sources, section_bodies=section_bodies,
-        ))
+            # Hermes machines, no-graph projects, or suppressed examples: emit CLAUDE.md
+            # only (existing behaviour — stub_map or inlined repo context or skip).
+            deploy_path = f"{local}/{cf['filename']}"
+            section_bodies: list = []
+            if slug in stub_map:
+                content, sources = render.stub_document(stub_map[slug]), []
+            else:
+                ctx = proj.get("context") or {}
+                if "repo" not in ctx:
+                    continue  # no code-structure context → no CLAUDE.md
+                srcs = [(_strip_reg(ctx["repo"]) if s == "{project.context.repo}" else s)
+                        for s in cf["sources"]]
+                sections = _sections(reg, srcs, "claude-code")
+                content, sources, section_bodies = (
+                    render.plain_document(sections), srcs, _multi(sections))
+            outputs.append(Output(
+                target="claude-code", kind="text", deploy_path=deploy_path,
+                dist_rel=f"claude-code/{safe_rel(deploy_path)}",
+                content=content, drift_policy=cf.get("drift_policy", "protect"),
+                sources=sources, section_bodies=section_bodies,
+            ))
     # per-project skills, agents, and prompts (the per-project binding design): each
     # project's manifest names the assets it uses; they deploy to that project's checkout.
     # A skill/agent/prompt is reused across projects by naming it in each manifest, never copied.

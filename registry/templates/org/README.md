@@ -1,15 +1,17 @@
 # Org templates (seed library)
 
-Pre-defined organization profiles for `mitos init` (the Mitos overlay design). Each template
-is a pair of **registry content** seeds — not Jinja, not build templates:
+Pre-defined organization profiles for `mitos init`. Each template seeds one file — not Jinja,
+not build templates:
 
-- `org-hierarchy.md` — the lean, always-on identity partial (the delegation chain). On
-  `init` it is copied to `registry/local/identity/org-hierarchy.md`, where it **overrides**
-  the core default by last-layer-wins and flows into Hermes's `SOUL.md` automatically.
-- `org-skill.md` — the on-demand playbook. Copied to `registry/local/skills/org/SKILL.md`,
-  overriding the core `org` skill.
+- `org-hierarchy.md` — the lean, always-on identity partial (session routing preference +
+  primary delegation chain). On `init` it is copied to
+  `registry/local/identity/org-hierarchy.md`, overriding the core multi-org router by
+  last-layer-wins and flowing into Hermes's `SOUL.md` automatically.
 
-This is how selectable templates **replace** the single fixed org of Phase C′: the core
-ships a default, `init` picks a template into the overlay, and the user edits their copy
-freely. Available: `solo-assistant`, `software-firm`, `design-firm`. Add a folder here with
-the same two files to contribute another.
+The domain playbooks (full delegation procedure, C-suite escalation, system invariants,
+red-team protocols) now ship as first-class core skills — `org-software`, `org-design`,
+`org-marketing` — and are available on all hermes environments without any per-user seeding.
+
+Available templates: `software-firm`, `design-firm`, `marketing-firm`. To add another,
+create a folder with an `org-hierarchy.md` and optionally a matching `registry/skills/org-<domain>/SKILL.md`
+in the core. See `docs/org-templates.md` for the full guide.

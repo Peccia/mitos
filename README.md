@@ -50,8 +50,8 @@ flowchart LR
 
 A local file with the same logical name as a core file **replaces** it; new local files are **added**; untouched core files **remain**. Run `python build/mitos.py init` to set up your overlay — it offers three paths and **never overwrites files you already have**:
 
-1. **Scaffold a fresh one** — name, an org template (`solo-assistant`, `software-firm`,
-   `design-firm`), and a workspace backend.
+1. **Scaffold a fresh one** — name, an org template (`software-firm`, `design-firm`,
+   `marketing-firm`), and a workspace backend.
 2. **Pull one you already keep on a git hub** — onboard a second machine from your
    `mitos-local` repo (clones your real files instead of generating new ones).
 3. **Use files already in `registry/local/`** — finish the install around custom data you
@@ -139,6 +139,9 @@ Once your overlay defines a real machine, `compile` automatically **skips the `e
 templates** (and a real `deploy` of a template is refused) — so you only ever build and deploy
 your own machines, never the shipped examples.
 
+Similarly, the shipped `example-project` is a sample project manifest (`example: true`). It renders on a fresh clone for the Quick Start, but automatically **steps aside** as soon as you define your own local overlay projects under `registry/local/projects/`. This prevents the sample project from polluting your configured fleet's rosters, graphs, and assistant context trees.
+
+
 ## Core concepts
 
 | Term | What it is |
@@ -151,6 +154,8 @@ your own machines, never the shipped examples.
 | **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy refuses), `harvest` (captured as a proposal), or `generated` (regenerated each deploy). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The intake queue. Everything a tool proposes lands here as a candidate; **only you** merge it — usually via the operator console. |
+| **assistant_root** | The folder (default `~/MitosAgent`) where your assistant's compiled context lives. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), and `Projects/AGENTS.md` (active projects roster and org roles). |
+| **project checkouts** | Deployed files at each project's `local_path` directory. On **workstation machines** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` (inline doc index from the knowledge graph + project prose) plus a thin `CLAUDE.md` stub → `@AGENTS.md`. On **Hermes machines** (agents-md also in targets), `CLAUDE.md` carries identity + repo context and the graph materializes separately in the Agentic Context tree. |
 
 ## How skills reach a tool
 
@@ -288,19 +293,20 @@ you may already run a server, and it may be authless. See [`docs/connectors/`](d
 python build/mitos.py connect --project apdict
 ```
 
-It enumerates a scoped folder (interactive picker in a terminal), proposes the documents as a
-`kind: graph` candidate, and you accept it in the console. If the project has no `document_store`
-bound, `connect` stops and prints the exact servers, file, and line to fix — it won't leave you
-guessing.
+It enumerates a scoped folder (interactive picker in a terminal, or pass `--folder-id`),
+proposes the documents as a `kind: graph` candidate, and you accept it in the console.
+If the project has no `document_store` set, `connect` defaults to the **local-file connector**
+— no credentials required; point it at any local directory with `--folder-id /path/to/docs`.
 
-Two acquisition modes feed the same valve, both **beside** the compiler with lazy, optional
+Three connector backends feed the same valve, all **beside** the compiler with lazy, optional
 deps (the deterministic verbs never import them):
 
+- **Local-file (`local`)** — walks a local directory with `os.walk`; produces `file://` URLs.
+  **The default** when no `document_store` is set — no credentials, no server needed.
 - **MCP-backed (`mcp`)** — talks to a document MCP server you already run (per its `graph_enum`
-  mapping in `connections/servers.yaml`), so there's no second OAuth. The default for a store
-  with a running server.
-- **Direct (`gws`)** — a connector with its own OAuth client, for users without a running MCP
-  server. A `mock` backend (`--backend mock`) gives a credential-free dry run.
+  mapping in `connections/servers.yaml`), so there's no second OAuth. `query_syntax:
+  google-drive` enables Drive-specific query construction; any other server uses the generic path.
+- **Mock (`mock`)** — in-process demo for tests and dry runs (`--backend mock`).
 
 Nothing writes the graph directly. Inspect any project with
 `python build/compile.py graph --project <slug>`.

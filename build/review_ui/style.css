@@ -609,13 +609,15 @@ details.payload pre {
 
 .detail-actions {
   display: flex;
+  justify-content: space-between;
   gap: .5rem;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: .65rem;
+  margin-top: .75rem;
 }
 .action-group { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.save-group { margin-left: auto; }
+.save-group { flex-wrap: wrap; }
+.row-actions { display: inline-flex; gap: .35rem; align-items: center; }
 .detail-reason {
   font: inherit;
   border: 1px solid var(--line);
@@ -806,7 +808,7 @@ details.payload pre {
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--ink);
 }
-.staged-info { flex-basis: 100%; font-size: .76rem; }
+.staged-info { flex: 1; font-size: .76rem; }
 .staged-row, .registry-row {
   display: flex; align-items: flex-start; gap: .55rem;
   padding: .45rem 0;
@@ -828,9 +830,38 @@ details.payload pre {
 .registry-desc { font-size: .78rem; }
 .registry-id { font-size: .72rem; word-break: break-all; max-width: 12rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .25rem; }
+.tag-chip { font-size: .72rem; padding: .1rem .45rem; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--surface2); }
 .registry-row.remove { background: var(--bad-bg); border-radius: 6px; padding-left: .4rem; }
 .registry-row.add    { background: var(--ok-bg);  border-radius: 6px; padding-left: .4rem; }
 .registry-row.edit   { background: var(--chg-bg); border-radius: 6px; padding-left: .4rem; }
+
+/* ── Effort sections (effort grouping in Registry pane) ──────────────────── */
+.effort-section {
+  border-top: 1px solid var(--line);
+  padding-top: .5rem;
+  margin-top: .3rem;
+}
+.effort-section:first-child { border-top: none; margin-top: 0; }
+.effort-section.effort-remove { opacity: .6; }
+.effort-header {
+  display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+  margin-bottom: .25rem;
+}
+.effort-name {
+  font-weight: 600; font-size: .85rem;
+}
+.effort-name.struck { text-decoration: line-through; color: var(--muted); }
+.effort-desc { font-size: .78rem; margin-bottom: .3rem; }
+.effort-docs { padding-left: .8rem; }
+
+/* ── Select field in inline editor ──────────────────────────────────────── */
+.graph-select {
+  padding: .35rem .5rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
 
 /* ── Inline editor card ──────────────────────────────────────────────────── */
 .inline-editor {

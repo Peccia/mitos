@@ -17,7 +17,14 @@ trees:
     root_key: assistant_root
     drift_policy: protect
     files:
-      "Projects/AGENTS.md": [context/projects-index.md]
+      # Root entry point: the first file new-session reads. Lean routing + personal-context
+      # bridge only — no org/domain detail (wasted context on Assistant requests).
+      "AGENTS.md": [context/agentic-root.md]
+      # Projects branch root: the roster + org/domain structure (where org context belongs,
+      # per the routing model — only loaded when entering project work).
+      "Projects/AGENTS.md": [context/projects-index.md, context/org-roles.md]
+      # Assistant branch root: domain-agnostic one-shot workflows.
+      "Assistant/AGENTS.md": [context/assistant.md]
     # Dynamic per-project entries: for each project that declares context.<key>,
     # generate "Projects/<project.name>/AGENTS.md" from that partial.
     project_context_key: assistant
@@ -28,4 +35,4 @@ project_agents:
   drift_policy: protect
   # filename at the project's local_path root:
   filename: AGENTS.md
-  sources: [identity/who-i-am.md, identity/operating-rules.md, "{project.context.builder}"]
+  sources: [identity/who-i-am.md, identity/security.md, identity/comms-style.md, identity/operating-rules.md, "{project.context.builder}"]

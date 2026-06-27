@@ -20,15 +20,19 @@ servers:
     # knowledge-graph init: the MCP tool to call, optional default scope/query, and how the
     # tool's returned fields map onto the lean graph shape. The connector calls `list_tool`
     # over this server's `url` (no second OAuth) and reads each result's fields per `fields`.
+    # `webUrl` is stored as schema:url in the graph — not synthesized from the id — so the
+    # stored link works for any store, not just Google Drive.
     graph_enum:
       list_tool: search_drive_files
+      query_syntax: google-drive       # activates Drive-specific query construction (folder parents,
+                                       # mimeType filter, recursive BFS); omit for the generic path
       query_arg: query                 # the tool argument that carries a folder/name scope
       default_query: ""               # sent when no --folder-id/--query is given; empty = broad listing
       fields:
         id: id
         name: name
         dateModified: modifiedTime
-        webUrl: webViewLink
+        webUrl: webViewLink            # stored as schema:url; drive_url falls back to Drive open-link
       # google_workspace_mcp returns search_drive_files results as human-readable text, not JSON.
       # Each item line looks like: - Name: "file" (ID: <id>, ..., Modified: <date>, ...) Link: <url>
       # text_fields maps each raw field name to a one-capture-group regex that extracts it from a line.

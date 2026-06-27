@@ -14,7 +14,7 @@ from pathlib import Path
 from .loader import LOCAL_OVERLAY
 
 ORG_TEMPLATES_DIR = "registry/templates/org"
-OVERLAY_SUBDIRS = ("identity", "projects", "graph", "skills", "agents")
+OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills", "agents")
 
 
 def org_templates(root: Path) -> list[str]:
@@ -28,22 +28,25 @@ def org_templates(root: Path) -> list[str]:
 
 def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
                      address: str = "", email: str = "", location: str = "",
-                     org_template: str = "solo-assistant",
+                     org_template: str | None = None,
                      backend: str = "gws", overwrite: bool = False) -> list[str]:
-    """Create registry/local/ and seed it: the chosen org template (which overrides the core
-    org by key), a starter identity partial from the user's answers, and the empty trees the
-    user fills in. **Non-destructive by default** — a seed file is skipped when the user already
-    has one (so this can finish an install around existing custom data); pass overwrite=True to
-    force a clean re-scaffold. Returns the list of registry-relative paths it *created* (files
-    it kept are omitted). Pure (no prompts), so it is testable. Raises ValueError on an unknown
-    org template.
+    """Create registry/local/ and seed it: the optional org template seed, a starter identity
+    partial from the user's answers, and the empty trees the user fills in. **Non-destructive by
+    default** — a seed file is skipped when the user already has one (so this can finish an
+    install around existing custom data); pass overwrite=True to force a clean re-scaffold.
+    Returns the list of registry-relative paths it *created* (files it kept are omitted). Pure
+    (no prompts), so it is testable. Raises ValueError on an unknown org template.
+
+    `org_template` is optional — pass None (the default) to skip seeding `org-hierarchy.md` and
+    use the core multi-org domain router as-is. Domain org skills (`org-software`, `org-design`,
+    `org-marketing`) always ship in core; only the routing preference file is seeded here.
 
     `address` is how the assistant should refer to the user (a given name like "Sam", a
     family form like "Dr. Lee", or any preferred handle); it defaults to the given name. It
     lands in the overlay identity so every tool addresses the user the same way — skills stay
     neutral ("the owner") and read the name from this always-on identity partial."""
     templates = org_templates(root)
-    if org_template not in templates:
+    if org_template is not None and org_template not in templates:
         raise ValueError(f"unknown org template {org_template!r}; available: {templates}")
     overlay = root / "registry" / LOCAL_OVERLAY
     written: list[str] = []
@@ -65,12 +68,12 @@ def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
             dest.write_text(text or "", encoding="utf-8")
         written.append(f"{LOCAL_OVERLAY}/{relpath}")
 
-    # 1. Org template → overlay. registry/local/identity/org-hierarchy.md overrides the core
-    #    org-hierarchy.md by key, so it flows straight into Hermes's SOUL.md; the playbook
-    #    overrides the core `org` skill the same way.
-    tdir = root / ORG_TEMPLATES_DIR / org_template
-    _seed("identity/org-hierarchy.md", copy_from=tdir / "org-hierarchy.md")
-    _seed("skills/org/SKILL.md", copy_from=tdir / "org-skill.md")
+    # 1. Org template → overlay (optional). When provided, registry/local/identity/org-hierarchy.md
+    #    overrides the core org-hierarchy.md by key and flows into Hermes's SOUL.md. When None,
+    #    the core multi-org domain router is used as-is — domain skills ship in core regardless.
+    if org_template is not None:
+        tdir = root / ORG_TEMPLATES_DIR / org_template
+        _seed("identity/org-hierarchy.md", copy_from=tdir / "org-hierarchy.md")
 
     # 2. Starter identity partial from the user's answers.
     _seed("identity/who-i-am.md",

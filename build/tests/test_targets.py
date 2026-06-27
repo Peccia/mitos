@@ -1,0 +1,963 @@
+"""Claude-code, Gemini, Hermes, skill, prompt, and git-sync tests."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from conftest import (
+    REPO_ROOT, reg, loader, planner, render, classify_output,
+    _inbox, _temp_registry, _doc, _write_graph,
+    _plant_candidate, _skill_meta, _full_windows_rig, _sandbox_deploy,
+    _git_available, _run_git, _make_overlay_hub, _clone_overlay, _seed_overlay,
+)
+
+def test_gemini_grants_normalized():
+    grants = render.gemini_permission_grants(reg.servers["servers"]["gws"], "gws-mcp-local")
+    allow = grants["userSettings"]["globalPermissionGrants"]["allow"]
+    assert "mcp(gws-mcp-local/search_drive_files)" in allow
+    # normalization dropped the extended-tier tools Gemini used to grant
+    assert not any("draft_gmail_message" in a for a in allow)
+    assert len(allow) == 31
+
+def test_hermes_mcp_flat_tool_count():
+    tools = render.flat_tools(reg.servers["servers"]["gws"])
+    assert len(tools) == 31
+    assert tools[0] == "list_calendars"
+
+def test_non_hermes_machine_coproduces_agents_md():
+    """Claude-code machines without agents-md emit a co-located AGENTS.md (full graph
+    context + prose) and a stub CLAUDE.md at each graph project's local_path.
+    Hermes machines (with agents-md) are unaffected — the existing path applies."""
+    import copy
+    rig = copy.deepcopy(reg)
+    # configure example-windows as a pure workstation: remove agents-md and the
+    # agentic_context_root (that's the separate Hermes tree, not needed here)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    # give apoc a local_path on example-windows so _local() resolves it
+    rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+
+    agents_path = "C:/Projects/apocalyptic_adventure/AGENTS.md"
+    claude_path = "C:/Projects/apocalyptic_adventure/CLAUDE.md"
+    assert agents_path in by_path, "co-located AGENTS.md must be planned at local_path"
+    assert claude_path in by_path, "stub CLAUDE.md must be planned at local_path"
+
+    agents_out = by_path[agents_path]
+    claude_out = by_path[claude_path]
+
+    # AGENTS.md: full inline graph context (IDs visible) from claude-code target
+    assert agents_out.target == "claude-code"
+    assert "**ID:**" in agents_out.content or "_No documents mapped yet._" in agents_out.content
+    # CLAUDE.md: thin stub, no section_bodies
+    assert claude_out.content.strip() == "@AGENTS.md"
+    assert not claude_out.section_bodies
+
+    # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
+    rig_hermes = copy.deepcopy(reg)
+    rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig_hermes.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
+    hermes_paths = [o.deploy_path for o in planner.plan_machine(rig_hermes, "example-windows")
+                    if o.target == "claude-code"]
+    assert not any("apocalyptic_adventure/AGENTS.md" in p for p in hermes_paths), \
+        "Hermes machine must not emit co-located AGENTS.md via claude-code target"
+
+def test_non_hermes_clone_uses_local_path():
+    """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
+    absent-only — never nesting into the Mitos repo root."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
+    rig.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
+
+    clones = planner.plan_clones(rig, "example-windows")
+    apoc_clone = next((c for c in clones if c.slug == "apoc"), None)
+    assert apoc_clone is not None, "apoc with repo + local_path must produce a CloneSpec"
+    assert apoc_clone.dest == "C:/Projects/apocalyptic_adventure/apoc"
+    assert apoc_clone.repo == "git@github.com:Peccia/apoc.git"
+
+    # agentic_context_root lane still works when both are present on the same machine
+    rig2 = copy.deepcopy(reg)
+    rig2.machines["example-windows"]["targets"] = ["claude-code"]
+    rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
+    rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
+    rig2.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
+    clones2 = planner.plan_clones(rig2, "example-windows")
+    dests = {c.dest for c in clones2 if c.slug == "apoc"}
+    # both lanes produce a dest for apoc: one under the context root, one under local_path
+    assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must still fire"
+    assert any("apocalyptic_adventure" in d for d in dests), "local_path lane must also fire"
+
+def test_claude_ai_target_stages_uploadable_zip():
+    import copy
+    import json as _json
+    import tempfile
+    import zipfile
+
+    from agentic.commands import classify_output, cmd_deploy
+    from agentic.io import safe_rel
+    # gws opts into claude-ai via its frontmatter; the target spec's include curates
+    reg2 = copy.deepcopy(reg)
+    outs = [o for o in planner.plan_machine(reg2, "example-windows")
+            if o.target == "claude-ai"]
+    assert len(outs) == 1
+    o = outs[0]
+    assert (o.kind, o.lane, o.drift_policy) == ("zip", "content", "protect")
+    assert o.deploy_path.endswith("ClaudeSkills/gws.zip")
+
+    root = Path(tempfile.mkdtemp(prefix="ae-claudeai-"))
+    assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
+    dest = root / safe_rel(o.deploy_path)
+    with zipfile.ZipFile(dest) as zf:                # official format: folder/SKILL.md
+        assert zf.namelist() == ["gws/SKILL.md"]
+        text = zf.read("gws/SKILL.md").decode("utf-8")
+        assert text.startswith("---\nname: gws\n")   # Agent Skills frontmatter
+        assert "description:" in text.split("---")[1]
+    # idempotent: an unedited skill classifies unchanged on the next run
+    lock = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8"))
+    st = classify_output(reg2, "example-windows", o, lock, root=root)
+    assert st.state == "unchanged", st.state
+    # a registry edit flips the staged zip to pending — the re-upload reminder
+    o2 = type(o)(**{**o.__dict__, "content": o.content + "\nedited\n"})
+    assert classify_output(reg2, "example-windows", o2, lock, root=root).state == "pending"
+
+def test_skill_selection_layers():
+    from agentic.planner import _selected_skills
+    base = {"include_target": "hermes"}
+    all_hermes = {s.name for s in _selected_skills(reg, base)}
+    assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
+    only = _selected_skills(reg, {**base, "include": ["plan", "gws"]})
+    assert {s.name for s in only} == {"plan", "gws"}                  # pull: include
+    rest = _selected_skills(reg, {**base, "exclude": ["gws"]})
+    assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
+    # include cannot smuggle a skill the frontmatter doesn't target
+    assert not _selected_skills(reg, {"include_target": "claude-code",
+                                      "include": ["graph-bootstrap"]})
+
+def test_skill_selection_validation():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    for bad_skills in ({"include": ["no-such-skill"]},
+                       {"include": ["gws"], "exclude": ["gws"]}):
+        reg2 = copy.deepcopy(reg)
+        reg2.targets["hermes"]["skills"].update(bad_skills)
+        try:
+            _validate(reg2)
+            raise AssertionError(f"expected RegistryError for {bad_skills}")
+        except RegistryError:
+            pass
+
+def test_deselect_then_prune():
+    import copy
+
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    reg2 = copy.deepcopy(reg)
+    root = Path(__import__("tempfile").mkdtemp(prefix="ae-prune-"))
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    gws_path = next(o.deploy_path for o in planner.plan_machine(reg2, "example-linux")
+                    if "skills" in o.deploy_path and o.deploy_path.endswith("gws/SKILL.md"))
+    dest = root / safe_rel(gws_path)
+    assert dest.exists()
+
+    # deselect via target-side exclude: deploy reports an orphan but keeps the file
+    reg2.targets["hermes"]["skills"]["exclude"] = ["gws"]
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    assert dest.exists(), "without --prune the deployed copy must remain"
+    import json as _json
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert gws_path in files, "orphan lock entry must be kept for a later --prune"
+
+    # drift the orphan, then prune: captured to inbox, deleted, lock entry dropped
+    dest.write_text(dest.read_text(encoding="utf-8") + "\nlate tool edit\n",
+                    encoding="utf-8", newline="\n")
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root,
+                      prune=True) == 0
+    assert not dest.exists()
+    captured = [d for d in (_inbox(root)).iterdir()
+                if d.is_dir() and (d / "SKILL.md").exists()
+                and "late tool edit" in (d / "SKILL.md").read_text(encoding="utf-8")]
+    assert captured, "drifted orphan must be captured before deletion"
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert gws_path not in files
+
+def test_parse_fragment_rejects_wrong_project_and_bad_shape():
+    from agentic import graph
+    SC = '{"@vocab":"https://schema.org/"}'
+    # a document belonging to a different project than the candidate's slug
+    wrong = ('{"@context":%s,"@graph":[{"@id":"http://peccia.net/document/D1",'
+             '"@type":"DigitalDocument","identifier":"D1","name":"x","description":"y",'
+             '"dateModified":"2026-01-01",'
+             '"isPartOf":{"@id":"http://peccia.net/project/OTHER"}}]}' % SC)
+    try:
+        graph.parse_fragment(wrong, "example-project")
+        raise AssertionError("expected GraphError for cross-project fragment")
+    except graph.GraphError:
+        pass
+    # a clean doc-only fragment for the right project parses to one Document
+    good = ('{"@context":%s,"@graph":[{"@id":"http://peccia.net/document/D2",'
+            '"@type":"DigitalDocument","identifier":"D2","name":"Spec","description":"d",'
+            '"dateModified":"2026-02-02",'
+            '"isPartOf":{"@id":"http://peccia.net/project/example-project"}}]}' % SC)
+    name, desc, docs, efforts = graph.parse_fragment(good, "example-project")
+    assert name is None and [d.drive_id for d in docs] == ["D2"]
+
+def test_agents_load_and_render_claude_code():
+    assert "code-reviewer" in reg.agents
+    agent = reg.agents["code-reviewer"]
+    assert agent.rel == "agents/code-reviewer.md"
+    out = render.render_agent(agent, "claude-code")
+    assert out.startswith("---\nname: code-reviewer\n")
+    head = out.split("---")[1]
+    assert "description:" in head and "tools:" in head and "model:" in head
+    assert "code reviewer" in out.lower() and not out.rstrip().endswith("---")
+
+def test_per_project_binding_deploys_exactly_bound_skills_and_agents():
+    outs = planner.plan_machine(reg, "example-windows")
+    paths = [o.deploy_path for o in outs]
+    # mitos bound [code-reviewer]
+    assert any(p.endswith("mitos/.claude/agents/code-reviewer.md") for p in paths)
+    # example-project bound [code-reviewer] only — agent yes, plan skill NO (exactly its set)
+    assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
+    assert not any(p.endswith("example-project/.claude/skills/plan/SKILL.md")
+                   for p in paths)
+    # the reused agent is authored once: both deployments point at one registry source
+    agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
+    assert len(agent_outs) == 2
+    assert all(o.sources == ["agents/code-reviewer.md"] for o in agent_outs)
+    assert all(o.drift_policy == "harvest" for o in agent_outs)
+
+def test_binding_validation_rejects_unknown_and_incompatible():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    for mutate in (
+        lambda p: p.update(skills=["no-such-skill"]),
+        lambda p: p.update(agents=["no-such-agent"]),
+        lambda p: p.update(skills=["graph-bootstrap"]),  # exists but not claude-code-compatible
+        lambda p: p.update(skills="plan"),           # not a list
+    ):
+        r = copy.deepcopy(reg)
+        mutate(r.projects["example-project"])
+        try:
+            _validate(r)
+            raise AssertionError("expected RegistryError")
+        except RegistryError:
+            pass
+
+def test_repo_basename_forms():
+    from agentic.planner import _repo_basename
+    assert _repo_basename("git@github.com:Peccia/mitos.git") == \
+        "mitos"
+    assert _repo_basename("https://github.com/Peccia/foo.git") == "foo"
+    assert _repo_basename("https://example.com/bar/") == "bar"
+
+def test_plan_clones_gated_on_claude_code_env_and_repo():
+    from agentic.planner import plan_clones
+    assert plan_clones(reg, "example-linux") == []          # no claude-code target
+    clones = plan_clones(reg, "example-windows")
+    slugs = [c.slug for c in clones]
+    # mitos has a non-empty repo → included; example-project's is "" → excluded
+    assert "mitos" in slugs
+    assert "example-project" not in slugs
+    c = next(c for c in clones if c.slug == "mitos")
+    assert c.dest.endswith("MitosAgent/Projects/mitos/mitos")
+    assert c.repo == "git@github.com:Peccia/mitos.git"
+
+def test_clone_is_idempotent_and_nondestructive(monkeypatch=None):
+    from agentic import commands
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    from agentic.planner import plan_clones
+    calls: list = []
+
+    def fake_clone(repo, dest):
+        calls.append(repo)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / ".git").write_text("fake", encoding="utf-8")
+        return 0, ""
+
+    mitos_clone = next(c for c in plan_clones(reg, "example-windows")
+                       if c.slug == "mitos")
+    dest_rel = safe_rel(mitos_clone.dest)
+    root = Path(__import__("tempfile").mkdtemp(prefix="ae-clone-"))
+    orig = commands._git_clone
+    commands._git_clone = fake_clone
+    try:
+        assert cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=root) == 0
+        first_calls = list(calls)
+        assert "git@github.com:Peccia/mitos.git" in first_calls  # mitos cloned on first deploy
+        assert (root / dest_rel / ".git").exists()
+        # a sentinel proves the existing checkout is never touched on redeploy
+        (root / dest_rel / "local-work.txt").write_text("mine", encoding="utf-8")
+        assert cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=root) == 0
+        assert calls == first_calls  # NOT re-cloned (idempotent)
+        assert (root / dest_rel / "local-work.txt").read_text(encoding="utf-8") == "mine"
+    finally:
+        commands._git_clone = orig
+
+def test_clone_failure_is_reported_not_fatal():
+    from agentic import commands
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    from agentic.planner import plan_clones
+
+    def failing_clone(repo, dest):
+        return 1, "fatal: could not read Username (auth)"
+
+    dest_rel = safe_rel(plan_clones(reg, "example-windows")[0].dest)
+    root = Path(__import__("tempfile").mkdtemp(prefix="ae-clonefail-"))
+    orig = commands._git_clone
+    commands._git_clone = failing_clone
+    try:
+        # deploy still succeeds (rc 0) — a clone failure is reported, never fatal
+        assert cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=root) == 0
+        assert not (root / dest_rel).exists()
+    finally:
+        commands._git_clone = orig
+
+def test_project_agents_md_includes_graph_index_and_emits_details():
+    """Per-project AGENTS.md in assistant_root = prose context + graph titles-index;
+    AGENTS_DETAILS.md is emitted alongside it. Projects without a graph get prose only."""
+    from agentic import graph as graphmod
+    treg, tmp = _temp_registry()
+    outputs = planner.plan_machine(treg, "rig")
+
+    # example-project has both context.assistant (prose) and a graph
+    proj_agents = [o for o in outputs if "Example Project" in o.deploy_path
+                   and o.deploy_path.endswith("AGENTS.md")]
+    assert len(proj_agents) == 1, "expected exactly one per-project AGENTS.md"
+    pa = proj_agents[0]
+    # must contain prose (the assistant context partial has project description content)
+    assert len(pa.content) > 200
+    # must contain the graph titles-index header
+    assert "# Example Project — documents" in pa.content
+    # titles-only index (no Drive URL or raw ID in index)
+    assert "https://drive.google.com/open?id=" not in pa.content
+    assert "`EXAMPLE_DRIVE_ID" not in pa.content
+
+    # AGENTS_DETAILS.md must be emitted alongside
+    details = [o for o in outputs if "Example Project" in o.deploy_path
+               and o.deploy_path.endswith(graphmod.DETAILS_FILENAME)]
+    assert len(details) == 1, "AGENTS_DETAILS.md must be emitted for projects with a graph"
+    det = details[0]
+    assert "EXAMPLE_DRIVE_ID_1" in det.content   # raw ID in details
+    assert "https://drive.google.com/open?id=" in det.content
+    assert det.drift_policy == "generated"
+
+def test_domain_org_skills_deploy_and_domain_line_in_project_agents_md():
+    """Three core org skills target hermes; per-project AGENTS.md carries Domain line when
+    org: is set in the manifest; org: validation rejects unknown domains."""
+    from agentic import loader as loadermod
+    # 1. Core skills exist and target hermes
+    for skill_name in ("org-software", "org-design", "org-marketing"):
+        assert skill_name in reg.skills, f"{skill_name} must be a core registry skill"
+        assert "hermes" in reg.skills[skill_name].targets
+
+    # 2. Domain line appears in per-project AGENTS.md when org: is set
+    treg, tmp = _temp_registry()
+    outputs = planner.plan_machine(treg, "rig")
+    proj_agents = next((o for o in outputs
+                        if "Example Project" in o.deploy_path
+                        and o.deploy_path.endswith("AGENTS.md")), None)
+    assert proj_agents is not None
+    assert "**Domain:** software" in proj_agents.content
+    assert "org-software" in proj_agents.content
+
+    # 3. org: validation rejects unknown domains
+    import tempfile, shutil, yaml as _y
+    bad_tmp = Path(tempfile.mkdtemp(prefix="ae-orgval-"))
+    for d in ("registry", "connections", "targets", "machines"):
+        shutil.copytree(REPO_ROOT / d, bad_tmp / d,
+                        ignore=shutil.ignore_patterns("local") if d == "registry" else None)
+    (bad_tmp / "registry" / "projects").mkdir(exist_ok=True)
+    (bad_tmp / "registry" / "projects" / "bad.yaml").write_text(
+        "name: Bad\nslug: bad\norg: unknown-domain\n", encoding="utf-8")
+    try:
+        loadermod.load(bad_tmp)
+        raise AssertionError("expected RegistryError for unknown org domain")
+    except loadermod.RegistryError as e:
+        assert "unknown-domain" in str(e)
+    finally:
+        shutil.rmtree(bad_tmp, ignore_errors=True)
+
+def test_assistant_replaces_collaboration_in_agents_md():
+    """Assistant/AGENTS.md is planned; Collaboration/AGENTS.md is gone;
+    core org-hierarchy carries multi-org domain routing table."""
+    treg, tmp = _temp_registry()
+    outputs = planner.plan_machine(treg, "rig")
+    paths = [o.deploy_path for o in outputs]
+    assert any("Assistant/AGENTS.md" in p for p in paths), "Assistant/AGENTS.md must be planned"
+    assert not any("Collaboration/AGENTS.md" in p for p in paths), \
+        "Collaboration/AGENTS.md must not appear (renamed to Assistant/)"
+
+    # core org-hierarchy carries the domain routing table
+    soul = next(o for o in outputs if o.deploy_path.endswith("SOUL.md"))
+    assert "org-software" in soul.content
+    assert "org-design" in soul.content
+    assert "org-marketing" in soul.content
+    assert "Assistant/AGENTS.md" in soul.content
+
+def test_assistant_root_agents_md_is_the_routing_entry_point():
+    """assistant_root/AGENTS.md is Hermes's entry point (new-session Step 4 reads it). It must
+    be a root-level file (not under Assistant/ or Projects/), carry routing not org detail, and
+    the Projects branch root must carry the org/domain context (org-roles)."""
+    treg, tmp = _temp_registry()
+    outputs = planner.plan_machine(treg, "rig")
+    root = treg.machines["rig"]["paths"]["assistant_root"].rstrip("/")
+    # the root entry point exists at exactly assistant_root/AGENTS.md
+    root_agents = next((o for o in outputs if o.deploy_path == f"{root}/AGENTS.md"), None)
+    assert root_agents is not None, "assistant_root/AGENTS.md (the entry point) must be planned"
+    # routing content, no org/domain detail leaking into the lean root
+    assert "Assistant/AGENTS.md" in root_agents.content
+    assert "Projects/AGENTS.md" in root_agents.content
+    assert "CTO —" not in root_agents.content, "org roles must not bloat the lean root"
+    # org/domain context lives in the Projects branch root (org-roles un-orphaned)
+    projects_root = next(o for o in outputs if o.deploy_path == f"{root}/Projects/AGENTS.md")
+    assert "Extended Organization Roles" in projects_root.content
+    assert "CTO —" in projects_root.content
+
+def test_git_sync_flow_pull_deploy_push():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitsync-flow-"))
+    hub = _make_overlay_hub(tmp)
+    ra, oa = _clone_overlay(tmp, hub, "machineA")
+    rb, ob = _clone_overlay(tmp, hub, "machineB")
+    cfg = {"backend": "git",
+           "git": {"hub": _run_git(oa, "remote", "get-url", "origin").stdout.strip()}}
+    deployed: list = []
+    dep = lambda m: deployed.append(m) or 0
+
+    # A authors a change, commits, and syncs → deploy(A) runs between pull and push
+    (oa / "identity" / "who.md").write_text("v1-from-A\n", encoding="utf-8")
+    _run_git(oa, "commit", "-am", "A edit")
+    out = gitsync.git_sync(ra, "machineA", cfg, deploy=dep)
+    assert any(line.startswith("push:") for line in out) and deployed == ["machineA"]
+
+    # B syncs → pulls A's change, deploys B, nothing of its own to push
+    gitsync.git_sync(rb, "machineB", cfg, deploy=dep)
+    assert (ob / "identity" / "who.md").read_text(encoding="utf-8") == "v1-from-A\n"
+    assert deployed == ["machineA", "machineB"]
+
+def test_git_sync_halts_on_conflict_without_forcing():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import SyncError
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitsync-conflict-"))
+    hub = _make_overlay_hub(tmp)
+    ra, oa = _clone_overlay(tmp, hub, "A")
+    rb, ob = _clone_overlay(tmp, hub, "B")
+    cfg = {"backend": "git",
+           "git": {"hub": _run_git(oa, "remote", "get-url", "origin").stdout.strip()}}
+    nodep = lambda m: 0
+
+    (oa / "identity" / "who.md").write_text("A-line\n", encoding="utf-8")
+    _run_git(oa, "commit", "-am", "A")
+    gitsync.git_sync(ra, "A", cfg, deploy=nodep)                 # A pushes
+
+    (ob / "identity" / "who.md").write_text("B-line\n", encoding="utf-8")  # same line, differs
+    _run_git(ob, "commit", "-am", "B")
+    try:
+        gitsync.git_sync(rb, "B", cfg, deploy=nodep)
+        raise AssertionError("expected SyncError on rebase conflict")
+    except SyncError as e:
+        assert "conflict" in str(e).lower() or "rebase" in str(e).lower()
+    # B never forced its change onto the hub — a fresh clone still shows A's version
+    _rc, oc = _clone_overlay(tmp, hub, "check")
+    assert (oc / "identity" / "who.md").read_text(encoding="utf-8") == "A-line\n"
+
+def test_git_sync_refuses_a_remote_that_is_not_the_hub():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import SyncError
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitsync-refuse-"))
+    hub = _make_overlay_hub(tmp)
+    ra, _oa = _clone_overlay(tmp, hub, "A")                      # origin = hub
+    cfg = {"backend": "git", "git": {"hub": "https://example.com/not-your-hub/overlay.git"}}
+    try:
+        gitsync.git_sync(ra, "A", cfg, deploy=lambda m: 0, dry_run=True)
+        raise AssertionError("expected SyncError for a remote that isn't the configured hub")
+    except SyncError as e:
+        assert "hub" in str(e).lower()
+
+def test_machine_sync_git_needs_hub():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    bad = copy.deepcopy(reg)
+    bad.machines["example-linux"]["sync"] = {"backend": "git", "git": {}}
+    try:
+        _validate(bad)
+        raise AssertionError("expected RegistryError (git needs hub)")
+    except RegistryError as e:
+        assert "hub" in str(e)
+    ok = copy.deepcopy(reg)
+    ok.machines["example-linux"]["sync"] = {"backend": "git",
+                                            "git": {"hub": "ssh://h/overlay.git"}}
+    _validate(ok)   # well-formed → no raise
+
+def test_git_sync_init_creates_bare_hub_and_pushes():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitinit-"))
+    hub = tmp / "hub.git"                       # a LOCAL path that does not exist yet
+    root = tmp / "boxA"
+    _seed_overlay(root)
+    out = gitsync.git_init(root, "boxA", str(hub))
+    overlay = root / "registry" / "local"
+    # repo made, hook installed, machine recorded, bare hub auto-created
+    assert (overlay / ".git").exists()
+    assert (overlay / ".git" / "hooks" / "post-merge").exists()
+    assert _run_git(overlay, "config", "mitos.machine").stdout.strip() == "boxA"
+    assert (hub / "HEAD").exists()              # bare repo created
+    assert any("pushed initial overlay" in line for line in out)
+    # the hub really holds the overlay — a fresh clone sees who.md
+    check = tmp / "check"
+    _run_git(tmp, "clone", str(hub), str(check))
+    assert (check / "identity" / "who.md").read_text(encoding="utf-8") == "v0\n"
+
+def test_git_sync_clone_onboards_a_new_machine():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitclone-"))
+    hub = tmp / "hub.git"
+    ra = tmp / "boxA"
+    _seed_overlay(ra)
+    gitsync.git_init(ra, "boxA", str(hub))
+    # a brand-new machine clones it
+    rb = tmp / "boxB"
+    rb.mkdir()
+    out = gitsync.git_clone(rb, "boxB", str(hub))
+    ob = rb / "registry" / "local"
+    assert (ob / "identity" / "who.md").read_text(encoding="utf-8") == "v0\n"
+    assert (ob / ".git" / "hooks" / "post-merge").exists()
+    assert _run_git(ob, "config", "mitos.machine").stdout.strip() == "boxB"
+    assert any("cloned overlay" in line for line in out)
+
+def test_git_sync_init_then_clone_then_sync_end_to_end():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gite2e-"))
+    hub = tmp / "hub.git"
+    ra = tmp / "boxA"
+    _seed_overlay(ra)
+    gitsync.git_init(ra, "boxA", str(hub))
+    rb = tmp / "boxB"
+    rb.mkdir()
+    gitsync.git_clone(rb, "boxB", str(hub))
+    oa, ob = ra / "registry" / "local", rb / "registry" / "local"
+    cfg = {"git": {"hub": _run_git(oa, "remote", "get-url", "origin").stdout.strip()}}
+    deployed: list = []
+    dep = lambda m: deployed.append(m) or 0
+
+    # A edits + syncs (push); B syncs (pull → deploy) and sees A's change
+    (oa / "identity" / "who.md").write_text("v1-from-A\n", encoding="utf-8")
+    _run_git(oa, "commit", "-am", "A edit")
+    gitsync.git_sync(ra, "boxA", cfg, deploy=dep)
+    gitsync.git_sync(rb, "boxB", cfg, deploy=dep)
+    assert (ob / "identity" / "who.md").read_text(encoding="utf-8") == "v1-from-A\n"
+    assert deployed == ["boxA", "boxB"]
+
+def test_post_merge_hook_is_installed_guarded_and_targets_deploy():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-githook-"))
+    hub = tmp / "hub.git"
+    root = tmp / "boxA"
+    _seed_overlay(root)
+    gitsync.git_init(root, "boxA", str(hub))
+    body = (root / "registry" / "local" / ".git" / "hooks" / "post-merge").read_text(
+        encoding="utf-8")
+    # auto-deploys only when the overlay changed, guarded so it no-ops outside a real checkout
+    assert "build/compile.py" in body and "deploy" in body
+    assert 'git config mitos.machine' in body
+    assert '[ -f "$MITOS_ROOT/build/compile.py" ] || exit 0' in body
+    assert "ORIG_HEAD HEAD" in body
+    assert "--force" not in body                # never force from the hook
+
+def test_git_sync_init_refuses_an_existing_repo():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import SyncError
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-gitinit2-"))
+    root = tmp / "boxA"
+    _seed_overlay(root)
+    gitsync.git_init(root, "boxA", str(tmp / "hub.git"))
+    try:
+        gitsync.git_init(root, "boxA", str(tmp / "hub2.git"))
+        raise AssertionError("expected SyncError re-initializing an existing overlay repo")
+    except SyncError as e:
+        assert "already a git repo" in str(e)
+
+def test_post_merge_hook_fires_deploy_only_on_overlay_change():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-hookfire-"))
+    hub = tmp / "hub.git"
+    ra = tmp / "boxA"
+    _seed_overlay(ra)
+    gitsync.git_init(ra, "boxA", str(hub))
+    rb = tmp / "boxB"
+    rb.mkdir()
+    gitsync.git_clone(rb, "boxB", str(hub))
+    oa, ob = ra / "registry" / "local", rb / "registry" / "local"
+    # plant a stand-in compile.py in boxB so the hook's guard passes and we can see it fire
+    (rb / "build").mkdir(parents=True, exist_ok=True)
+    sentinel = rb / "deploy-ran.txt"
+    (rb / "build" / "compile.py").write_text(
+        "import sys, pathlib\n"
+        f"pathlib.Path(r'{sentinel}').write_text(' '.join(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8")
+
+    # no change yet → a pull with nothing new must NOT fire the hook
+    _run_git(ob, "pull", "origin", "main")
+    assert not sentinel.exists()
+
+    # A pushes a real change; B's plain `git pull` (the cron/consumer path) fast-forwards →
+    # post-merge fires → deploy runs for THIS machine
+    (oa / "identity" / "who.md").write_text("v1\n", encoding="utf-8")
+    _run_git(oa, "commit", "-am", "A edit")
+    _run_git(oa, "push", "origin", "main")
+    _run_git(ob, "pull", "origin", "main")
+    assert sentinel.exists(), "post-merge hook did not fire deploy on overlay change"
+    assert sentinel.read_text(encoding="utf-8").strip() == "deploy --machine boxB"
+
+def test_git_sync_ssh_key_pins_core_sshcommand_on_init_and_clone():
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync import git as gitsync
+    tmp = Path(tempfile.mkdtemp(prefix="ae-sshkey-"))
+    hub = tmp / "hub.git"
+    key = tmp / "mitos_id"
+    key.write_text("dummy-key\n", encoding="utf-8")   # must exist — init/clone fail-fast otherwise
+    ra = tmp / "boxA"
+    _seed_overlay(ra)
+    out = gitsync.git_init(ra, "boxA", str(hub), ssh_key=str(key))
+    oa = ra / "registry" / "local"
+    cmd = _run_git(oa, "config", "core.sshCommand").stdout.strip()
+    assert "mitos_id" in cmd and "IdentitiesOnly=yes" in cmd
+    assert any("ssh key:" in line for line in out)
+
+    # clone carries the same key into the new machine's overlay repo
+    rb = tmp / "boxB"
+    rb.mkdir()
+    gitsync.git_clone(rb, "boxB", str(hub), ssh_key=str(key))
+    ob = rb / "registry" / "local"
+    assert "mitos_id" in _run_git(ob, "config", "core.sshCommand").stdout.strip()
+
+    # day-to-day sync reconciles from the profile: dropping the key clears core.sshCommand
+    import subprocess
+    cfg = {"git": {"hub": _run_git(oa, "remote", "get-url", "origin").stdout.strip()}}
+    gitsync.git_sync(ra, "boxA", cfg, action="refresh", deploy=lambda m: 0)
+    got = subprocess.run(["git", "-C", str(oa), "config", "--get", "core.sshCommand"],
+                         capture_output=True, text=True)   # exit 1 when unset
+    assert got.returncode != 0 or not got.stdout.strip(), "key not cleared when profile drops it"
+
+def test_machine_sync_git_ssh_key_must_be_a_string():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    bad = copy.deepcopy(reg)
+    bad.machines["example-linux"]["sync"] = {
+        "git": {"hub": "ssh://h/overlay.git", "ssh_key": ["not", "a", "string"]}}
+    try:
+        _validate(bad)
+        raise AssertionError("expected RegistryError (ssh_key must be a string)")
+    except RegistryError as e:
+        assert "ssh_key" in str(e)
+    ok = copy.deepcopy(reg)
+    ok.machines["example-linux"]["sync"] = {
+        "git": {"hub": "ssh://h/overlay.git", "ssh_key": "~/.ssh/mitos_id"}}
+    _validate(ok)   # well-formed → no raise
+
+def test_ssh_key_bare_name_resolves_to_an_absolute_dot_ssh_path():
+    # the Linux failure: a bare `-i id_github_mitos` resolves against git's cwd, not ~/.ssh, so
+    # ssh can't find the key and (IdentitiesOnly) fails hard. A bare name must become ~/.ssh/<name>.
+    from agentic.sync import git as gitsync
+    cmd = gitsync._ssh_command("id_github_mitos")
+    expected = (Path.home() / ".ssh" / "id_github_mitos").as_posix()
+    assert f'-i "{expected}"' in cmd and "IdentitiesOnly=yes" in cmd
+    # an absolute path is honored unchanged
+    abs_key = (Path.home() / "keys" / "k").as_posix()
+    assert f'-i "{abs_key}"' in gitsync._ssh_command(abs_key)
+    # ~ is expanded to an absolute path
+    assert (Path.home() / ".ssh" / "k").as_posix() in gitsync._ssh_command("~/.ssh/k")
+
+def test_ssh_key_missing_file_fails_clearly_not_with_rc128():
+    from agentic.sync import SyncError
+    from agentic.sync import git as gitsync
+    gitsync._check_key(None)        # no key → no-op
+    try:
+        gitsync._check_key("definitely-not-a-real-key-9d3f1a")
+        raise AssertionError("expected SyncError for a missing key file")
+    except SyncError as e:
+        assert "ssh key not found" in str(e) and ".ssh" in str(e)
+
+def test_prompt_example_loads():
+    """The shipped example-prompt loads with the expected frontmatter fields."""
+    p = reg.prompts.get("example-prompt")
+    assert p is not None, "example-prompt not found in registry"
+    assert p.frontmatter.get("category") == "example"
+    assert p.targets == []          # console-only — no targets set
+
+def test_prompt_no_targets_is_console_only_not_an_error():
+    """A prompt with no targets: compiles clean, appears in prompt_index."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.prompts["console-only"] = loader.Prompt(
+        name="console-only", rel="prompts/console-only.md",
+        frontmatter={"name": "console-only", "category": "test"},
+        body="just a prompt",
+    )
+    loader._validate(r)   # must not raise
+    from agentic.review import prompt_index
+    idx = prompt_index(r)
+    names = [p["name"] for p in idx["prompts"]]
+    assert "console-only" in names
+
+def test_prompt_duplicate_name_refused():
+    import tempfile
+    tmp = Path(tempfile.mkdtemp())
+    pdir = tmp / "prompts"
+    pdir.mkdir()
+    body = "---\nname: dup\ncategory: test\n---\nbody\n"
+    (pdir / "a.md").write_text(body, encoding="utf-8")
+    (pdir / "b.md").write_text(body, encoding="utf-8")
+    try:
+        loader._load_prompts(tmp)
+        assert False, "should have raised"
+    except loader.RegistryError as e:
+        assert "duplicate prompt name" in str(e)
+
+def test_prompt_unknown_target_refused():
+    import copy
+    r = copy.deepcopy(reg)
+    r.prompts["bad"] = loader.Prompt(
+        name="bad", rel="prompts/bad.md",
+        frontmatter={"name": "bad", "targets": ["nonexistent-harness"]},
+        body="x",
+    )
+    try:
+        loader._validate(r)
+        assert False, "should have raised"
+    except loader.RegistryError as e:
+        assert "unknown target" in str(e)
+
+def test_prompt_overlay_replaces_by_name():
+    import copy
+    r = copy.deepcopy(reg)
+    r.prompts["example-prompt"] = loader.Prompt(
+        name="example-prompt", rel="local/prompts/example-prompt.md",
+        frontmatter={"name": "example-prompt", "category": "overridden"},
+        body="overlay body",
+    )
+    p = r.prompts["example-prompt"]
+    assert p.category == "overridden"
+    assert p.rel.startswith("local/")
+
+def test_gemini_deploys_targeted_prompt():
+    """A prompt with targets:[gemini] produces a text output in the gemini prompts dir."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.prompts["test-prompt"] = loader.Prompt(
+        name="test-prompt", rel="prompts/test-prompt.md",
+        frontmatter={"name": "test-prompt", "targets": ["gemini"]},
+        body="My reusable prompt body.",
+    )
+    outputs = planner.plan_machine(r, "example-windows")
+    prompt_outputs = [o for o in outputs
+                      if o.target == "gemini" and "prompt-test-prompt" in o.deploy_path]
+    assert prompt_outputs, "no gemini output for targeted prompt"
+    assert prompt_outputs[0].content == "My reusable prompt body.\n"
+
+def test_console_only_prompt_not_deployed():
+    """A prompt with no targets produces no file outputs."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.prompts["private-prompt"] = loader.Prompt(
+        name="private-prompt", rel="prompts/private-prompt.md",
+        frontmatter={"name": "private-prompt", "targets": []},
+        body="console-only body",
+    )
+    outputs = planner.plan_machine(r, "example-windows")
+    assert not any("private-prompt" in o.deploy_path for o in outputs)
+
+def test_claude_code_deploys_bound_prompt():
+    """A manifest-bound prompt with targets:[claude-code] deploys to .claude/commands/."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.prompts["review-checklist"] = loader.Prompt(
+        name="review-checklist", rel="prompts/review-checklist.md",
+        frontmatter={"name": "review-checklist", "description": "Code review checklist",
+                     "targets": ["claude-code"]},
+        body="Check these items:\n- Security\n- Tests",
+    )
+    r.projects["mitos"]["prompts"] = ["review-checklist"]
+    outputs = planner.plan_machine(r, "example-windows")
+    prompt_outs = [o for o in outputs if "review-checklist" in o.deploy_path]
+    assert prompt_outs, "no claude-code output for bound prompt"
+    o = prompt_outs[0]
+    assert ".claude/commands/review-checklist.md" in o.deploy_path
+    assert o.target == "claude-code"
+    assert "description: Code review checklist" in o.content
+    assert "Check these items:" in o.content
+
+def test_claude_code_unbound_prompt_not_deployed():
+    """A prompt not listed in the project manifest is not deployed to that project."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.prompts["not-bound"] = loader.Prompt(
+        name="not-bound", rel="prompts/not-bound.md",
+        frontmatter={"name": "not-bound", "targets": ["claude-code"]},
+        body="unbound body",
+    )
+    # no `prompts:` in manifest
+    outputs = planner.plan_machine(r, "example-windows")
+    assert not any("not-bound" in o.deploy_path for o in outputs)
+
+def test_binding_console_only_prompt_to_project_refused():
+    """A manifest that binds a console-only prompt (no claude-code target) is rejected."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.prompts["console-only"] = loader.Prompt(
+        name="console-only", rel="prompts/console-only.md",
+        frontmatter={"name": "console-only", "targets": []},
+        body="console only",
+    )
+    r.projects["mitos"]["prompts"] = ["console-only"]
+    try:
+        loader._validate(r)
+        assert False, "should have raised"
+    except loader.RegistryError as e:
+        assert "does not target 'claude-code'" in str(e)
+
+def test_binding_unknown_prompt_to_project_refused():
+    """A manifest that binds a prompt name not in reg.prompts is rejected."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.projects["mitos"]["prompts"] = ["nonexistent-prompt"]
+    try:
+        loader._validate(r)
+        assert False, "should have raised"
+    except loader.RegistryError as e:
+        assert "unknown prompt" in str(e)
+
+def test_claude_code_prompt_render_adds_description_frontmatter():
+    """render_prompt('claude-code') emits description: frontmatter before body."""
+    from agentic.render import render_prompt
+    p = loader.Prompt(
+        name="my-prompt", rel="prompts/my-prompt.md",
+        frontmatter={"name": "my-prompt", "description": "My test prompt"},
+        body="Do the thing.",
+    )
+    rendered = render_prompt(p, "claude-code")
+    assert rendered.startswith("---\n")
+    assert "description: My test prompt" in rendered
+    assert "Do the thing." in rendered
+
+def test_gemini_prompt_render_is_plain_body():
+    """render_prompt for non-claude-code targets returns plain body (no frontmatter)."""
+    from agentic.render import render_prompt
+    p = loader.Prompt(
+        name="my-prompt", rel="prompts/my-prompt.md",
+        frontmatter={"name": "my-prompt", "description": "desc", "targets": ["gemini"]},
+        body="Plain content.",
+    )
+    rendered = render_prompt(p, "gemini")
+    assert not rendered.startswith("---")
+    assert rendered.strip() == "Plain content."
+
+def test_claude_desktop_mcp_config_planned():
+    """When claude_desktop_config path key is set, Desktop MCP config is planned."""
+    import copy
+    from agentic.render import claude_desktop_mcp_config
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["paths"]["claude_desktop_config"] = (
+        "C:/Users/Paul/AppData/Roaming/Claude/claude_desktop_config.json"
+    )
+    outputs = planner.plan_machine(r, "example-windows")
+    desktop_outs = [o for o in outputs if o.target == "claude-desktop"]
+    assert desktop_outs, "no claude-desktop output"
+    o = desktop_outs[0]
+    assert o.kind == "json"
+    assert o.lane == "connections"
+    assert o.drift_policy == "protect"
+    assert "claude_desktop_config.json" in o.deploy_path
+    import json
+    parsed = json.loads(o.content)
+    assert "mcpServers" in parsed
+    alias = r.targets["claude-desktop"]["server_alias"]
+    assert alias in parsed["mcpServers"]
+    assert "url" in parsed["mcpServers"][alias]
+    assert parsed["mcpServers"][alias]["type"] == "sse"
+
+def test_claude_desktop_no_path_no_output():
+    """When claude_desktop_config path key is absent, Desktop target produces no outputs."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    # deliberately no claude_desktop_config key in paths
+    r.machines["example-windows"]["paths"].pop("claude_desktop_config", None)
+    outputs = planner.plan_machine(r, "example-windows")
+    assert not any(o.target == "claude-desktop" for o in outputs)
+
+def test_claude_desktop_render():
+    """claude_desktop_mcp_config produces the correct JSON schema."""
+    from agentic.render import claude_desktop_mcp_config
+    server = {"url": "http://localhost:8000/mcp", "tools": {}}
+    result = claude_desktop_mcp_config(server, "my-alias")
+    assert result == {"mcpServers": {"my-alias": {"url": "http://localhost:8000/mcp", "type": "sse"}}}
+
+def test_claude_desktop_in_known_targets():
+    """claude-desktop is a valid KNOWN_TARGET — machines can list it without error."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    loader._validate(r)   # must not raise
+

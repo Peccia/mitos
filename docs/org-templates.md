@@ -1,62 +1,143 @@
 # Mitos Organization Templates Guide
 
-Mitos uses a hierarchical agent delegation model to structure collaboration between specialized agent roles. Instead of using a single monolithic assistant, Mitos structures your agents like a virtual team.
+Mitos uses a layered, session-aware context model to give your assistant the right level of
+detail at the right time — without loading everything on every request.
 
-When you run the setup wizard (`python build/mitos.py init`), Mitos asks you to select one of its pre-seeded **Organization Templates**. This wizard copies starter files directly into your private overlay (`registry/local/`), which you can then customize.
+When you run the setup wizard (`python build/mitos.py init`), you are offered an optional
+org template. **Leaving it blank (recommended for most setups)** keeps the core
+**dynamic multi-org router** — all three domain orgs are always available, and the correct one
+activates automatically per project via each project's `org:` manifest field. Choosing a named
+template seeds a single-domain `org-hierarchy.md` into your private overlay (`registry/local/`),
+which **locks the assistant to that one domain's delegation chain** for all project work.
 
----
-
-## 📂 Seeded files
-
-Each template seeds two critical files in your private overlay:
-
-1. **`registry/local/identity/org-hierarchy.md`**
-   - **Type**: Always-on Identity Persona.
-   - **What it does**: Describes the team structure, specialized agent roles, and how work is delegated between them (e.g. from the CEO to the VP of Engineering). It flows into your tool's system context (like Hermes's `SOUL.md` or Gemini's `AGENTS.md`) automatically.
-2. **`registry/local/skills/org/SKILL.md`**
-   - **Type**: On-demand Playbook Skill.
-   - **What it does**: Provides instructions and playbooks teaching the agents *how* to execute tasks according to their roles. Edits are marked as `harvest`, so improvements the agents discover on disk can be pulled back.
+The three domain org skills always ship in core and are available to all environments regardless
+of which option you choose — only the routing preference file differs.
 
 ---
 
-## 🏢 Available template archetypes
+## Session architecture
 
-Mitos ships with three default templates tailored for different workflows:
+Every new session runs the `new-session` skill, navigates to `assistant_root`, reads the root
+`AGENTS.md` (the **operating root**: a lean routing + personal-context bridge, no org detail),
+and routes to one of two branches:
 
-### 1. Solo Assistant (`solo-assistant`)
-A flat, direct delegation model optimized for individuals.
-- **Roles**: General Assistant.
-- **Best for**: Standard task automation, email drafting, calendar management, and general research where a complex team structure would add unnecessary overhead.
-- **Workflow**: Simple, direct prompt-to-agent interactions.
+| Branch | Path | Purpose |
+|---|---|---|
+| **Assistant** | `assistant_root/Assistant/AGENTS.md` | One-shot workspace tasks: email, calendar, tasks, notes, quick questions. **Non-org-specific** — no domain skill is loaded; works the same regardless of which org templates you have installed. |
+| **Projects** | `assistant_root/Projects/AGENTS.md` → `assistant_root/Projects/<project>/AGENTS.md` | Multi-role project work. The Projects **branch root** carries the roster + org/domain structure (where the C-suite roles live — only loaded when entering project work); each project's own `AGENTS.md` carries its context and `**Domain:**` line. Domain skill loaded per project. |
 
-### 2. Software Firm (`software-firm`)
-A comprehensive team structure modeled after a modern agile software team.
-- **Roles**:
-  - **CEO**: Aligns project goals and oversees execution.
-  - **Product Manager (PM)**: Drafts specifications, features, and roadmaps.
-  - **VP of Engineering / Lead Dev**: Decides on system architecture and code design.
-  - **QA Engineer**: Validates builds, reviews logs, and drafts tests.
-  - **Technical Writer**: Drafts developer guides, API references, and release notes.
-- **Best for**: Programming tasks, feature development, system architecture design, and writing tests.
+### Domain-aware project routing
 
-### 3. Design Firm (`design-firm`)
-A creative agency team structure focused on brand, layout, and content generation.
-- **Roles**:
-  - **Creative Director**: Establishes vision and approves designs.
-  - **UX/UI Designer**: Details user flows, wireframes, and design system tokens.
-  - **Copywriter**: Drafts marketing copy, landing pages, and newsletters.
-  - **Project Manager**: Manages delivery timelines and client specs.
-- **Best for**: Creating web layouts, writing copy, managing digital design assets, and marketing campaigns.
+Each project manifest declares an `org:` field (one of `software`, `design`, `marketing`).
+The compiler materializes this as a **Domain line** in the project's `Projects/<name>/AGENTS.md`:
+
+```
+**Domain:** software — load the `org-software` skill for project work.
+```
+
+The `new-session` skill reads this line and loads the matching domain skill automatically:
+
+| Domain | Skill | Primary chain |
+|---|---|---|
+| `software` | `org-software` | CEO → VP Engineering → Assistant |
+| `design` | `org-design` | CEO → Creative Director → Studio Manager |
+| `marketing` | `org-marketing` | Account Director → Creative Director → Marketing Assistant |
+
+This means all three org models are deployed and available at all times; the correct one activates
+per project, per session — no re-running `mitos init` to switch contexts.
 
 ---
 
-## 🔧 Customizing your organization
+## Project manifest: setting the domain
 
-The template only seeds the initial files. Once copied, **you own the files completely**. You can edit them directly to refine your organizational structure:
+Add `org:` to any project's manifest to enable domain routing:
 
-- **Adding a Role**: Edit `registry/local/identity/org-hierarchy.md` to define a new role (e.g. `Security Auditor` or `Data Scientist`) and detail who they report to.
-- **Tuning Playbooks**: Edit `registry/local/skills/org/SKILL.md` to refine instructions on how code reviews or PM handoffs occur.
-- **Applying Changes**: Recompile and deploy:
+```yaml
+name: My App
+slug: my-app
+stage: build
+org: software          # software | design | marketing
+```
+
+When `org:` is omitted the `new-session` skill falls back to the core delegation chain
+(CEO/VP/Assistant) and flags the missing field to the owner.
+
+---
+
+## Seeded files
+
+Each template seeds **one file** in your private overlay:
+
+| File | Where it goes | What it does |
+|---|---|---|
+| `org-hierarchy.md` | `registry/local/identity/org-hierarchy.md` | Session routing preference and primary 3-role chain. Flows into `SOUL.md`. |
+
+The domain playbooks (full delegation procedure, C-suite escalation, system invariants,
+red-team protocols) live in the three core skills — they do not need to be seeded per-user.
+
+---
+
+## Core domain org skills
+
+Three first-class skills ship with the Mitos core:
+
+### `org-software`
+A software engineering organization: CEO/VP Engineering/Assistant as the primary chain.
+- **C-suite**: CTO (architecture/security), CFO (cloud cost/vendor ROI), COO (sprint/delivery),
+  CMO (developer docs/release comms), CHCO (hiring/onboarding/culture).
+- **Domain vocabulary**: `idempotency`, `backpressure`, `race-condition`, `SEV0`, `DORA-metrics`.
+- **Invariants**: no code without tests, no hardcoded secrets, naming conventions enforced.
+- **Best for**: feature development, architecture decisions, system design, code docs.
+
+### `org-design`
+A design studio: CEO/Creative Director/Studio Manager as the primary chain.
+- **C-suite**: CTO (design tooling/DAM/pipeline), CFO (project budget/scope), COO (client
+  delivery/milestones), CMO (portfolio/brand comms), CHCO (studio culture/hiring).
+- **Domain vocabulary**: `kerning`, `negative-space`, `chromatic-harmony`, `typographic-scale`,
+  `component-library`, `design-token`.
+- **Invariants**: grid compliance, WCAG AA contrast, no unnamed layers, licensed assets only.
+- **Best for**: design systems, branding, layout production, client-facing deliverables.
+
+### `org-marketing`
+A marketing agency: Account Director/Creative Director/Marketing Assistant as the primary chain.
+- **C-suite**: CTO (martech/analytics/attribution), CFO (ROAS/budget), COO (campaign
+  delivery/timelines), CMO (brand strategy/positioning), CHCO (agency culture/talent).
+- **Domain vocabulary**: `conversion-funnel`, `audience-persona`, `ROAS`, `CTR`, `UTM`,
+  `brand-equity`.
+- **Invariants**: UTM tags on all URLs, platform character limits verified, brand voice checked,
+  audience data required before targeting copy.
+- **Best for**: campaigns, copy generation, brand strategy, marketing operations.
+
+---
+
+## Available template archetypes
+
+Templates are starting points for the `org-hierarchy.md` routing preference. Select one during
+`mitos init`; edit the seeded file to customize afterwards.
+
+### 1. Software Firm (`software-firm`)
+Lean routing toward `org-software` with a CEO/VP Engineering/Assistant primary chain.
+Best for software products, developer tools, and technical projects.
+
+### 2. Design Firm (`design-firm`)
+Lean routing toward `org-design` with a CEO/Creative Director/Studio Manager primary chain.
+Best for visual systems, branding, and client-facing design work.
+
+### 3. Marketing Firm (`marketing-firm`)
+Lean routing toward `org-marketing` with an Account Director/Creative Director/Marketing
+Assistant primary chain. Best for campaigns, copy, and brand strategy.
+
+---
+
+## Customizing your organization
+
+The template only seeds the initial `org-hierarchy.md`. Once copied, **you own it completely**.
+
+- **Adjusting the routing preference**: edit `registry/local/identity/org-hierarchy.md`.
+- **Extending a domain playbook**: the domain skills (`org-software`, etc.) live in
+  `registry/skills/org-<domain>/SKILL.md`. Override in `registry/local/skills/` using the
+  last-layer-wins convention.
+- **Applying changes**:
   ```bash
   python build/compile.py compile
   python build/compile.py deploy --machine <machine-name>
@@ -64,9 +145,46 @@ The template only seeds the initial files. Once copied, **you own the files comp
 
 ---
 
-## 🤝 Contributing new templates
+## Best practices for creating additional organization templates
 
-To contribute a new organizational template back to the Mitos public core:
-1. Create a new folder under `registry/templates/org/<template-slug>/`.
-2. Author both `org-hierarchy.md` (defining the delegation structure) and `org-skill.md` (defining the playbooks).
-3. Submit a Pull Request. Keep the template generic and neutral; personal details (such as your actual name or company) should remain in your private `registry/local/` overlay.
+When extending Mitos with a new organization archetype:
+
+1. **Directory structure** — create `registry/templates/org/<slug>/` with one file:
+   `org-hierarchy.md`. Domain playbooks belong in `registry/skills/org-<domain>/SKILL.md`
+   (core) or `registry/local/skills/org-<domain>/SKILL.md` (private overlay).
+
+2. **Keep `org-hierarchy.md` lean** — it lands in `SOUL.md` on every request. Include only:
+   the session-routing table (Assistant vs Projects) and the primary 3-role chain reference.
+   Point to the domain skill for all deeper detail.
+
+3. **Standard frontmatter**: `audience: [hermes]`.
+
+4. **Standardize the routing table** — always bifurcate into Assistant (one-shot) and
+   Projects (multi-role), referencing `assistant_root`-relative paths:
+   `Assistant/AGENTS.md` and `Projects/<project>/AGENTS.md`.
+
+5. **Reference the domain skill** — the last line of `org-hierarchy.md` should point to the
+   relevant `org-<domain>` skill: "For the full delegation playbook, run the `org-<domain>` skill."
+
+6. **Domain skills are composable** — a custom org can mix roles from different domain skills,
+   or extend a core skill by overriding it in `registry/local/skills/`. Keep them generic and
+   public-safe; personal details belong in the overlay.
+
+7. **Author concrete red-team rules** — define specific trigger phrases ("skip tests",
+   "bypass grid") and the required defensive response in the domain skill. Vague rules are
+   not enforced.
+
+8. **Keep templates generic and public-safe** — personal details (your name, company, real
+   workspace paths) belong in `registry/local/`, not in the template. Templates are suitable
+   for open-source contribution; overlays are private.
+
+---
+
+## Contributing new templates
+
+1. Create `registry/templates/org/<template-slug>/` with `org-hierarchy.md`.
+2. If the template introduces a new domain, add `registry/skills/org-<domain>/SKILL.md` with
+   the full playbook, `targets: [hermes]`, `category: productivity`.
+3. Run `python build/compile.py compile` to validate frontmatter.
+4. Add a template and domain section to this document following the pattern above.
+5. Submit a Pull Request. Keep content generic; no personal or company data.

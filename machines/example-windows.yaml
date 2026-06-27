@@ -9,5 +9,5 @@ paths:
   gemini_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/skills"
   claude_ai_staging: "~/ClaudeSkills"
-  agentic_context_root: "C:/Mitos"
+  agentic_context_root: "C:/MitosAgent"
   # claude_desktop_config: "%APPDATA%/Claude/claude_desktop_config.json"

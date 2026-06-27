@@ -1,15 +1,18 @@
 """Workspace connectors (Mitos).
 
-A connector bridges an external document store (Google Workspace today; M365 / Notion /
-local FS later) and the knowledge graph. It lives **beside** the compiler, never inside it
-(Phase E constraint #1): the deterministic verbs (`compile` / `deploy` / `diff` / `adopt` /
-`harvest`) never import this package, and any backend library is lazy-imported *inside* a
-method so importing a connector never drags in heavy or optional deps.
+A connector bridges a document store and the knowledge graph. Three built-in backends:
+  - ``local``  — local filesystem (the default; no credentials needed)
+  - ``mcp``    — any MCP server with a ``graph_enum:`` block in connections/servers.yaml
+  - ``mock``   — in-process demo for tests and dry runs
+
+A connector lives **beside** the compiler, never inside it (Phase E constraint #1): the
+deterministic verbs (`compile` / `deploy` / `diff` / `adopt` / `harvest`) never import this
+package, and any backend library is lazy-imported *inside* a method so importing a connector
+never drags in heavy or optional deps.
 
 A connector NEVER writes the graph. It enumerates a *scoped* folder and hands the documents
 to `bootstrap_to_inbox`, which routes them through the one human-gated valve as a
-`kind: graph` inbox candidate (constraint #2) — exactly like the Hermes graph-bootstrap
-skill. One valve, many producers.
+`kind: graph` inbox candidate (constraint #2). One valve, many producers.
 """
 from __future__ import annotations
 
@@ -59,6 +62,7 @@ class WorkspaceConnector(abc.ABC):
 # backend module is imported lazily in get_connector, so registering a backend with heavy
 # deps costs nothing until it's actually selected.
 _REGISTRY: dict[str, str] = {
+    "local": "local:LocalFileConnector",
     "mock": "mock:MockConnector",
     "mcp": "mcp:MCPConnector",
 }
@@ -80,21 +84,20 @@ def get_connector(name: str, root=None) -> WorkspaceConnector:
 
 def connector_for_store(reg, store: str, root=None) -> WorkspaceConnector:
     """Build the connector that backs a project's document store (its `document_store` — a
-    server name from connections/servers.yaml).
+    server name from connections/servers.yaml, or ``"none"``/unset).
 
-    Every document store is an **MCP server** (Google Workspace is the first official
-    offering; more follow). A store declares a `graph_enum` mapping and is enumerated through
-    the generic **MCP connector** pointed at the server's `url` — Mitos reuses the server you
-    already run rather than holding its own credentials. The in-process `mock` backend remains
-    for tests/demos.
+    Resolution order:
+    1. ``none``/unset → **LocalFileConnector** (the default; no MCP server required).
+    2. A server with a ``graph_enum`` block → **MCPConnector** reusing the running server.
+    3. A name already in the connector registry (e.g. ``mock``) → that connector directly.
+    4. A server without ``graph_enum`` → ConnectorError with actionable guidance.
 
-    Raises ConnectorError on `none`/unknown stores, or a store with no `graph_enum`, so the
-    caller can report cleanly.
+    The local fallback means a fresh clone with no Google credentials can still bootstrap
+    a knowledge graph from a local project directory.
     """
     if not store or store == "none":
-        raise ConnectorError(
-            "this project has no document_store set — add `document_store: <server>` to its "
-            "manifest (a server from connections/servers.yaml) before mapping its graph")
+        from .local import LocalFileConnector
+        return LocalFileConnector(root=root)
     servers = (getattr(reg, "servers", {}) or {}).get("servers") or {}
     server = servers.get(store)
     if server is None:
@@ -108,6 +111,5 @@ def connector_for_store(reg, store: str, root=None) -> WorkspaceConnector:
     if store in _REGISTRY:
         return get_connector(store, root=root)
     raise ConnectorError(
-        f"document_store {store!r} has no graph_enum mapping — every document store is an MCP "
-        f"server; add a graph_enum: block to it in connections/servers.yaml (see the gws "
-        f"server for the reference shape)")
+        f"document_store {store!r} has no graph_enum mapping — add a graph_enum: block to "
+        f"it in connections/servers.yaml (see the gws server for the reference shape)")

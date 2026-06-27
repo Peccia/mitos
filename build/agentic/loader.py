@@ -35,6 +35,15 @@ class RegistryError(Exception):
     """Schema or reference error in the registry. Aborts compilation."""
 
 
+def _repo_basename(repo: str) -> str:
+    """The checkout directory name for a git URL: the last path segment, minus `.git`.
+    Handles scp-style (`git@host:owner/name.git`) and URL (`https://…/name.git`) forms."""
+    s = repo.strip().rstrip("/")
+    if s.endswith(".git"):
+        s = s[:-4]
+    return s.replace(":", "/").rsplit("/", 1)[-1] or "repo"
+
+
 def resolve_local_path(machine_name: str, machine: dict, raw: str) -> str:
     """Resolve a project's `local_path` entry for one machine.
 
@@ -311,6 +320,12 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
             raise RegistryError(f"{py.name}: project missing 'slug'")
         if slug in out:
             raise RegistryError(f"{py.name}: duplicate project slug {slug!r}")
+        org = data.get("org")
+        _VALID_ORGS = {"software", "design", "marketing"}
+        if org and org not in _VALID_ORGS:
+            raise RegistryError(
+                f"{py.name}: unknown org domain {org!r}; valid: "
+                f"{', '.join(sorted(_VALID_ORGS))}")
         # `_is_local` tags a manifest loaded from the registry/local/ overlay so accepted
         # content (notably knowledge graphs) routes back into the overlay, never the core
         # — the loader reads local graphs only from registry/local/graph/ when the overlay
@@ -389,6 +404,39 @@ def _validate(reg: Registry) -> None:
         stage = proj.get("stage")
         if stage not in VALID_STAGES:
             raise RegistryError(f"project {slug}: invalid stage {stage!r}")
+        # `example: true` marks a shipped sample project (steps aside once the user supplies
+        # their own overlay projects). Optional, but must be a bool if set — same as machines.
+        if "example" in proj and not isinstance(proj["example"], bool):
+            raise RegistryError(f"project {slug}: 'example' must be true/false")
+        repo_raw = proj.get("repo")
+        if repo_raw is not None and repo_raw != "":
+            if isinstance(repo_raw, str):
+                if not repo_raw.strip():
+                    raise RegistryError(f"project {slug}: 'repo' must not be empty")
+            elif isinstance(repo_raw, list):
+                if not repo_raw:
+                    raise RegistryError(f"project {slug}: 'repo' list must not be empty")
+                for i, url in enumerate(repo_raw):
+                    if not isinstance(url, str) or not url.strip():
+                        raise RegistryError(
+                            f"project {slug}: 'repo' list[{i}] must be a non-empty string")
+                seen_urls: set[str] = set()
+                seen_basenames: set[str] = set()
+                for url in repo_raw:
+                    u = url.strip()
+                    if u in seen_urls:
+                        raise RegistryError(f"project {slug}: duplicate repo URL {u!r}")
+                    seen_urls.add(u)
+                    bn = _repo_basename(u)
+                    if bn in seen_basenames:
+                        raise RegistryError(
+                            f"project {slug}: repo {u!r} produces checkout dir {bn!r} "
+                            f"which collides with another repo in this project — use repos "
+                            f"with unique names or host paths")
+                    seen_basenames.add(bn)
+            else:
+                raise RegistryError(
+                    f"project {slug}: 'repo' must be a string or a list of strings")
         for mname, raw in (proj.get("local_path") or {}).items():
             if mname not in reg.machines:
                 raise RegistryError(

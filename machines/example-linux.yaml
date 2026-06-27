@@ -7,7 +7,7 @@ targets: [hermes, agents-md]
 paths:
   hermes_home: "~/.hermes"
   hermes_config: "~/.hermes/config.yaml"
-  assistant_root: "~/Mitos"
+  assistant_root: "~/MitosAgent"
 
 # How `mitos sync --machine example-linux` reaches this box. Uncomment and set your own hub.
 # Sync is git-only: the overlay (registry/local/) is a git repo synced to `hub` — any git URL

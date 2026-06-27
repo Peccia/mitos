@@ -2,7 +2,10 @@
 # Copy to registry/local/projects/ and customize for your own projects.
 name: Example Project
 slug: example-project
+example: true             # a shipped sample: rendered only until you add your own (overlay)
+                          # projects, then it steps aside — mirrors the example machine guard
 stage: build              # ideation | speccing | build | maintain
+org: software             # domain org skill: software | design | marketing
 repo: ""                  # set the git URL once the project is published
 document_store: none      # MCP server (from connections/servers.yaml) that backs graph init;
                           # e.g. `gws`. `none` = no document store mapped for this project.

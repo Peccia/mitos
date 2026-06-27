@@ -82,7 +82,12 @@ field at once.
 name: Acme Redesign           # display name (shown in rosters / the operator console)
 slug: acme-redesign           # unique key — keep it == the filename stem
 stage: build                  # ideation | speccing | build | maintain
-repo: "git@github.com:you/acme.git"   # optional; cloned into the Agentic Context tree on Claude Code deploys
+repo: "git@github.com:you/acme.git"   # optional; a single URL or a list of URLs — each cloned
+# into its own <basename>/ dir (clone-if-absent). List example:
+# repo:
+#   - "git@github.com:you/frontend.git"
+#   - "git@github.com:you/backend.git"
+# Basenames within a project must be unique — two repos with the same name fail compile.
 document_store: gws           # optional; an MCP server from connections/servers.yaml, or `none`
 local_path:
   windows-main: acme          # per-machine checkout dir (relative → under that machine's projects_root)
@@ -100,8 +105,9 @@ context:                      # label → registry-relative partial (must resolv
 |---|---|---|
 | `slug` | **yes** | Unique identity of the project; keys the manifest, the knowledge graph (`graph/<slug>.jsonld`), and `local_path`. Duplicate slugs are refused. |
 | `name` | recommended | Human-readable label used in rosters and the console. |
+| `example` | no | Set `true` on shipped sample projects (e.g. `example-project.yaml`). Example projects step aside automatically once you add your own overlay projects. Must be a boolean if set. |
 | `stage` | **yes** | Lifecycle phase — must be exactly one of `ideation`, `speccing`, `build`, `maintain`. Anything else aborts compile. |
-| `repo` | no | Git URL. On Claude Code deploys with a `local_path` for the machine, the repo is **cloned if absent** (non-destructive) into the Agentic Context tree. |
+| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `agents-md`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **Hermes machines** (`agents-md` also in targets), it clones into `<agentic_context_root>/Projects/<slug>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
 | `drive` | no | Google Drive IDs for the project's collaboration footprint — `root_folder` plus an `artifacts` map of named folders/docs. Empty `{}` for git-only projects. |
@@ -154,7 +160,7 @@ sync:                                   # optional — consumed only by `mitos s
 | Path key | Used by | Points at |
 |---|---|---|
 | `projects_root` | all | Base directory that relative project `local_path` entries resolve under. |
-| `agentic_context_root` | claude-code | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). **Must not overlap any project checkout** — the loader refuses a collision to avoid git pollution. |
+| `agentic_context_root` | claude-code (Hermes machines) | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on **Hermes machines** (`agents-md` in `targets`). On pure workstation machines (without `agents-md`), project AGENTS.md files deploy directly to each project's `local_path` instead — `agentic_context_root` is not required. |
 | `gemini_config` | gemini | Gemini CLI / Antigravity config dir (`mcp_config.json` + `config.json`). |
 | `antigravity_skills` | gemini | Antigravity's native skill dir (`~/.gemini/skills/`). Skills and prompts targeting `gemini` deploy here. |
 | `claude_desktop_config` | claude-desktop | Full path to `claude_desktop_config.json`. Set to enable Desktop MCP wiring. Windows default: `%APPDATA%/Claude/claude_desktop_config.json`. |
@@ -162,6 +168,24 @@ sync:                                   # optional — consumed only by `mitos s
 | `hermes_home`, `hermes_config` | hermes | Hermes home and its `config.yaml` (surgically merged, never overwritten). |
 | `assistant_root` | hermes | Where Hermes's deployed context lands. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
+
+#### Workstation vs Hermes: two claude-code deploy modes
+
+The `claude-code` target behaves differently depending on whether `agents-md` is also in the machine's `targets`:
+
+| Machine type | `targets` includes | Project AGENTS.md lands at | Repo clones into |
+|---|---|---|---|
+| **Workstation** | `claude-code` (no `agents-md`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
+| **Hermes** | `claude-code` + `agents-md` | `<agentic_context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<agentic_context_root>/Projects/<slug>/<repo_basename>/` |
+
+On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
+
+- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the full document index: Drive IDs, links, modified dates, descriptions, and tags, all inline. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
+- **`<local_path>/CLAUDE.md`** — a thin `@AGENTS.md` stub so Claude Code auto-loads the full context above.
+
+A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.
+
+The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `agents-md` audience (the same one Hermes uses), so a partial with `audience: [hermes, agents-md]` is visible in both places without any frontmatter change.
 
 ### MCP server definitions — `connections/servers.yaml`
 
@@ -234,8 +258,7 @@ The overlay repo is intentionally narrow — three things stay out of it:
   merged in at deploy time — **never** committed, never synced (invariant #6). Only
   `connections/env/*.env.example` *templates* are tracked, and those are in the public core, not
   here.
-- **The inbox.** Proposals captured by your tools land in `inbox/`, which travels on its **own**
-  companion repo (`mitos-inbox.git`) with different dynamics.
+- **The inbox.** Proposals captured by your tools land in `inbox/` (inside the overlay), which travels directly with your overlay repository.
 
 So the worst case if this repo leaked is your overlay prose and machine layout — no keys, no tokens.
 
