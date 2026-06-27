@@ -253,18 +253,28 @@ def test_agents_load_and_render_claude_code():
     assert "description:" in head and "tools:" in head and "model:" in head
     assert "code reviewer" in out.lower() and not out.rstrip().endswith("---")
 
-def test_per_project_binding_deploys_exactly_bound_skills_and_agents():
-    outs = planner.plan_machine(reg, "example-windows")
+def test_per_project_binding_deploys_skills_and_agents():
+    """Per-project skill/agent binding: a manifest-bound agent deploys to that project's
+    checkout; a skill not in the manifest does not. Uses an isolated rig so the test
+    is independent of overlay local_path config."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    # give example-project a local_path so _local() resolves it (core registry has this)
+    # and pin a minimal binding — just the agent
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["agents"] = ["code-reviewer"]
+    r.projects["example-project"]["skills"] = []  # no skills — agent only
+    outs = planner.plan_machine(r, "example-windows")
     paths = [o.deploy_path for o in outs]
-    # mitos bound [code-reviewer]
-    assert any(p.endswith("mitos/.claude/agents/code-reviewer.md") for p in paths)
-    # example-project bound [code-reviewer] only — agent yes, plan skill NO (exactly its set)
+    # agent deployed to this project
     assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
-    assert not any(p.endswith("example-project/.claude/skills/plan/SKILL.md")
-                   for p in paths)
-    # the reused agent is authored once: both deployments point at one registry source
+    # plan skill not bound → not deployed
+    assert not any(p.endswith("example-project/.claude/skills/plan/SKILL.md") for p in paths)
+    # agent output points at the one shared registry source
     agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
-    assert len(agent_outs) == 2
+    assert len(agent_outs) >= 1
     assert all(o.sources == ["agents/code-reviewer.md"] for o in agent_outs)
     assert all(o.drift_policy == "harvest" for o in agent_outs)
 
@@ -457,6 +467,22 @@ def test_assistant_root_agents_md_is_the_routing_entry_point():
     projects_root = next(o for o in outputs if o.deploy_path == f"{root}/Projects/AGENTS.md")
     assert "Extended Organization Roles" in projects_root.content
     assert "CTO —" in projects_root.content
+
+def test_compiler_selfcheck_prefers_upstream_then_origin():
+    """The compiler self-check compares against the OFFICIAL remote: `upstream` when a
+    contributor's fork added it, else `origin` for a plain user. None when no remotes."""
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync.selfcheck import _pick_remote
+    tmp = Path(tempfile.mkdtemp(prefix="ae-selfcheck-"))
+    _run_git(tmp, "init")
+    assert _pick_remote(tmp) is None, "no remotes → nothing to compare against"
+    _run_git(tmp, "remote", "add", "origin", "https://example.com/fork.git")
+    assert _pick_remote(tmp) == "origin", "plain user: origin is the official remote"
+    _run_git(tmp, "remote", "add", "upstream", "https://example.com/official.git")
+    assert _pick_remote(tmp) == "upstream", "contributor: upstream wins over origin"
 
 def test_git_sync_flow_pull_deploy_push():
     if not _git_available():
@@ -858,7 +884,8 @@ def test_console_only_prompt_not_deployed():
     assert not any("private-prompt" in o.deploy_path for o in outputs)
 
 def test_claude_code_deploys_bound_prompt():
-    """A manifest-bound prompt with targets:[claude-code] deploys to .claude/commands/."""
+    """A manifest-bound prompt with targets:[claude-code] deploys to .claude/commands/.
+    Uses an isolated rig with a pinned local_path so the test is overlay-independent."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["claude-code"]
@@ -869,7 +896,9 @@ def test_claude_code_deploys_bound_prompt():
                      "targets": ["claude-code"]},
         body="Check these items:\n- Security\n- Tests",
     )
-    r.projects["mitos"]["prompts"] = ["review-checklist"]
+    # example-project has example-windows in its core local_path; bind the prompt to it
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["prompts"] = ["review-checklist"]
     outputs = planner.plan_machine(r, "example-windows")
     prompt_outs = [o for o in outputs if "review-checklist" in o.deploy_path]
     assert prompt_outs, "no claude-code output for bound prompt"

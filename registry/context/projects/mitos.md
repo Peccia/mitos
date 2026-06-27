@@ -3,6 +3,10 @@ audience: [claude-code, agents-md]
 ---
 # Mitos — Builder Context
 
+> **Context dedup:** this file compiles into both `AGENTS.md` (at the project root) and `CLAUDE.md`
+> (on machines without a co-deployed `AGENTS.md`). If this content is already present in your
+> loaded `AGENTS.md`, do not re-read `registry/context/projects/mitos.md` — it is the same source.
+
 You are working on the **Mitos** repo itself: the registry and compiler that materialize an
 agent organization across tools. Mitos manages itself — this file is authored at
 `registry/context/projects/mitos.md` and compiled into the root `AGENTS.md`. **Read

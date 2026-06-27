@@ -143,10 +143,10 @@ def test_local_path_resolution():
         pass
 
 def test_resolved_project_paths_unchanged():
-    # the manifests' relative entries must land exactly where the absolute ones did
+    # the manifests' relative entries must land exactly where the absolute ones did;
+    # uses only example-project (core registry, no overlay dependency)
     outs = planner.plan_machine(_full_windows_rig(), "example-windows")
     assert any(o.deploy_path == "C:/Projects/example-project/CLAUDE.md" for o in outs)
-    assert any(o.deploy_path == "C:/Projects/mitos/AGENTS.md" for o in outs)
 
 def test_per_machine_server_url():
     # the neutral core ships gws at localhost with no per-machine overrides (urls: {}).
@@ -174,14 +174,16 @@ def test_path_validation_control_characters():
 def test_path_validation_workspace_overlap():
     import copy
     from agentic.loader import _validate, RegistryError
+    # uses example-project (core registry, overlay-independent) to trigger the overlap guard
     rig = copy.deepcopy(reg)
     rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/Projects/mitos"
+    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/Projects/example-project"
+    rig.projects["example-project"]["local_path"]["example-windows"] = "example-project"
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError due to workspace path overlap")
     except RegistryError as e:
-        assert "must not overlap with project 'mitos' workspace path" in str(e)
+        assert "must not overlap with project 'example-project' workspace path" in str(e)
 
 def test_planner_output_path_collision():
     import copy

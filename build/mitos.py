@@ -24,6 +24,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "build"))
 
 
+def _compiler_check(machine_name: str | None) -> None:
+    """Print a notice when build/ is behind upstream, unless compiler_sync is disabled.
+
+    Non-fatal: any error (no git, no network, offline) is swallowed silently so this
+    never blocks init or sync. compiler_sync: false in the machine profile opts out."""
+    try:
+        from agentic import loader
+        from agentic.sync.selfcheck import check_compiler
+        reg = loader.load(REPO_ROOT)
+        machine = reg.machines.get(machine_name or "") if machine_name else None
+        sync_cfg = (machine or {}).get("sync") or {}
+        if sync_cfg.get("compiler_sync") is False:
+            return
+        notice = check_compiler(REPO_ROOT)
+        if notice:
+            print(notice)
+    except Exception:  # noqa: BLE001
+        pass  # loader error, import error — never block the primary command
+
+
 class _Abort(Exception):
     """The interactive prompt was cut short (stdin closed, or Ctrl-C/Ctrl-D) — unwind to a clean
     exit instead of a traceback. Raised before any file is written, so aborting changes nothing."""
@@ -41,6 +61,7 @@ def _cmd_init(_args) -> int:
     """Set up the private overlay at registry/local/. Three paths: scaffold a fresh one, pull an
     overlay you already keep on a git hub, or finish around files already in registry/local/.
     None of them ever clobber existing overlay files."""
+    _compiler_check(None)
     try:
         return _init_dispatch()
     except _Abort:
@@ -430,6 +451,7 @@ def _cmd_sync(args) -> int:
     subsequent machines (and install the auto-deploy hook); the default flow reconciles it with
     its hub: pull --rebase -> deploy -> push, stopping on conflict. The hub is `sync.git.hub` in
     the machine profile — any git URL (a self-hosted server or a private GitHub repo)."""
+    _compiler_check(args.machine)
     from agentic import loader
     from agentic.sync import SyncError, git_clone, git_init, git_status, git_sync
     try:
