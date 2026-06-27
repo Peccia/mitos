@@ -169,7 +169,29 @@ function candidateCard(c) {
 
   if (c.note) card.append(el("div", "card-note muted", c.note));
   if (c.accept_note && !c.accept_note.startsWith("new file")) {
-    card.append(el("div", "accept-note", c.accept_note));
+    if (!c.acceptable) {
+      const noteDiv = el("div", "accept-note warning-callout");
+      noteDiv.append(el("div", "callout-title", "⚠️ Action Required: Manual Resolution"));
+
+      const desc = el("div", "callout-body");
+      desc.append(el("p", "", c.accept_note));
+
+      if (c.sources && c.sources.length > 0) {
+        desc.append(el("p", "", "This file is compiled from the following registry sources — edit these by hand:"));
+        const list = el("ul");
+        c.sources.forEach((src) => {
+          const li = el("li");
+          li.append(el("code", "", `registry/${src}`));
+          list.append(li);
+        });
+        desc.append(list);
+      }
+
+      noteDiv.append(desc);
+      card.append(noteDiv);
+    } else {
+      card.append(el("div", "accept-note", c.accept_note));
+    }
   }
 
   card.append(diffTable(c.diff));

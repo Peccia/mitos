@@ -563,10 +563,24 @@ def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
             # only (existing behaviour — stub_map or inlined repo context or skip).
             deploy_path = f"{local}/{cf['filename']}"
             section_bodies: list = []
-            if slug in stub_map:
+            ctx = proj.get("context") or {}
+            if slug in stub_map and is_hermes_machine:
+                # the stub @AGENTS.md is valid only because the agents-md target deploys
+                # that AGENTS.md at this same root on this machine.
                 content, sources = render.stub_document(stub_map[slug]), []
+            elif slug in stub_map:
+                # claude-code-only machine: no AGENTS.md is generated here, so a stub
+                # import would dangle. Inline the project's builder context into a
+                # self-contained CLAUDE.md instead, so AGENTS/CLAUDE never split.
+                builder = ctx.get("builder")
+                if not builder:
+                    continue  # nothing to inline → no CLAUDE.md
+                srcs = [(_strip_reg(builder) if s == "{project.context.repo}" else s)
+                        for s in cf["sources"]]
+                sections = _sections(reg, srcs, "claude-code")
+                content, sources, section_bodies = (
+                    render.plain_document(sections), srcs, _multi(sections))
             else:
-                ctx = proj.get("context") or {}
                 if "repo" not in ctx:
                     continue  # no code-structure context → no CLAUDE.md
                 srcs = [(_strip_reg(ctx["repo"]) if s == "{project.context.repo}" else s)

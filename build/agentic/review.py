@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from . import loader, render
-from .commands import _now, route_into_registry
+from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
 from .planner import plan_machine
@@ -80,6 +80,9 @@ def load_candidates(reg: Registry) -> list[dict]:
             "acceptable": acceptable,
             "accept_note": note,
             "stale": _stale(reg, meta),
+            # the real (overlay-aware) registry files a manual resolution must edit —
+            # a partial overridden by the local overlay routes to its registry/local/ path
+            "sources": [_real_registry_rel(reg, s) for s in (meta.get("sources") or [])],
         })
     return out
 

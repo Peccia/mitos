@@ -64,6 +64,40 @@ def test_non_hermes_machine_coproduces_agents_md():
     assert not any("apocalyptic_adventure/AGENTS.md" in p for p in hermes_paths), \
         "Hermes machine must not emit co-located AGENTS.md via claude-code target"
 
+def test_stub_claude_md_inlines_builder_when_agents_md_absent():
+    """A stub_import project (mitos) on a claude-code-only machine must never emit a
+    dangling CLAUDE.md → @AGENTS.md when no AGENTS.md is generated. The planner inlines
+    the project's builder context into a self-contained CLAUDE.md instead, so AGENTS and
+    CLAUDE never split. With agents-md present the stub is valid and stays a stub."""
+    import copy
+
+    # claude-code-only machine: agents-md (which generates AGENTS.md) is NOT a target.
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    # give mitos a local_path on example-windows so _local() resolves it (the live overlay
+    # binds mitos only to the user's real machines, so the test pins its own)
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    claude_path = "C:/Projects/Mitos/CLAUDE.md"
+
+    by_path = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")}
+    assert claude_path in by_path, "mitos CLAUDE.md must be planned on a claude-code-only machine"
+    out = by_path[claude_path]
+    assert out.content.strip() != "@AGENTS.md", \
+        "must not dangle a stub @AGENTS.md when no AGENTS.md is generated"
+    assert "Builder Context" in out.content, "self-contained CLAUDE.md inlines the builder prose"
+    assert out.section_bodies, "an inlined multi-source CLAUDE.md records its per-section base"
+
+    # Counterpart — with agents-md present, the AGENTS.md co-deploys, so the stub is valid.
+    rig2 = copy.deepcopy(reg)
+    rig2.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig2.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    by_path2 = {o.deploy_path: o for o in planner.plan_machine(rig2, "example-windows")}
+    assert by_path2[claude_path].content.strip() == "@AGENTS.md", \
+        "with agents-md present, mitos CLAUDE.md stays a thin stub"
+    assert "C:/Projects/Mitos/AGENTS.md" in by_path2, \
+        "agents-md must co-deploy the AGENTS.md that the stub imports"
+
 def test_non_hermes_clone_uses_local_path():
     """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
     absent-only — never nesting into the Mitos repo root."""
