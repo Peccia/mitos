@@ -532,26 +532,26 @@ def test_connect_stage_flag_routes_to_stage_listing():
     assert args3.project is None and args3.stage is True
 
 def test_project_and_server_exclude_folders_validation():
-    """_validate rejects invalid exclude_folders in both project drive: blocks and server entries."""
+    """_validate rejects invalid top-level exclude_folders in projects and server entries."""
     import copy
     from agentic.loader import RegistryError, _validate
     treg, tmp = _temp_registry()
-    # ── project side: non-list value under drive.exclude_folders ──────────────
+    # ── project side: non-list value ───────────────────────────────────────────
     r = copy.deepcopy(treg)
-    r.projects["example-project"]["drive"] = {"exclude_folders": "Archive"}  # str, not list
+    r.projects["example-project"]["exclude_folders"] = "Archive"  # str, not list
     try:
         _validate(r)
-        raise AssertionError("expected RegistryError for non-list drive.exclude_folders")
+        raise AssertionError("expected RegistryError for non-list exclude_folders")
     except RegistryError as e:
-        assert "drive.exclude_folders" in str(e), str(e)
+        assert "exclude_folders" in str(e), str(e)
     # ── project side: list with a non-string entry ─────────────────────────────
     r2 = copy.deepcopy(treg)
-    r2.projects["example-project"]["drive"] = {"exclude_folders": ["Archive", 42]}
+    r2.projects["example-project"]["exclude_folders"] = ["Archive", 42]
     try:
         _validate(r2)
-        raise AssertionError("expected RegistryError for non-string entry in drive.exclude_folders")
+        raise AssertionError("expected RegistryError for non-string entry in exclude_folders")
     except RegistryError as e:
-        assert "drive.exclude_folders" in str(e), str(e)
+        assert "exclude_folders" in str(e), str(e)
     # ── server side: dict instead of list ─────────────────────────────────────
     r3 = copy.deepcopy(treg)
     servers = r3.servers.setdefault("servers", {})
@@ -563,7 +563,7 @@ def test_project_and_server_exclude_folders_validation():
         assert "exclude_folders" in str(e), str(e)
     # ── valid list passes without error ────────────────────────────────────────
     r4 = copy.deepcopy(treg)
-    r4.projects["example-project"]["drive"] = {"exclude_folders": ["Archive", "Drafts"]}
+    r4.projects["example-project"]["exclude_folders"] = ["Archive", "Drafts"]
     _validate(r4)   # must not raise
 
 def test_mock_connector_folder_exclusion():
@@ -842,4 +842,28 @@ def test_mcp_empty_listing_is_not_an_error():
         raise AssertionError("a real error text must raise ConnectorError, not parse as empty")
     except _mcp.ConnectorError:
         pass
+
+
+def test_connector_for_store_resolves_override_url_from_active_machine():
+    """connector_for_store resolves a server's URL override based on the active machine's git config."""
+    from agentic.connectors import connector_for_store
+    from agentic.connectors.mcp import MCPConnector
+    from conftest import _run_git, _git_available
+    treg, tmp = _temp_registry()
+
+    treg.servers["servers"]["gws"]["urls"] = {
+        "custom-machine": "http://192.168.1.99:8000/mcp"
+    }
+
+    overlay_dir = tmp / "registry" / "local"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    if _git_available():
+        _run_git(overlay_dir, "init")
+        _run_git(overlay_dir, "config", "user.name", "Test")
+        _run_git(overlay_dir, "config", "user.email", "test@test.com")
+        _run_git(overlay_dir, "config", "mitos.machine", "custom-machine")
+
+        conn = connector_for_store(treg, "gws", root=tmp)
+        assert isinstance(conn, MCPConnector)
+        assert conn.endpoint == "http://192.168.1.99:8000/mcp"
 

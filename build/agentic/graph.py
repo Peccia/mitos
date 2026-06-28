@@ -460,12 +460,12 @@ def _cap(docs: list, limit: int = INDEX_LIMIT) -> tuple[list, int]:
 
 def project_index_markdown(pg: ProjectGraph) -> str:
     """A project's `Projects/<slug>/AGENTS.md`: the LIGHTWEIGHT index the harness auto-loads
-    on every request — titles only, grouped by effort. Full descriptions, Drive IDs, links,
+    on every request — titles only, grouped by effort. Full descriptions, document IDs, links,
     and tags live in the on-demand details file."""
     lines = [
         f"# {pg.name} — documents",
         "",
-        "Document titles, generated from the knowledge graph. Full details (Drive IDs, links, "
+        "Document titles, generated from the knowledge graph. Full details (document IDs, links, "
         f"descriptions, tags) are in [`{DETAILS_FILENAME}`]({DETAILS_FILENAME}). To change "
         f"this list, edit `registry/graph/{pg.slug}.jsonld` and redeploy.",
         "",

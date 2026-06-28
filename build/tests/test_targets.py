@@ -31,7 +31,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
@@ -62,7 +62,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_hermes = copy.deepcopy(reg)
     if "apoc" not in rig_hermes.projects:
-        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     from agentic.graph import ProjectGraph
     rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
@@ -112,7 +112,7 @@ def test_non_hermes_clone_uses_local_path():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -127,7 +127,7 @@ def test_non_hermes_clone_uses_local_path():
     # agentic_context_root lane still works when both are present on the same machine
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
-        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"

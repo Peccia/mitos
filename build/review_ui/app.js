@@ -359,7 +359,7 @@ async function loadStaged(slug) {
   }
 }
 
-// Drive IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
+// Document IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
 // for this project (upsert OR removal) can't be drafted again until it's accepted/rejected.
 function pendingDocIds(slug) {
   const ids = new Set();

@@ -247,14 +247,14 @@ def _cmd_connect(args) -> int:
             return _explain_missing_store(reg, slug)
         store_name = None  # resolved from proj.document_store below
 
-    # Build the merged exclude_folders list: server-level ∪ project drive-level.
+    # Build the merged exclude_folders list: server-level ∪ project-level.
     servers = (reg.servers.get("servers") or {})
     resolved_store = (store_name
                       or (proj.get("document_store") if proj else None)
                       or (args.backend if args.backend else None))
     server_cfg = servers.get(resolved_store) if resolved_store else {}
     server_excl = list(server_cfg.get("exclude_folders") or []) if server_cfg else []
-    proj_excl = list(((proj.get("drive") or {}).get("exclude_folders")) or []) if proj else []
+    proj_excl = list(proj.get("exclude_folders") or []) if proj else []
     exclude_folders = list(dict.fromkeys(server_excl + proj_excl)) or None  # unique, ordered
 
     try:
@@ -429,7 +429,7 @@ def _cmd_project(args) -> int:
 
 def _project_manifest_yaml(slug: str, name: str, store: str) -> str:
     return (f"# Project manifest — created by `mitos project add`. Fill in the rest as the\n"
-            f"# project takes shape (context partials, local_path, skills/agents, drive ids).\n"
+            f"# project takes shape (context partials, local_path, skills/agents).\n"
             f"name: {name}\n"
             f"slug: {slug}\n"
             f"stage: ideation          # ideation | speccing | build | maintain\n"

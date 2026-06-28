@@ -490,14 +490,13 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(
                     f"project {slug}: document_store {ds!r} is not a known MCP server; "
                     f"known: {sorted(known)}")
-        # exclude_folders (optional) under drive: lists folder names or IDs to skip during
-        # knowledge-graph staging. Each entry must be a non-empty string.
-        drive_block = proj.get("drive") or {}
-        ef = drive_block.get("exclude_folders")
+        # exclude_folders (optional) — folder names or IDs to skip during staging.
+        # Each entry must be a non-empty string.
+        ef = proj.get("exclude_folders")
         if ef is not None:
             if not isinstance(ef, list) or not all(isinstance(x, str) and x for x in ef):
                 raise RegistryError(
-                    f"project {slug}: drive.exclude_folders must be a list of non-empty strings "
+                    f"project {slug}: exclude_folders must be a list of non-empty strings "
                     f"(folder names or IDs to skip during staging)")
     # every project graph maps to a real project manifest
     for slug in reg.graphs:
