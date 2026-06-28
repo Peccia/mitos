@@ -11,9 +11,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "build"))
 
 from agentic import loader, planner, render  # noqa: E402
+from agentic import commands
 from agentic.commands import classify_output  # noqa: E402
 
-reg = loader.load(REPO_ROOT)
+# Globally mock _git_clone for all tests to prevent real network calls and clone operations.
+# Individual tests can still override this temporarily by monkeypatching commands._git_clone.
+def _test_safe_git_clone(repo: str, dest: Path) -> tuple[int, str]:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    (dest / ".git").mkdir(parents=True, exist_ok=True)
+    (dest / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
+    return 0, ""
+
+commands._git_clone = _test_safe_git_clone
+
+reg = loader.load(REPO_ROOT, ignore_local=True)
 
 def _inbox(root: Path) -> Path:
     """Mirror of loader.inbox_dir for tests — inbox lives inside the overlay, not at repo root."""

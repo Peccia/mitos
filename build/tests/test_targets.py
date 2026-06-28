@@ -30,6 +30,10 @@ def test_non_hermes_machine_coproduces_agents_md():
     Hermes machines (with agents-md) are unaffected — the existing path applies."""
     import copy
     rig = copy.deepcopy(reg)
+    if "apoc" not in rig.projects:
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+    from agentic.graph import ProjectGraph
+    rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
     # agentic_context_root (that's the separate Hermes tree, not needed here)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
@@ -57,6 +61,10 @@ def test_non_hermes_machine_coproduces_agents_md():
 
     # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_hermes = copy.deepcopy(reg)
+    if "apoc" not in rig_hermes.projects:
+        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
+    from agentic.graph import ProjectGraph
+    rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
     rig_hermes.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     hermes_paths = [o.deploy_path for o in planner.plan_machine(rig_hermes, "example-windows")
@@ -103,6 +111,8 @@ def test_non_hermes_clone_uses_local_path():
     absent-only — never nesting into the Mitos repo root."""
     import copy
     rig = copy.deepcopy(reg)
+    if "apoc" not in rig.projects:
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -116,6 +126,8 @@ def test_non_hermes_clone_uses_local_path():
 
     # agentic_context_root lane still works when both are present on the same machine
     rig2 = copy.deepcopy(reg)
+    if "apoc" not in rig2.projects:
+        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "drive": {}, "agents": [], "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -164,8 +176,8 @@ def test_skill_selection_layers():
     base = {"include_target": "hermes"}
     all_hermes = {s.name for s in _selected_skills(reg, base)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, {**base, "include": ["plan", "gws"]})
-    assert {s.name for s in only} == {"plan", "gws"}                  # pull: include
+    only = _selected_skills(reg, {**base, "include": ["new-session", "gws"]})
+    assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
     rest = _selected_skills(reg, {**base, "exclude": ["gws"]})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
@@ -270,8 +282,8 @@ def test_per_project_binding_deploys_skills_and_agents():
     paths = [o.deploy_path for o in outs]
     # agent deployed to this project
     assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
-    # plan skill not bound → not deployed
-    assert not any(p.endswith("example-project/.claude/skills/plan/SKILL.md") for p in paths)
+    # new-session skill not bound → not deployed
+    assert not any(p.endswith("example-project/.claude/skills/new-session/SKILL.md") for p in paths)
     # agent output points at the one shared registry source
     agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
     assert len(agent_outs) >= 1

@@ -160,7 +160,7 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
-def load(root: Path) -> Registry:
+def load(root: Path, ignore_local: bool = False) -> Registry:
     reg_dir = root / "registry"
     if not reg_dir.is_dir():
         raise RegistryError(f"no registry/ directory at {root}")
@@ -178,7 +178,7 @@ def load(root: Path) -> Registry:
     # to core-only, so this is purely additive. Overlay entries carry a `local/` rel prefix so
     # their real file location (and adopt routing) point back into registry/local/.
     local_dir = reg_dir / LOCAL_OVERLAY
-    if local_dir.is_dir():
+    if local_dir.is_dir() and not ignore_local:
         pfx = f"{LOCAL_OVERLAY}/"
         partials = _overlay(partials, _load_partials(local_dir, prefix=pfx))
         skills = _overlay(skills, _load_skills(local_dir, prefix=pfx))
@@ -200,7 +200,7 @@ def load(root: Path) -> Registry:
     # Mitos overlay for machines and connections: same last-layer-wins contract as
     # partials/skills/projects. Private machine profiles with real hostnames/IPs and
     # server configs with LAN addresses live in registry/local/ (gitignored).
-    if local_dir.is_dir():
+    if local_dir.is_dir() and not ignore_local:
         local_machines_dir = local_dir / "machines"
         if local_machines_dir.is_dir() and any(local_machines_dir.glob("*.yaml")):
             machines = _overlay(machines, _load_dir_of_yaml(local_machines_dir, key="name"))

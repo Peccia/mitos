@@ -12,9 +12,13 @@ from conftest import (
 )
 
 def test_idea_revision_targeting():
-    linux = [o.deploy_path for o in planner.plan_machine(reg, "example-linux")]
+    import copy
+    from agentic.loader import Skill
+    rig = copy.deepcopy(reg)
+    rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
+    linux = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")]
     assert not any("idea-revision" in p for p in linux)        # gemini-only, not hermes
-    win = [o.deploy_path for o in planner.plan_machine(reg, "example-windows")]
+    win = [o.deploy_path for o in planner.plan_machine(rig, "example-windows")]
     assert any("idea-revision.md" in p for p in win)           # emitted as gemini prompt
 
 def test_classify_create_for_absent_path():

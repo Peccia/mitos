@@ -438,7 +438,24 @@ def test_propose_graph_change_with_efforts():
 
 def test_graph_tree_emits_single_self_contained_agents_md():
     from agentic import render
-    win = {o.deploy_path: o for o in planner.plan_machine(reg, "example-windows")
+    import copy
+    from agentic.loader import Partial
+    rig = copy.deepcopy(reg)
+    rig.projects["apdict"] = {
+        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
+        "local_path": {"example-windows": "apdict"}, "drive": {}, "agents": [],
+        "context": {"assistant": "registry/context/projects/apdict.md"},
+    }
+    rig.partials["context/projects/apdict.md"] = Partial(
+        rel="context/projects/apdict.md", audience=["agents-md"], body="Apdict prose context"
+    )
+    from agentic.graph import ProjectGraph
+    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+    from agentic import graph as graphmod
+    rig.graphs["apdict"] = graphmod.upsert_document(
+        rig.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+
+    win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
            if o.target == "agentic-graph"}
     # real (local) graphs are present — example-project core graph steps aside
     proj = next(o for p, o in win.items() if p.endswith("Projects/apdict/AGENTS.md"))
@@ -598,12 +615,26 @@ def test_propose_graph_change_rejects_unknown_project_and_empty():
     assert not review.propose_graph_change(treg, "example-project", [])["ok"]
 
 def test_graph_tree_deploys_only_on_claude_code_env():
+    import copy
+    from agentic.loader import Partial
+    rig = copy.deepcopy(reg)
+    rig.projects["apdict"] = {
+        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
+        "local_path": {"example-windows": "apdict"}, "drive": {}, "agents": [],
+        "context": {"assistant": "registry/context/projects/apdict.md"},
+    }
+    rig.partials["context/projects/apdict.md"] = Partial(
+        rel="context/projects/apdict.md", audience=["agents-md"], body="Apdict prose context"
+    )
+    from agentic.graph import ProjectGraph
+    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+
     # example-linux has no claude-code target → no Agentic Context tree
-    linux = [o for o in planner.plan_machine(reg, "example-linux")
+    linux = [o for o in planner.plan_machine(rig, "example-linux")
              if o.target == "agentic-graph"]
     assert linux == []
     # example-windows (claude-code + agentic_context_root) → roster + per-project index
-    win = {o.deploy_path: o for o in planner.plan_machine(reg, "example-windows")
+    win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
            if o.target == "agentic-graph"}
     assert any(p.endswith("MitosAgent/AGENTS.md") for p in win)
     # local graphs present → local project entries, not core example-project
@@ -624,6 +655,13 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     # inject a document into a local (active) graph so the per-project index renders a table row;
     # apdict is a local graph so it is always in active_graphs regardless of overlay state
     reg2 = copy.deepcopy(reg)
+    if "apdict" not in reg2.projects:
+        reg2.projects["apdict"] = {
+            "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
+            "local_path": {"example-windows": "apdict"}, "drive": {}, "agents": [], "context": {},
+        }
+    if "apdict" not in reg2.graphs:
+        reg2.graphs["apdict"] = graph.ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
     reg2.graphs["apdict"] = graph.upsert_document(
         reg2.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-graph-"))

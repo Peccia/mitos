@@ -188,8 +188,10 @@ def test_path_validation_workspace_overlap():
 def test_planner_output_path_collision():
     import copy
     from agentic import planner
-    from agentic.loader import RegistryError
+    from agentic.loader import RegistryError, Skill
     rig = copy.deepcopy(reg)
+    # inject a second skill targeting gemini to force a collision
+    rig.skills["mock-skill"] = Skill(name="mock-skill", rel="skills/mock-skill/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
     rig.machines["example-windows"]["paths"]["antigravity_skills"] = "C:/GeminiPrompts"
     rig.targets["gemini"]["skills"]["subdir"] = "AGENTS.md"
     try:
@@ -295,19 +297,24 @@ def test_example_project_suppressed_when_overlay_projects_exist():
     """An `example: true` sample steps aside once overlay projects exist — across BOTH
     enumeration trees (agents-md assistant tree + agentic-graph roster). Real reg carries
     overlay projects (apdict, apoc, personal-brand), so example-project must not deploy."""
-    outs = planner.plan_machine(_full_windows_rig(), "example-windows")
+    rig = _full_windows_rig()
+    # Inject a local project and its graph to trigger example project suppression hermetically
+    rig.projects["apdict"] = {"name": "Apdict", "slug": "apdict", "_is_local": True, "local_path": {"example-windows": "apdict"}}
+    from agentic.graph import ProjectGraph
+    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Apdict", description="test description", documents=[], efforts=[], path=None)
+    outs = planner.plan_machine(rig, "example-windows")
     # agentic-graph roster: example-project absent, real overlay projects present
     graph_paths = [o.deploy_path for o in outs if o.target == "agentic-graph"]
     assert not any("example-project" in p for p in graph_paths), (
         "example-project graph appeared despite overlay projects being present")
     assert any("apdict" in p for p in graph_paths)
     # agents-md assistant tree: "Example Project" folder must not be emitted
-    assistant_paths = [o.deploy_path for o in planner.plan_machine(_full_windows_rig(), "example-linux")
+    assistant_paths = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")
                        if o.target == "agents-md"]
     assert not any("Example Project" in p for p in assistant_paths), (
         "Example Project assistant-tree entry leaked despite overlay projects being present")
     # the suppression helper reports exactly the example slug
-    assert planner._suppressed_examples(reg) == {"example-project"}
+    assert planner._suppressed_examples(rig) == {"example-project"}
 
 def test_example_project_rendered_on_fresh_clone():
     """With no overlay projects (_temp_registry excludes registry/local/), the example sample
@@ -568,6 +575,7 @@ def test_plan_clones_multi_repo_local_path_lane():
     # Use example-windows (no agents-md, no agentic_context_root) — local_path lane
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["example-project"]["repo"] = [
         "https://github.com/you/frontend.git",
         "https://github.com/you/backend.git",
@@ -586,6 +594,7 @@ def test_plan_clones_single_string_repo_still_works():
     rig = copy.deepcopy(reg)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["example-project"]["repo"] = "https://github.com/you/myapp.git"
     clones = planner.plan_clones(rig, "example-windows")
     ep_clones = [c for c in clones if c.slug == "example-project"]
