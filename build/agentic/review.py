@@ -116,7 +116,8 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         if slug not in reg.projects:
             return "", payload, False, f"unknown project {slug!r} for graph candidate"
         try:
-            merged = _merged_graph(reg, slug, payload, meta.get("removals"))
+            merged = _merged_graph(reg, slug, payload, meta.get("removals"),
+                                   meta.get("effort_removals"))
         except graphmod.GraphError as e:
             return "", payload, False, f"invalid graph fragment: {e}"
         current = (graphmod.canonical_jsonld(reg.graphs[slug])

@@ -90,19 +90,24 @@ function safeRender(box, fn) {
 }
 
 async function sendDecision(id, decision, reason) {
-  const res = await fetch("/api/decide", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, decision, reason }),
-  });
-  const out = await res.json();
-  if (out.ok) {
-    const routed = (out.changed || []).length
-      ? ` → registry/${out.changed.join(", registry/")}` : "";
-    toast(`${decision === "accept" ? "Accepted" : "Rejected"} ${id}${routed} — review git status, then commit.`, 4200);
-    await refresh();
-  } else {
-    toast(`Error: ${out.error}`, 5000);
+  try {
+    const res = await fetch("/api/decide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, decision, reason }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      const routed = (out.changed || []).length
+        ? ` → registry/${out.changed.join(", registry/")}` : "";
+      toast(`${decision === "accept" ? "Accepted" : "Rejected"} ${id}${routed} — review git status, then commit.`, 4200);
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to send decision: ${err.message || err}`, 6000);
   }
 }
 
@@ -999,18 +1004,23 @@ async function proposeGraphDraft() {
     toast("No changes to propose."); return;
   }
   const reason = $("graph-dock-reason").value.trim();
-  const res = await fetch("/api/graph", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, documents, removals, efforts, effortRemovals, reason }),
-  });
-  const out = await res.json();
-  if (out.ok) {
-    toast(`Proposed → inbox/${out.id}. Review and Accept in the Inbox tab.`, 5000);
-    draftClear(slug);
-    $("graph-dock-reason").value = "";
-    await refresh();
-  } else {
-    toast(`Error: ${out.error}`, 5000);
+  try {
+    const res = await fetch("/api/graph", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, documents, removals, efforts, effortRemovals, reason }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id}. Review and Accept in the Inbox tab.`, 5000);
+      draftClear(slug);
+      $("graph-dock-reason").value = "";
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to propose changes: ${err.message || err}`, 6000);
   }
 }
 
