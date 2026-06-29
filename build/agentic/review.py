@@ -791,7 +791,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             self.wfile.write(data)
 
         def log_message(self, fmt, *args):
-            if "/api/decide" in (args[0] if args else ""):
+            if args and isinstance(args[0], str) and "/api/decide" in args[0]:
                 print(f"  {args[0]}")
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
