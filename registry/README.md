@@ -179,7 +179,7 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
-- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the full document index: document IDs, links, modified dates, descriptions, and tags, all inline. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
+- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
 - **`<local_path>/CLAUDE.md`** — a thin `@AGENTS.md` stub so Claude Code auto-loads the full context above.
 
 A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.

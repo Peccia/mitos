@@ -458,6 +458,18 @@ def _cap(docs: list, limit: int = INDEX_LIMIT) -> tuple[list, int]:
     return (docs[:limit], max(0, len(docs) - limit)) if limit else (docs, 0)
 
 
+def _concise_entry(d: Document) -> str:
+    """One condensed bullet per document: title, document ID, modified date, then
+    description and tags only when present. No URL — the document store resolves by ID.
+    Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference."""
+    line = f"- **{d.name}** `{d.drive_id}` ({d.date_modified})"
+    if d.description:
+        line += f" — {d.description}"
+    if d.keywords:
+        line += f" · tags: {d.keywords}"
+    return line
+
+
 def project_index_markdown(pg: ProjectGraph) -> str:
     """A project's `Projects/<slug>/AGENTS.md`: the LIGHTWEIGHT index the harness auto-loads
     on every request — titles only, grouped by effort. Full descriptions, document IDs, links,
@@ -506,22 +518,25 @@ def project_index_markdown(pg: ProjectGraph) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def project_details_markdown(pg: ProjectGraph) -> str:
+def project_details_markdown(pg: ProjectGraph, heading: str | None = None) -> str:
     """A project's `Projects/<slug>/AGENTS_DETAILS.md`: the DETAILED reference, read on
-    demand — per document the full `schema:description`, the Drive ID, the link, and the
-    modified date. Grouped by effort. Generated and non-adoptable, like the index."""
+    demand — the full, UNCAPPED document set in the same condensed one-line-per-document
+    format as the self-contained AGENTS.md block (title, document ID, modified date, plus
+    description and tags when present; no URL). Grouped by effort. Generated and
+    non-adoptable, like the index.
+
+    `heading` overrides the H1 (the document store's description, set by the planner from
+    the project's `document_store`); falls back to "<project name> — documents"."""
     lines = [
-        f"# {pg.name} — document details",
+        f"# {heading or f'{pg.name} — documents'}",
         "",
-        "Full reference for the documents in `AGENTS.md`, generated from the knowledge "
-        f"graph. To change it, edit `registry/graph/{pg.slug}.jsonld` and redeploy.",
+        "Full document reference for `AGENTS.md`. Resolve a document by its ID.",
         "",
     ]
     if not pg.documents:
         lines.append("_No documents mapped yet._")
         return "\n".join(lines) + "\n"
 
-    effort_map = {e.iri: e for e in pg.efforts}
     groups: dict[str, list[Document]] = {"": []}
     for e in pg.efforts:
         groups[e.iri] = []
@@ -529,19 +544,7 @@ def project_details_markdown(pg: ProjectGraph) -> str:
         groups.setdefault(d.is_part_of or "", []).append(d)
 
     def _doc_entries(docs: list[Document]) -> list[str]:
-        out = []
-        for d in docs:
-            entry = [
-                f"### {d.name}",
-                f"- **ID:** `{d.drive_id}`",
-                f"- **Link:** {d.drive_url}",
-                f"- **Modified:** {d.date_modified}",
-            ]
-            if d.keywords:
-                entry.append(f"- **Tags:** {d.keywords}")
-            entry += ["", d.description or "_No description._", ""]
-            out += entry
-        return out
+        return [_concise_entry(d) for d in docs] + [""]
 
     has_efforts = any(len(v) > 0 for k, v in groups.items() if k)
     if not has_efforts:
@@ -563,15 +566,20 @@ def project_details_markdown(pg: ProjectGraph) -> str:
 
 
 def project_full_markdown(pg: ProjectGraph,
-                          repos: list[tuple[str, str]] | None = None) -> str:
+                          repos: list[tuple[str, str]] | None = None,
+                          heading: str | None = None) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block for the agentic-harness tree
     (Antigravity / Claude Code / Claude Desktop): the FULL document context inline — per
-    document the description, Drive ID, link, modified date, and tags, grouped by effort —
-    plus an optional Workspace Layout section listing repos cloned beside this file. There
-    is NO companion details file here (single self-contained AGENTS.md). Capped per group.
+    document the description, Drive ID, modified date, and tags (concise, one line each),
+    grouped by effort — plus an optional Workspace Layout section listing repos cloned
+    beside this file. There is NO companion details file here (single self-contained
+    AGENTS.md). Capped per group.
 
     `repos` is a list of (url, dirname) pairs — one entry per cloned checkout. Pass None
     (or omit) when the project has no repo.
+
+    `heading` overrides the H1 (the document store's description, set by the planner from
+    the project's `document_store`); falls back to "<project name> — documents".
 
     This returns only the GENERATED block; a project's human-authored prose is prepended by
     the planner as a separate, protected section."""
@@ -588,10 +596,9 @@ def project_full_markdown(pg: ProjectGraph,
             lines.append(f"- `{dirname}/` — `{url}`")
         lines.append("")
     lines += [
-        f"# {pg.name} — documents",
+        f"# {heading or f'{pg.name} — documents'}",
         "",
-        "Full document context, generated from the knowledge graph. To change it, edit "
-        f"`registry/graph/{pg.slug}.jsonld` and redeploy.",
+        "Knowledge-graph documents for this project. Resolve a document by its ID.",
         "",
     ]
     if not pg.documents:
@@ -606,21 +613,10 @@ def project_full_markdown(pg: ProjectGraph,
 
     def _entries(docs: list[Document]) -> list[str]:
         shown, omitted = _cap(docs)
-        out: list[str] = []
-        for d in shown:
-            entry = [
-                f"### {d.name}",
-                f"- **ID:** `{d.drive_id}`",
-                f"- **Link:** {d.drive_url}",
-                f"- **Modified:** {d.date_modified}",
-            ]
-            if d.keywords:
-                entry.append(f"- **Tags:** {d.keywords}")
-            entry += ["", d.description or "_No description._", ""]
-            out += entry
+        out: list[str] = [_concise_entry(d) for d in shown]
         if omitted:
-            out += [f"_…and {omitted} more document(s) "
-                    f"(edit `registry/graph/{pg.slug}.jsonld`)._", ""]
+            out += ["", f"_…and {omitted} more documents._"]
+        out.append("")
         return out
 
     has_efforts = any(len(v) > 0 for k, v in groups.items() if k)

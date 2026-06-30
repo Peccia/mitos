@@ -255,7 +255,8 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
         agents_path = f"{base}/AGENTS.md"
         # full document context inline + repos cloned beside this file (no details file)
         repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
-        gen_body = graphmod.project_full_markdown(pg, repos or None)
+        gen_body = graphmod.project_full_markdown(
+            pg, repos or None, _doc_store_heading(reg, proj))
         prose_src, prose = _project_prose(reg, proj, "agents-md")
         # the Domain line is machine-derived (manifest org:), so it rides in the GENERATED
         # half — never the prose section, or adopt would leak it into the prose partial.
@@ -329,6 +330,17 @@ def _domain_line(proj: dict) -> str:
     org = proj.get("org", "")
     return (f"**Domain:** {org} — load the `org-{org}` skill for project work.\n\n"
             if org else "")
+
+
+def _doc_store_heading(reg: Registry, proj: dict) -> str | None:
+    """The H1 for a project's generated document block: the bound document store's
+    `description` from connections/servers.yaml. None (→ "<name> — documents" fallback in
+    project_full_markdown) when the project has no store or the store has no description."""
+    ds = (proj.get("document_store") or "").strip()
+    if not ds or ds == "none":
+        return None
+    server = (reg.servers.get("servers") or {}).get(ds) or {}
+    return server.get("description") or None
 
 
 def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None, str]:
@@ -441,7 +453,8 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                     outputs.append(Output(
                         target="agents-md", kind="text", deploy_path=details_path,
                         dist_rel=f"agents-md/{safe_rel(details_path)}",
-                        content=graphmod.project_details_markdown(pg),
+                        content=graphmod.project_details_markdown(
+                            pg, _doc_store_heading(reg, proj)),
                         drift_policy="generated", sources=[],
                     ))
     # per-project root AGENTS.md (builder context)
@@ -538,7 +551,8 @@ def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
             # separate claude-code audience declaration on each partial.
             from . import graph as graphmod
             repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
-            gen_body = _domain_line(proj) + graphmod.project_full_markdown(pg, repos or None)
+            gen_body = _domain_line(proj) + graphmod.project_full_markdown(
+                pg, repos or None, _doc_store_heading(reg, proj))
             prose_src, prose = _project_prose(reg, proj, "agents-md")
             agents_path = f"{local}/AGENTS.md"
             if prose_src:

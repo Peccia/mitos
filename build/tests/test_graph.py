@@ -125,10 +125,10 @@ def test_graph_materialization_markdown_split():
     assert "2026-06-14" not in idx                              # modified date lives in details
     assert long_desc.strip() not in idx                         # description not in index
 
-    # detailed reference: full description, Drive ID, link
+    # detailed reference: full description + Drive ID inline, condensed (no link)
     det = graph.project_details_markdown(pg)
     assert "`1AbC`" in det and long_desc.strip() in det
-    assert "https://drive.google.com/open?id=1AbC" in det
+    assert "drive.google.com" not in det
 
     empty = graph.ProjectGraph(slug="x", name="X", description="", documents=[])
     assert "_No documents mapped yet._" in graph.project_index_markdown(empty)
@@ -140,15 +140,16 @@ def test_project_full_markdown_inlines_docs_repo_and_caps():
             for i in range(graph.INDEX_LIMIT + 5)]
     pg = graph.ProjectGraph(slug="apdict", name="Ascenzio", description="d", documents=docs)
     full = graph.project_full_markdown(pg, [("git@github.com:Peccia/x.git", "x")])
-    # full doc context inline (id + link + per-doc detail), no separate details file needed
-    assert "**ID:**" in full and "https://drive.google.com/open?id=" in full
+    # concise one-line entries: bare document ID inline, no URL (the MCP server resolves by ID)
+    assert "`id" in full
+    assert "drive.google.com" not in full and "**ID:**" not in full
     # repo Workspace Layout names the sibling checkout dir + the clone URL
     assert "## Workspace Layout" in full and "`x/`" in full
     assert "git@github.com:Peccia/x.git" in full
     assert "repository is" in full      # singular phrasing
     # curation cap: at most INDEX_LIMIT entries, with an "…and N more" footer
-    assert full.count("### Doc ") == graph.INDEX_LIMIT
-    assert "and 5 more document(s)" in full
+    assert full.count("- **Doc ") == graph.INDEX_LIMIT
+    assert "and 5 more documents" in full
     # no repo section when the project has no repo
     assert "## Workspace Layout" not in graph.project_full_markdown(pg)
 
@@ -164,6 +165,16 @@ def test_project_full_markdown_multi_repo_workspace_layout():
     assert "repositories are" in full   # plural phrasing
     assert "`frontend/` — `git@github.com:you/frontend.git`" in full
     assert "`backend/` — `git@github.com:you/backend.git`" in full
+
+def test_project_full_markdown_heading_override():
+    """The H1 is the document store's description when supplied; else falls back to the name."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="My Project", description="d", documents=[])
+    store_desc = "Google Workspace suite — the source of truth for user data."
+    assert f"# {store_desc}" in graph.project_full_markdown(pg, heading=store_desc)
+    # no heading → project-name fallback, never the store description
+    fallback = graph.project_full_markdown(pg)
+    assert "# My Project — documents" in fallback
 
 def test_graph_keywords_round_trip():
     """schema:keywords is optional; present → emitted + shown in details; absent → omitted."""
@@ -196,10 +207,10 @@ def test_graph_keywords_round_trip():
     assert d1.keywords == "strategy, Q4"
     assert d2.keywords == ""
 
-    # details file: tags line present for D1, absent for D2
+    # details file: condensed inline tags present for D1, absent for D2
     det = graph.project_details_markdown(pg)
-    assert "**Tags:** strategy, Q4" in det
-    assert det.count("**Tags:**") == 1     # D2 has no tags line
+    assert "· tags: strategy, Q4" in det
+    assert det.count("· tags:") == 1     # D2 has no tags
 
     # index: no tags in the lightweight index
     idx = graph.project_index_markdown(pg)
@@ -239,14 +250,13 @@ def test_graph_web_url_round_trip_and_drive_fallback():
     assert d1.drive_url == "https://example.com/spec"
     assert d2.drive_url == "https://drive.google.com/open?id=ID2"
 
-    # markdown renders the correct link for each document
+    # web_url is preserved in the graph data model but NOT surfaced in the condensed
+    # markdown — the document store resolves by ID, so details renders the bare ID, no URL
     det = graph.project_details_markdown(pg2)
-    assert "https://example.com/spec" in det
-    assert "https://drive.google.com/open?id=ID2" in det
-
-    # label is now neutral **ID:** not **Drive ID:**
-    assert "**ID:**" in det
-    assert "Drive ID" not in det
+    assert "`ID1`" in det and "`ID2`" in det
+    assert "https://example.com/spec" not in det
+    assert "drive.google.com" not in det
+    assert "**ID:**" not in det
 
 def test_graph_web_url_flows_through_bootstrap_to_registry():
     """webUrl from the connector survives files_to_documents → propose_graph_change →
@@ -445,6 +455,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
         "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
         "local_path": {"example-windows": "apdict"}, "agents": [],
         "context": {"assistant": "registry/context/projects/apdict.md"},
+        "document_store": "gws",
     }
     rig.partials["context/projects/apdict.md"] = Partial(
         rel="context/projects/apdict.md", audience=["agents-md"], body="Apdict prose context"
@@ -467,8 +478,12 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert proj.sources and not render.is_generated_source(proj.sources[0])
     assert [s for s, _ in proj.section_bodies if render.is_generated_source(s)], \
         "must carry a generated section tagged for marker-free split"
-    # full doc context is INLINE here (id + link), unlike the lean agents-md/Hermes index
-    assert "https://drive.google.com/open?id=" in proj.content
+    # full doc context is INLINE here (concise: id inline, no URL), unlike the lean
+    # agents-md/Hermes index that lists titles only
+    assert "`1AbCxyz`" in proj.content and "drive.google.com" not in proj.content
+    # the H1 is the bound document store's (gws) description, not "<project> — documents"
+    assert "# Google Workspace suite" in proj.content
+    assert "Ascenzio Predictions — documents" not in proj.content
     # the roster stays wholly generated (no prose, non-adoptable)
     roster = next(o for p, o in win.items() if p.endswith("MitosAgent/AGENTS.md"))
     assert roster.drift_policy == "generated" and roster.sources == []

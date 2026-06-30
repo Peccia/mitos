@@ -404,8 +404,8 @@ def test_project_agents_md_includes_graph_index_and_emits_details():
                and o.deploy_path.endswith(graphmod.DETAILS_FILENAME)]
     assert len(details) == 1, "AGENTS_DETAILS.md must be emitted for projects with a graph"
     det = details[0]
-    assert "EXAMPLE_DRIVE_ID_1" in det.content   # raw ID in details
-    assert "https://drive.google.com/open?id=" in det.content
+    assert "EXAMPLE_DRIVE_ID_1" in det.content   # raw ID in details (condensed, inline)
+    assert "https://drive.google.com/open?id=" not in det.content  # no URL — resolved by ID
     assert det.drift_policy == "generated"
 
 def test_domain_org_skills_deploy_and_domain_line_in_project_agents_md():
