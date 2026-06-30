@@ -12,9 +12,13 @@ from conftest import (
 )
 
 def test_idea_revision_targeting():
-    linux = [o.deploy_path for o in planner.plan_machine(reg, "example-linux")]
+    import copy
+    from agentic.loader import Skill
+    rig = copy.deepcopy(reg)
+    rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
+    linux = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")]
     assert not any("idea-revision" in p for p in linux)        # gemini-only, not hermes
-    win = [o.deploy_path for o in planner.plan_machine(reg, "example-windows")]
+    win = [o.deploy_path for o in planner.plan_machine(rig, "example-windows")]
     assert any("idea-revision.md" in p for p in win)           # emitted as gemini prompt
 
 def test_classify_create_for_absent_path():
@@ -357,7 +361,7 @@ def test_target_filter_deploys_subset_and_preserves_lock():
     files0 = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
                          )["machines"]["example-windows"]["files"]
     assert cmd_deploy(rig, "example-windows", dry_run=False, force=False, root=root,
-                      target="claude-ai") == 0
+                      target="claude-app") == 0
     files1 = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
                          )["machines"]["example-windows"]["files"]
     assert set(files1) == set(files0), "a target-filtered deploy must not drop entries"

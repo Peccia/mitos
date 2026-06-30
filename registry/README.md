@@ -33,7 +33,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 │   └── <name>.md
 ├── prompts/                 ← harness-agnostic reusable prompts
 │   └── <name>.md
-├── projects/                ← project manifests (stage, repo, Drive IDs)
+├── projects/                ← project manifests (stage, repo, document_store)
 │   └── <slug>.yaml
 ├── graph/                   ← knowledge-graph document maps (schema.org JSON-LD)
 │   └── <slug>.jsonld
@@ -53,7 +53,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
 | `agents/<name>.md` | Claude Code subagents (frontmatter + system prompt) | agent name |
 | `prompts/<name>.md` | Harness-agnostic reusable prompts (the substrate every harness understands) | prompt name |
-| `projects/<slug>.yaml` | Project manifests — stage, repo, Drive IDs, bound skills/agents | project slug |
+| `projects/<slug>.yaml` | Project manifests — stage, repo, document_store, bound skills/agents | project slug |
 | `graph/<slug>.jsonld` | Per-project document maps (where each authoritative doc lives) | project slug |
 | `machines/<name>.yaml` | Per-host profiles: targets, path keys, and the `sync:` block | machine `name` |
 | `connections/servers.yaml` | MCP server overrides (e.g. a server reachable over your LAN) | server key |
@@ -92,9 +92,8 @@ document_store: gws           # optional; an MCP server from connections/servers
 local_path:
   windows-main: acme          # per-machine checkout dir (relative → under that machine's projects_root)
   linux-box: ~/code/acme      # absolute (~, /, or D:/…) passes through unchanged
-drive:                        # optional Google Drive collaboration footprint
-  root_folder: "0AbCd…"
-  artifacts: { spec: "1Xy…" }
+exclude_folders:              # optional; folder names or IDs to skip during `mitos connect` staging
+  - Archive
 skills: [plan]                # optional; each skill must exist AND target claude-code
 agents: [code-reviewer]       # optional; each agent must exist in registry/agents/
 context:                      # label → registry-relative partial (must resolve to a real file)
@@ -110,14 +109,14 @@ context:                      # label → registry-relative partial (must resolv
 | `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `agents-md`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **Hermes machines** (`agents-md` also in targets), it clones into `<agentic_context_root>/Projects/<slug>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
-| `drive` | no | Google Drive IDs for the project's collaboration footprint — `root_folder` plus an `artifacts` map of named folders/docs. Empty `{}` for git-only projects. |
+| `exclude_folders` | no | List of folder **names or IDs** to skip during `mitos connect` staging. Merged with any `exclude_folders` defined on the server in `connections/servers.yaml` (server entries first, then project entries, deduped). |
 | `skills` | no | Skills bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/skills/`). Each must exist **and** list `claude-code` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
 | `agents` | no | Subagents bound to this project's checkout (`.claude/agents/`). Each must exist in `registry/agents/`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
 > it replaces the core manifest wholesale (last-layer-wins) — useful for pointing a public example
-> project at your own repo and Drive without editing tracked files.
+> project at your own repo without editing tracked files.
 
 ### Machine profile — `machines/<name>.yaml`
 
@@ -129,13 +128,13 @@ but each box deploys only its own with `deploy --machine <name>`.
 ```yaml
 name: windows-main            # unique; this is the `deploy --machine` target
 os: windows                   # windows | linux | darwin — deploy REFUSES on a host whose OS differs
-targets: [claude-code, gemini, claude-ai, agents-md, claude-desktop]   # which adapters emit here
+targets: [claude-code, gemini, claude-app, agents-md]   # which adapters emit here
 paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
   agentic_context_root: "C:/Mitos"      # where the graph-derived AGENTS.md roster + Projects/<slug>/ land
   gemini_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/skills"
-  claude_ai_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
+  claude_skills_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
   gws_env: ".local/gws.env"             # <server>_env → where a merged MCP env file is written
 sync:                                   # optional — consumed only by `mitos sync`, never the compiler
   backend: git                          # git is the only backend (may be omitted)
@@ -150,7 +149,7 @@ sync:                                   # optional — consumed only by `mitos s
 |---|---|---|
 | `name` | **yes** | Unique host identity and the `deploy --machine` selector. Two files claiming one name are refused (no silent shadowing). |
 | `os` | **yes (in practice)** | `windows` \| `linux` \| `darwin`. A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
-| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `gemini`, `claude-ai`, `agents-md`, `hermes`, `claude-desktop`); an unknown one aborts compile. |
+| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `gemini`, `claude-app`, `agents-md`, `hermes`); an unknown one aborts compile. |
 | `paths` | **yes** | Map of named locations the targets write to (see the key list below). Values use **forward slashes** even on Windows — an unescaped `\` shows up as a control character and is rejected with a pointed error. |
 | `example` | no | `true` marks a shipped *template* profile (skipped by compile once a real machine exists, refused by a real deploy). Must be a bool if present. Your own profiles omit it. |
 | `sync` | no | How `mitos sync` reaches the overlay hub. Git-only: `sync.git.hub` is required whenever the block exists; `remote`, `branch`, `ssh_key` are optional. The compiler validates only its *shape* — it never imports the sync code (the deterministic verbs stay offline). |
@@ -163,8 +162,8 @@ sync:                                   # optional — consumed only by `mitos s
 | `agentic_context_root` | claude-code (Hermes machines) | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on **Hermes machines** (`agents-md` in `targets`). On pure workstation machines (without `agents-md`), project AGENTS.md files deploy directly to each project's `local_path` instead — `agentic_context_root` is not required. |
 | `gemini_config` | gemini | Gemini CLI / Antigravity config dir (`mcp_config.json` + `config.json`). |
 | `antigravity_skills` | gemini | Antigravity's native skill dir (`~/.gemini/skills/`). Skills and prompts targeting `gemini` deploy here. |
-| `claude_desktop_config` | claude-desktop | Full path to `claude_desktop_config.json`. Set to enable Desktop MCP wiring. Windows default: `%APPDATA%/Claude/claude_desktop_config.json`. |
-| `claude_ai_staging` | claude-ai | Where skill `.zip` bundles are staged for **manual** upload to claude.ai. |
+| `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). |
+| `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |
 | `hermes_home`, `hermes_config` | hermes | Hermes home and its `config.yaml` (surgically merged, never overwritten). |
 | `assistant_root` | hermes | Where Hermes's deployed context lands. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
@@ -180,7 +179,7 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
-- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the full document index: Drive IDs, links, modified dates, descriptions, and tags, all inline. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
+- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
 - **`<local_path>/CLAUDE.md`** — a thin `@AGENTS.md` stub so Claude Code auto-loads the full context above.
 
 A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.

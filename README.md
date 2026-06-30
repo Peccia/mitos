@@ -112,6 +112,13 @@ build/.venv/Scripts/python.exe build/compile.py review
 >
 > In later commands, `python build/...` is used as shorthand for the virtual environment interpreter (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`). Ensure you use the venv path when running them.
 
+> [!TIP]
+> **Staying up to date.** When you run `mitos.py init` or `mitos.py sync`, Mitos checks whether
+> your compiler (`build/`) is behind the official repo and prints a notice if so. Update with
+> `git pull origin main`. Your private overlay (`registry/local/`) is gitignored, so pulling never
+> touches your own data. To silence the check, set `compiler_sync: false` in your machine
+> profile's `sync:` block.
+
 For indexing documents and setting up external document stores (like Google Workspace), see the **[Knowledge Graph & Connectors Guide](docs/connectors/README.md)**.
 
 
@@ -352,7 +359,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # the moat — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-ai, claude-desktop)
+targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

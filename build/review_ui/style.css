@@ -349,6 +349,36 @@ button.tiny.danger:hover:not(:disabled) { border-color: var(--bad); }
 .card-head code { font-family: var(--mono); font-size: .85rem; }
 .card-note { padding: 0 .9rem .4rem; }
 .accept-note { padding: .4rem .9rem; color: var(--warn); font-size: .85rem; }
+.accept-note.warning-callout {
+  margin: .4rem .9rem;
+  padding: .75rem 1rem;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  color: var(--warn);
+  font-size: .85rem;
+  line-height: 1.45;
+}
+.accept-note.warning-callout .callout-title {
+  font-weight: bold;
+  margin-bottom: .4rem;
+}
+.accept-note.warning-callout p {
+  margin: 0 0 .4rem 0;
+}
+.accept-note.warning-callout p:last-child {
+  margin-bottom: 0;
+}
+.accept-note.warning-callout ul {
+  margin: .25rem 0 .5rem 1.25rem;
+  padding: 0;
+}
+.accept-note.warning-callout li {
+  margin-bottom: .2rem;
+}
+.accept-note.warning-callout code {
+  font-family: var(--mono);
+}
 .card-actions {
   display: flex;
   align-items: center;

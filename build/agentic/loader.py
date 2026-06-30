@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-ai", "claude-desktop"}
+KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 
 # Mitos overlay (the Mitos overlay design): registry/local/ is the gitignored personal
@@ -160,7 +160,7 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
-def load(root: Path) -> Registry:
+def load(root: Path, ignore_local: bool = False) -> Registry:
     reg_dir = root / "registry"
     if not reg_dir.is_dir():
         raise RegistryError(f"no registry/ directory at {root}")
@@ -178,7 +178,7 @@ def load(root: Path) -> Registry:
     # to core-only, so this is purely additive. Overlay entries carry a `local/` rel prefix so
     # their real file location (and adopt routing) point back into registry/local/.
     local_dir = reg_dir / LOCAL_OVERLAY
-    if local_dir.is_dir():
+    if local_dir.is_dir() and not ignore_local:
         pfx = f"{LOCAL_OVERLAY}/"
         partials = _overlay(partials, _load_partials(local_dir, prefix=pfx))
         skills = _overlay(skills, _load_skills(local_dir, prefix=pfx))
@@ -200,7 +200,7 @@ def load(root: Path) -> Registry:
     # Mitos overlay for machines and connections: same last-layer-wins contract as
     # partials/skills/projects. Private machine profiles with real hostnames/IPs and
     # server configs with LAN addresses live in registry/local/ (gitignored).
-    if local_dir.is_dir():
+    if local_dir.is_dir() and not ignore_local:
         local_machines_dir = local_dir / "machines"
         if local_machines_dir.is_dir() and any(local_machines_dir.glob("*.yaml")):
             machines = _overlay(machines, _load_dir_of_yaml(local_machines_dir, key="name"))
@@ -490,14 +490,13 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(
                     f"project {slug}: document_store {ds!r} is not a known MCP server; "
                     f"known: {sorted(known)}")
-        # exclude_folders (optional) under drive: lists folder names or IDs to skip during
-        # knowledge-graph staging. Each entry must be a non-empty string.
-        drive_block = proj.get("drive") or {}
-        ef = drive_block.get("exclude_folders")
+        # exclude_folders (optional) — folder names or IDs to skip during staging.
+        # Each entry must be a non-empty string.
+        ef = proj.get("exclude_folders")
         if ef is not None:
             if not isinstance(ef, list) or not all(isinstance(x, str) and x for x in ef):
                 raise RegistryError(
-                    f"project {slug}: drive.exclude_folders must be a list of non-empty strings "
+                    f"project {slug}: exclude_folders must be a list of non-empty strings "
                     f"(folder names or IDs to skip during staging)")
     # every project graph maps to a real project manifest
     for slug in reg.graphs:

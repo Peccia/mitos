@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from . import loader, render
-from .commands import _now, route_into_registry
+from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
 from .planner import plan_machine
@@ -56,7 +56,7 @@ def load_candidates(reg: Registry) -> list[dict]:
         payload = (payload_file.read_text(encoding="utf-8", errors="replace")
                    if payload_file else "")
         current, proposed, acceptable, note = _bodies(reg, meta, payload)
-        # For graph candidates, surface the target project, the Drive IDs the fragment
+        # For graph candidates, surface the target project, the document IDs the fragment
         # proposes, and the IDs it removes, so the Knowledge Graph tab can flag in-flight
         # documents without parsing the jsonld (and its IRI scheme) client-side. Empty for
         # non-graph candidates.
@@ -80,13 +80,16 @@ def load_candidates(reg: Registry) -> list[dict]:
             "acceptable": acceptable,
             "accept_note": note,
             "stale": _stale(reg, meta),
+            # the real (overlay-aware) registry files a manual resolution must edit —
+            # a partial overridden by the local overlay routes to its registry/local/ path
+            "sources": [_real_registry_rel(reg, s) for s in (meta.get("sources") or [])],
         })
     return out
 
 
 def _graph_candidate_targets(reg: Registry, meta: dict,
                              payload: str) -> tuple[str, list[str], list[str], list[str], list[str]]:
-    """(project_slug, [upserted_drive_id, …], [removed_drive_id, …],
+    """(project_slug, [upserted_doc_id, …], [removed_doc_id, …],
         [upserted_effort_id, …], [removed_effort_id, …]) a graph candidate proposes;
     ("", [], [], [], []) for non-graph. Removals live in meta (the fragment carries only
     upserts), so removed docs/efforts are flagged in-flight just like upserted ones."""
@@ -113,7 +116,8 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         if slug not in reg.projects:
             return "", payload, False, f"unknown project {slug!r} for graph candidate"
         try:
-            merged = _merged_graph(reg, slug, payload, meta.get("removals"))
+            merged = _merged_graph(reg, slug, payload, meta.get("removals"),
+                                   meta.get("effort_removals"))
         except graphmod.GraphError as e:
             return "", payload, False, f"invalid graph fragment: {e}"
         current = (graphmod.canonical_jsonld(reg.graphs[slug])
@@ -377,7 +381,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     Writes only inbox/, never registry/ (invariant #3).
 
     `documents` is a list of {id, name, description, dateModified, parentId?} to upsert;
-    `removals` is a list of Drive IDs to drop. `efforts` is a list of {id, name,
+    `removals` is a list of document IDs to drop. `efforts` is a list of {id, name,
     description} to upsert; `effort_removals` is a list of effort IDs to remove.
     A candidate may carry only removals (no upserts). `parentId` in a document dict is
     the effort ID (or "" / omitted for project root).
@@ -667,7 +671,7 @@ def graph_index(reg: Registry) -> list[dict]:
     has_local = any(p.get("_is_local") for p in reg.projects.values())
     slugs = sorted(
         s for s, p in reg.projects.items()
-        if (not has_local or p.get("_is_local")) and (p.get("drive") or {})
+        if not has_local or p.get("_is_local")
     )
     from . import graph as graphmod
     for slug in slugs:
@@ -787,7 +791,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             self.wfile.write(data)
 
         def log_message(self, fmt, *args):
-            if "/api/decide" in (args[0] if args else ""):
+            if args and isinstance(args[0], str) and "/api/decide" in args[0]:
                 print(f"  {args[0]}")
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)

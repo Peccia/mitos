@@ -629,8 +629,10 @@ def cmd_adopt(reg: Registry, path: str) -> int:
     elif len(o.sources) == 1:
         changed, warnings, err = route_into_registry(reg, o.sources[0], live)
     else:
-        print("no per-section record for this file — resolve by editing the registry "
-              "partials directly.")
+        print("error: cannot adopt multi-source file without a lockfile section map.")
+        print("To resolve, review the changes on disk and manually edit the registry partials:")
+        for src in o.sources:
+            print(f"  - registry/{_real_registry_rel(reg, src)}")
         return 1
     for w in warnings:
         print(f"  warn: {w}")

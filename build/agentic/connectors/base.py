@@ -82,6 +82,23 @@ def get_connector(name: str, root=None) -> WorkspaceConnector:
     return getattr(mod, cls_name)(root=root)
 
 
+def _active_machine(root) -> str | None:
+    if root is None:
+        return None
+    try:
+        import subprocess
+        from pathlib import Path
+        overlay_dir = Path(root) / "registry" / "local"
+        if overlay_dir.is_dir():
+            res = subprocess.run(["git", "-C", str(overlay_dir), "config", "mitos.machine"],
+                                 capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                return res.stdout.strip() or None
+    except Exception:
+        pass
+    return None
+
+
 def connector_for_store(reg, store: str, root=None) -> WorkspaceConnector:
     """Build the connector that backs a project's document store (its `document_store` — a
     server name from connections/servers.yaml, or ``"none"``/unset).
@@ -106,7 +123,11 @@ def connector_for_store(reg, store: str, root=None) -> WorkspaceConnector:
     enum = server.get("graph_enum")
     if enum:
         from .mcp import MCPConnector
-        return MCPConnector(root=root, endpoint=server.get("url"), enum=enum,
+        url = server.get("url")
+        machine_name = _active_machine(root)
+        if machine_name:
+            url = (server.get("urls") or {}).get(machine_name, url)
+        return MCPConnector(root=root, endpoint=url, enum=enum,
                             server_name=store)
     if store in _REGISTRY:
         return get_connector(store, root=root)

@@ -108,15 +108,14 @@ excluded — if `Archive` has sub-folders, their contents are also skipped.
 
 ### At the project level (applies only to that project)
 
-Add a `drive:` block to the project manifest:
+Add `exclude_folders:` directly to the project manifest:
 
 ```yaml
 # registry/local/projects/<slug>.yaml
 document_store: gws
-drive:
-  exclude_folders:
-    - Drafts
-    - 1BxyzDriveID   # Drive IDs also accepted
+exclude_folders:
+  - Drafts
+  - 1BxyzDriveID   # store IDs also accepted
 ```
 
 Both lists are **merged** at connect time (project entries are appended to server entries, with

@@ -22,7 +22,7 @@ Guides for configuring Mitos to deploy custom context, skills, and prompts into 
 
 - **[Claude Code target](targets/claude-code.md)** — Integrating per-project `CLAUDE.md`, subagents, skills, and slash-command prompts.
 - **[Gemini CLI target](targets/gemini-cli.md)** — Configuring MCP server access, tool permissions, and global/project-level context.
-- **[Claude Desktop target](targets/claude-desktop.md)** — Deploying MCP configurations directly to your Desktop app.
+- **[Claude app target](targets/claude-app.md)** — The claude.ai account surface (web + Desktop): staging skill zips for manual upload, and the `npx mcp-remote` bridge for LAN/HTTP MCP servers on Desktop.
 - **[Antigravity target](targets/antigravity.md)** — IDE-level integration, native `AGENTS.md` context, and skill delivery.
 
 ---

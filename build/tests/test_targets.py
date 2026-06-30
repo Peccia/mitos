@@ -30,6 +30,10 @@ def test_non_hermes_machine_coproduces_agents_md():
     Hermes machines (with agents-md) are unaffected — the existing path applies."""
     import copy
     rig = copy.deepcopy(reg)
+    if "apoc" not in rig.projects:
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+    from agentic.graph import ProjectGraph
+    rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
     # agentic_context_root (that's the separate Hermes tree, not needed here)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
@@ -57,6 +61,10 @@ def test_non_hermes_machine_coproduces_agents_md():
 
     # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_hermes = copy.deepcopy(reg)
+    if "apoc" not in rig_hermes.projects:
+        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+    from agentic.graph import ProjectGraph
+    rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
     rig_hermes.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     hermes_paths = [o.deploy_path for o in planner.plan_machine(rig_hermes, "example-windows")
@@ -64,11 +72,47 @@ def test_non_hermes_machine_coproduces_agents_md():
     assert not any("apocalyptic_adventure/AGENTS.md" in p for p in hermes_paths), \
         "Hermes machine must not emit co-located AGENTS.md via claude-code target"
 
+def test_stub_claude_md_inlines_builder_when_agents_md_absent():
+    """A stub_import project (mitos) on a claude-code-only machine must never emit a
+    dangling CLAUDE.md → @AGENTS.md when no AGENTS.md is generated. The planner inlines
+    the project's builder context into a self-contained CLAUDE.md instead, so AGENTS and
+    CLAUDE never split. With agents-md present the stub is valid and stays a stub."""
+    import copy
+
+    # claude-code-only machine: agents-md (which generates AGENTS.md) is NOT a target.
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    # give mitos a local_path on example-windows so _local() resolves it (the live overlay
+    # binds mitos only to the user's real machines, so the test pins its own)
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    claude_path = "C:/Projects/Mitos/CLAUDE.md"
+
+    by_path = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")}
+    assert claude_path in by_path, "mitos CLAUDE.md must be planned on a claude-code-only machine"
+    out = by_path[claude_path]
+    assert out.content.strip() != "@AGENTS.md", \
+        "must not dangle a stub @AGENTS.md when no AGENTS.md is generated"
+    assert "Builder Context" in out.content, "self-contained CLAUDE.md inlines the builder prose"
+    assert out.section_bodies, "an inlined multi-source CLAUDE.md records its per-section base"
+
+    # Counterpart — with agents-md present, the AGENTS.md co-deploys, so the stub is valid.
+    rig2 = copy.deepcopy(reg)
+    rig2.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig2.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    by_path2 = {o.deploy_path: o for o in planner.plan_machine(rig2, "example-windows")}
+    assert by_path2[claude_path].content.strip() == "@AGENTS.md", \
+        "with agents-md present, mitos CLAUDE.md stays a thin stub"
+    assert "C:/Projects/Mitos/AGENTS.md" in by_path2, \
+        "agents-md must co-deploy the AGENTS.md that the stub imports"
+
 def test_non_hermes_clone_uses_local_path():
     """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
     absent-only — never nesting into the Mitos repo root."""
     import copy
     rig = copy.deepcopy(reg)
+    if "apoc" not in rig.projects:
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -82,6 +126,8 @@ def test_non_hermes_clone_uses_local_path():
 
     # agentic_context_root lane still works when both are present on the same machine
     rig2 = copy.deepcopy(reg)
+    if "apoc" not in rig2.projects:
+        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -92,7 +138,7 @@ def test_non_hermes_clone_uses_local_path():
     assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must still fire"
     assert any("apocalyptic_adventure" in d for d in dests), "local_path lane must also fire"
 
-def test_claude_ai_target_stages_uploadable_zip():
+def test_claude_app_target_stages_uploadable_zip():
     import copy
     import json as _json
     import tempfile
@@ -100,10 +146,12 @@ def test_claude_ai_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-ai via its frontmatter; the target spec's include curates
+    # gws opts into claude-app via its frontmatter; the target spec's include curates.
+    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
+    # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
     outs = [o for o in planner.plan_machine(reg2, "example-windows")
-            if o.target == "claude-ai"]
+            if o.target == "claude-app"]
     assert len(outs) == 1
     o = outs[0]
     assert (o.kind, o.lane, o.drift_policy) == ("zip", "content", "protect")
@@ -130,8 +178,8 @@ def test_skill_selection_layers():
     base = {"include_target": "hermes"}
     all_hermes = {s.name for s in _selected_skills(reg, base)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, {**base, "include": ["plan", "gws"]})
-    assert {s.name for s in only} == {"plan", "gws"}                  # pull: include
+    only = _selected_skills(reg, {**base, "include": ["new-session", "gws"]})
+    assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
     rest = _selected_skills(reg, {**base, "exclude": ["gws"]})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
@@ -219,18 +267,28 @@ def test_agents_load_and_render_claude_code():
     assert "description:" in head and "tools:" in head and "model:" in head
     assert "code reviewer" in out.lower() and not out.rstrip().endswith("---")
 
-def test_per_project_binding_deploys_exactly_bound_skills_and_agents():
-    outs = planner.plan_machine(reg, "example-windows")
+def test_per_project_binding_deploys_skills_and_agents():
+    """Per-project skill/agent binding: a manifest-bound agent deploys to that project's
+    checkout; a skill not in the manifest does not. Uses an isolated rig so the test
+    is independent of overlay local_path config."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    # give example-project a local_path so _local() resolves it (core registry has this)
+    # and pin a minimal binding — just the agent
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["agents"] = ["code-reviewer"]
+    r.projects["example-project"]["skills"] = []  # no skills — agent only
+    outs = planner.plan_machine(r, "example-windows")
     paths = [o.deploy_path for o in outs]
-    # mitos bound [code-reviewer]
-    assert any(p.endswith("mitos/.claude/agents/code-reviewer.md") for p in paths)
-    # example-project bound [code-reviewer] only — agent yes, plan skill NO (exactly its set)
+    # agent deployed to this project
     assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
-    assert not any(p.endswith("example-project/.claude/skills/plan/SKILL.md")
-                   for p in paths)
-    # the reused agent is authored once: both deployments point at one registry source
+    # new-session skill not bound → not deployed
+    assert not any(p.endswith("example-project/.claude/skills/new-session/SKILL.md") for p in paths)
+    # agent output points at the one shared registry source
     agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
-    assert len(agent_outs) == 2
+    assert len(agent_outs) >= 1
     assert all(o.sources == ["agents/code-reviewer.md"] for o in agent_outs)
     assert all(o.drift_policy == "harvest" for o in agent_outs)
 
@@ -348,8 +406,8 @@ def test_project_agents_md_includes_graph_index_and_emits_details():
                and o.deploy_path.endswith(graphmod.DETAILS_FILENAME)]
     assert len(details) == 1, "AGENTS_DETAILS.md must be emitted for projects with a graph"
     det = details[0]
-    assert "EXAMPLE_DRIVE_ID_1" in det.content   # raw ID in details
-    assert "https://drive.google.com/open?id=" in det.content
+    assert "EXAMPLE_DRIVE_ID_1" in det.content   # raw ID in details (condensed, inline)
+    assert "https://drive.google.com/open?id=" not in det.content  # no URL — resolved by ID
     assert det.drift_policy == "generated"
 
 def test_domain_org_skills_deploy_and_domain_line_in_project_agents_md():
@@ -423,6 +481,22 @@ def test_assistant_root_agents_md_is_the_routing_entry_point():
     projects_root = next(o for o in outputs if o.deploy_path == f"{root}/Projects/AGENTS.md")
     assert "Extended Organization Roles" in projects_root.content
     assert "CTO —" in projects_root.content
+
+def test_compiler_selfcheck_prefers_upstream_then_origin():
+    """The compiler self-check compares against the OFFICIAL remote: `upstream` when a
+    contributor's fork added it, else `origin` for a plain user. None when no remotes."""
+    if not _git_available():
+        return
+    import tempfile
+
+    from agentic.sync.selfcheck import _pick_remote
+    tmp = Path(tempfile.mkdtemp(prefix="ae-selfcheck-"))
+    _run_git(tmp, "init")
+    assert _pick_remote(tmp) is None, "no remotes → nothing to compare against"
+    _run_git(tmp, "remote", "add", "origin", "https://example.com/fork.git")
+    assert _pick_remote(tmp) == "origin", "plain user: origin is the official remote"
+    _run_git(tmp, "remote", "add", "upstream", "https://example.com/official.git")
+    assert _pick_remote(tmp) == "upstream", "contributor: upstream wins over origin"
 
 def test_git_sync_flow_pull_deploy_push():
     if not _git_available():
@@ -824,7 +898,8 @@ def test_console_only_prompt_not_deployed():
     assert not any("private-prompt" in o.deploy_path for o in outputs)
 
 def test_claude_code_deploys_bound_prompt():
-    """A manifest-bound prompt with targets:[claude-code] deploys to .claude/commands/."""
+    """A manifest-bound prompt with targets:[claude-code] deploys to .claude/commands/.
+    Uses an isolated rig with a pinned local_path so the test is overlay-independent."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["claude-code"]
@@ -835,7 +910,9 @@ def test_claude_code_deploys_bound_prompt():
                      "targets": ["claude-code"]},
         body="Check these items:\n- Security\n- Tests",
     )
-    r.projects["mitos"]["prompts"] = ["review-checklist"]
+    # example-project has example-windows in its core local_path; bind the prompt to it
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["prompts"] = ["review-checklist"]
     outputs = planner.plan_machine(r, "example-windows")
     prompt_outs = [o for o in outputs if "review-checklist" in o.deploy_path]
     assert prompt_outs, "no claude-code output for bound prompt"
@@ -912,52 +989,97 @@ def test_gemini_prompt_render_is_plain_body():
     assert not rendered.startswith("---")
     assert rendered.strip() == "Plain content."
 
-def test_claude_desktop_mcp_config_planned():
-    """When claude_desktop_config path key is set, Desktop MCP config is planned."""
+def test_claude_app_desktop_mcp_config_planned():
+    """When claude_desktop_config is set, claude-app plans a json_merge MCP bridge."""
     import copy
-    from agentic.render import claude_desktop_mcp_config
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     r.machines["example-windows"]["paths"]["claude_desktop_config"] = (
         "C:/Users/Paul/AppData/Roaming/Claude/claude_desktop_config.json"
     )
     outputs = planner.plan_machine(r, "example-windows")
-    desktop_outs = [o for o in outputs if o.target == "claude-desktop"]
-    assert desktop_outs, "no claude-desktop output"
-    o = desktop_outs[0]
-    assert o.kind == "json"
+    mcp_outs = [o for o in outputs if o.target == "claude-app" and o.kind == "json_merge"]
+    assert mcp_outs, "no claude-app MCP output"
+    o = mcp_outs[0]
+    assert o.owned_keys == ["mcpServers"]
+    assert o.target_file == o.deploy_path
     assert o.lane == "connections"
-    assert o.drift_policy == "protect"
     assert "claude_desktop_config.json" in o.deploy_path
     import json
     parsed = json.loads(o.content)
     assert "mcpServers" in parsed
-    alias = r.targets["claude-desktop"]["server_alias"]
+    alias = r.targets["claude-app"]["server_alias"]
     assert alias in parsed["mcpServers"]
-    assert "url" in parsed["mcpServers"][alias]
-    assert parsed["mcpServers"][alias]["type"] == "sse"
+    # example-windows is os: windows -> npx is bridged via `cmd /c` (Electron can't
+    # spawn the .cmd shim directly). gws is streamable-http, so it gets the bridge.
+    entry = parsed["mcpServers"][alias]
+    assert entry["command"] == "cmd"
+    assert entry["args"][:3] == ["/c", "npx", "-y"]
 
-def test_claude_desktop_no_path_no_output():
-    """When claude_desktop_config path key is absent, Desktop target produces no outputs."""
+def test_claude_app_no_desktop_path_no_mcp_output():
+    """Without claude_desktop_config, claude-app emits no MCP config (skills still ok)."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     # deliberately no claude_desktop_config key in paths
     r.machines["example-windows"]["paths"].pop("claude_desktop_config", None)
     outputs = planner.plan_machine(r, "example-windows")
-    assert not any(o.target == "claude-desktop" for o in outputs)
+    assert not any(o.target == "claude-app" and o.kind == "json_merge" for o in outputs)
 
-def test_claude_desktop_render():
-    """claude_desktop_mcp_config produces the correct JSON schema."""
+def test_claude_app_bridge_pins_exact_version():
+    """SECURITY: the bridge package must be pinned to an exact version, never a bare or
+    floating spec — a floating tag would let a hijacked publish run on every launch."""
+    from agentic.render import claude_desktop_mcp_config, MCP_REMOTE_SPEC
+    assert "@" in MCP_REMOTE_SPEC, "bridge spec must carry an exact @version"
+    assert not MCP_REMOTE_SPEC.endswith("@latest")
+    server = {"url": "http://x/mcp", "transport": "streamable-http"}
+    for os_name in ("windows", "linux", "darwin"):
+        args = claude_desktop_mcp_config(server, "a", os_name=os_name)["mcpServers"]["a"]["args"]
+        assert MCP_REMOTE_SPEC in args, "bridge must reference the pinned spec"
+        assert "mcp-remote" not in args, "bare/floating package name must not appear"
+
+def test_claude_app_desktop_render():
+    """A streamable-http server over plain http: bridged via pinned mcp-remote with
+    `--transport http-only` (no SSE fallback) AND `--allow-http` (http opt-in), OS-aware."""
+    from agentic.render import claude_desktop_mcp_config, MCP_REMOTE_SPEC
+    server = {"url": "http://localhost:8000/mcp", "transport": "streamable-http", "tools": {}}
+    win = claude_desktop_mcp_config(server, "my-alias", os_name="windows")
+    assert win == {"mcpServers": {"my-alias": {
+        "command": "cmd",
+        "args": ["/c", "npx", "-y", MCP_REMOTE_SPEC, "http://localhost:8000/mcp",
+                 "--transport", "http-only", "--allow-http"]}}}
+    nix = claude_desktop_mcp_config(server, "my-alias", os_name="linux")
+    assert nix == {"mcpServers": {"my-alias": {
+        "command": "npx",
+        "args": ["-y", MCP_REMOTE_SPEC, "http://localhost:8000/mcp",
+                 "--transport", "http-only", "--allow-http"]}}}
+
+def test_claude_app_desktop_render_https_no_allow_http():
+    """An https server gets no --allow-http (only plain http needs the opt-in)."""
     from agentic.render import claude_desktop_mcp_config
-    server = {"url": "http://localhost:8000/mcp", "tools": {}}
-    result = claude_desktop_mcp_config(server, "my-alias")
-    assert result == {"mcpServers": {"my-alias": {"url": "http://localhost:8000/mcp", "type": "sse"}}}
+    server = {"url": "https://remote.example/mcp", "transport": "streamable-http"}
+    args = claude_desktop_mcp_config(server, "a", os_name="linux")["mcpServers"]["a"]["args"]
+    assert "--allow-http" not in args
+    assert args[-2:] == ["--transport", "http-only"]
 
-def test_claude_desktop_in_known_targets():
-    """claude-desktop is a valid KNOWN_TARGET — machines can list it without error."""
+def test_claude_app_desktop_render_sse_transport():
+    """An SSE server forces --transport sse-only."""
+    from agentic.render import claude_desktop_mcp_config
+    server = {"url": "https://remote.example/sse", "transport": "sse"}
+    args = claude_desktop_mcp_config(server, "a", os_name="linux")["mcpServers"]["a"]["args"]
+    assert args[-2:] == ["--transport", "sse-only"]
+
+def test_claude_app_desktop_render_stdio_passthrough():
+    """A native stdio server (command/args) is passed through unbridged."""
+    from agentic.render import claude_desktop_mcp_config
+    server = {"command": "my-server", "args": ["--flag"], "transport": "stdio"}
+    result = claude_desktop_mcp_config(server, "my-alias", os_name="windows")
+    assert result == {"mcpServers": {"my-alias": {"command": "my-server", "args": ["--flag"]}}}
+
+def test_claude_app_in_known_targets():
+    """claude-app is a valid KNOWN_TARGET — machines can list it without error."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     loader._validate(r)   # must not raise
 

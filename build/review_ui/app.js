@@ -90,19 +90,24 @@ function safeRender(box, fn) {
 }
 
 async function sendDecision(id, decision, reason) {
-  const res = await fetch("/api/decide", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, decision, reason }),
-  });
-  const out = await res.json();
-  if (out.ok) {
-    const routed = (out.changed || []).length
-      ? ` → registry/${out.changed.join(", registry/")}` : "";
-    toast(`${decision === "accept" ? "Accepted" : "Rejected"} ${id}${routed} — review git status, then commit.`, 4200);
-    await refresh();
-  } else {
-    toast(`Error: ${out.error}`, 5000);
+  try {
+    const res = await fetch("/api/decide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, decision, reason }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      const routed = (out.changed || []).length
+        ? ` → registry/${out.changed.join(", registry/")}` : "";
+      toast(`${decision === "accept" ? "Accepted" : "Rejected"} ${id}${routed} — review git status, then commit.`, 4200);
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to send decision: ${err.message || err}`, 6000);
   }
 }
 
@@ -169,7 +174,29 @@ function candidateCard(c) {
 
   if (c.note) card.append(el("div", "card-note muted", c.note));
   if (c.accept_note && !c.accept_note.startsWith("new file")) {
-    card.append(el("div", "accept-note", c.accept_note));
+    if (!c.acceptable) {
+      const noteDiv = el("div", "accept-note warning-callout");
+      noteDiv.append(el("div", "callout-title", "⚠️ Action Required: Manual Resolution"));
+
+      const desc = el("div", "callout-body");
+      desc.append(el("p", "", c.accept_note));
+
+      if (c.sources && c.sources.length > 0) {
+        desc.append(el("p", "", "This file is compiled from the following registry sources — edit these by hand:"));
+        const list = el("ul");
+        c.sources.forEach((src) => {
+          const li = el("li");
+          li.append(el("code", "", `registry/${src}`));
+          list.append(li);
+        });
+        desc.append(list);
+      }
+
+      noteDiv.append(desc);
+      card.append(noteDiv);
+    } else {
+      card.append(el("div", "accept-note", c.accept_note));
+    }
   }
 
   card.append(diffTable(c.diff));
@@ -337,7 +364,7 @@ async function loadStaged(slug) {
   }
 }
 
-// Drive IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
+// Document IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
 // for this project (upsert OR removal) can't be drafted again until it's accepted/rejected.
 function pendingDocIds(slug) {
   const ids = new Set();
@@ -977,18 +1004,23 @@ async function proposeGraphDraft() {
     toast("No changes to propose."); return;
   }
   const reason = $("graph-dock-reason").value.trim();
-  const res = await fetch("/api/graph", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug, documents, removals, efforts, effortRemovals, reason }),
-  });
-  const out = await res.json();
-  if (out.ok) {
-    toast(`Proposed → inbox/${out.id}. Review and Accept in the Inbox tab.`, 5000);
-    draftClear(slug);
-    $("graph-dock-reason").value = "";
-    await refresh();
-  } else {
-    toast(`Error: ${out.error}`, 5000);
+  try {
+    const res = await fetch("/api/graph", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, documents, removals, efforts, effortRemovals, reason }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id}. Review and Accept in the Inbox tab.`, 5000);
+      draftClear(slug);
+      $("graph-dock-reason").value = "";
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to propose changes: ${err.message || err}`, 6000);
   }
 }
 

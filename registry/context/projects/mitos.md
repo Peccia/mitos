@@ -3,6 +3,10 @@ audience: [claude-code, agents-md]
 ---
 # Mitos — Builder Context
 
+> **Context dedup:** this file compiles into both `AGENTS.md` (at the project root) and `CLAUDE.md`
+> (on machines without a co-deployed `AGENTS.md`). If this content is already present in your
+> loaded `AGENTS.md`, do not re-read `registry/context/projects/mitos.md` — it is the same source.
+
 You are working on the **Mitos** repo itself: the registry and compiler that materialize an
 agent organization across tools. Mitos manages itself — this file is authored at
 `registry/context/projects/mitos.md` and compiled into the root `AGENTS.md`. **Read
@@ -92,11 +96,12 @@ agent organization across tools. Mitos manages itself — this file is authored 
 | A Claude Code subagent | `registry/agents/<name>.md` (subagent frontmatter: `name`, `description`, optional `tools`/`model` + system-prompt body) — authored once, reused across projects |
 | Which skills/agents a project's Claude Code checkout gets | `skills:`/`agents:` lists in `registry/projects/<slug>.yaml`; a bound skill must also target `claude-code`. Deployed to `<checkout>/.claude/skills/` and `.claude/agents/` |
 | Auto-clone a project's repo | set the project's `repo:` in `registry/projects/<slug>.yaml` — either a single git URL string or a list of git URL strings. Each URL is cloned (clone-if-absent, non-destructive) into its own `<basename>/` subdirectory. On **workstation machines** (`claude-code` without `agents-md`), each clone lands at `<local_path>/<basename>/`. On **Hermes machines** (`agents-md` also in targets), at `<agentic_context_root>/Projects/<slug>/<basename>/`. Basenames within a project must be unique — two repos with the same name fail compile |
-| Publish/refresh a skill in claude.ai (web/Desktop) | add `claude-ai` to the skill's `targets:`; `deploy` stages `<name>.zip` at the machine's `claude_ai_staging` path; upload is MANUAL (Customize > Skills) — a `pending` zip means the account copy is stale |
+| Publish/refresh a skill in claude.ai (web/Desktop) | add `claude-app` to the skill's `targets:`; `deploy` stages `<name>.zip` at the machine's `claude_skills_staging` path; upload is MANUAL (Customize > Skills) — a `pending` zip means the account copy is stale |
+| Wire a LAN/HTTP MCP server into Claude Desktop | set `claude_desktop_config` in the machine profile; run `deploy --lane connections` — `claude-app` writes an `npx mcp-remote` stdio bridge directly into `claude_desktop_config.json`. **Do not use the Desktop "Add custom connector" UI** (it rejects non-https URLs and has no knowledge of `servers.yaml`). Restart Desktop and the connector appears automatically. Requires Node.js/npx; bridge version pinned in `build/agentic/render.py` (`MCP_REMOTE_SPEC`). See `docs/targets/claude-app.md` |
 | An MCP server (tools, env, default url) | `connections/servers.yaml` |
 | A server's URL as seen from one machine | `urls:` map in `connections/servers.yaml` (per-machine overrides let a host reach a server running elsewhere, e.g. over LAN) |
 | Where a merged env file lands | `<server>_env` path key in `machines/<name>.yaml` |
-| A project's stage / Drive IDs / repo | `registry/projects/<slug>.yaml` |
+| A project's stage / store / repo | `registry/projects/<slug>.yaml` |
 | Which document store backs a project's graph init | `document_store: <server>` in `registry/projects/<slug>.yaml` (a server from `connections/servers.yaml`, or `none`). Resolved by `connector_for_store` at Stage 3 — `none`/unset falls back to the **local-file connector** (no credentials needed; maps files from the project's local directory). A store with a `graph_enum:` mapping uses the generic `mcp` connector (reuse a running server, no second OAuth). Scaffold a project with `python build/mitos.py project add <slug>` |
 | How a document store is enumerated for the graph | `graph_enum:` on the server in `connections/servers.yaml` (`list_tool`, `query_syntax`, optional `query_arg`/`folder_tool`, and a `fields:` map onto `{id, name, dateModified, webUrl}`). The `mcp` connector stays generic; `query_syntax: google-drive` activates Drive-specific query construction; any other store uses the generic path (scope passed verbatim) |
 | A document's store-agnostic link (the `url` field) | `web_url` on `Document` in `build/agentic/graph.py`, serialized as `schema:url` in the JSON-LD. The connector-provided URL is stored as-is (e.g. `file://`, `https://notion.so/…`). For Drive documents without an explicit URL, `drive_url` falls back to `https://drive.google.com/open?id=<id>` so existing graphs keep working |
@@ -128,9 +133,9 @@ in sync when you change `build/agentic/commands.py` or a target's `drift_policy`
 ## Verifying changes
 1. `python build/compile.py compile` — schema validation is the first test; it must
    pass with no unknown-partial or missing-field errors.
-2. Run the compiler test suite: `pytest build/tests/` (five per-area files:
+2. Run the compiler test suite: `pytest build/tests/` (six per-area files:
    `test_graph.py`, `test_connectors.py`, `test_commands.py`, `test_loader.py`,
-   `test_targets.py`; shared helpers in `conftest.py`).
+   `test_targets.py`, `test_review.py`; shared helpers in `conftest.py`).
 3. `python build/compile.py deploy --machine <m> --dry-run` — read the action list
    before any real deploy.
 
