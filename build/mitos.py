@@ -446,6 +446,30 @@ def _cmd_connectors(_args) -> int:
     return 0
 
 
+def _load_machine_yaml(repo_root: Path, machine_name: str) -> dict | None:
+    """Read one machine's yaml directly, bypassing full registry validation.
+
+    Used as a fallback when loader.load() fails (e.g. stale skill targets on a machine
+    that hasn't pulled the latest overlay yet). Checks registry/local/machines/ first
+    (overlay wins), then registry/machines/.
+    """
+    import yaml as _yaml
+    for machines_dir in (
+        repo_root / "registry" / "local" / "machines",
+        repo_root / "registry" / "machines",
+    ):
+        if not machines_dir.is_dir():
+            continue
+        for yf in machines_dir.glob("*.yaml"):
+            try:
+                data = _yaml.safe_load(yf.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if data.get("name") == machine_name:
+                return data
+    return None
+
+
 def _cmd_sync(args) -> int:
     """Set up and run git-only overlay sync. `init`/`clone` make the overlay repo on the first /
     subsequent machines (and install the auto-deploy hook); the default flow reconciles it with
@@ -457,8 +481,16 @@ def _cmd_sync(args) -> int:
     try:
         reg = loader.load(REPO_ROOT)
     except loader.RegistryError as e:
-        print(f"registry error: {e}", file=sys.stderr)
-        return 2
+        # init/clone need a valid registry (the machine profile must be present in the overlay
+        # they are about to set up). For all other actions the pull itself may fix the stale
+        # overlay — fall back to reading the machine yaml directly so sync isn't chicken-and-egg.
+        if args.action in ("init", "clone"):
+            print(f"registry error: {e}", file=sys.stderr)
+            return 2
+        print(f"registry warning: {e}", file=sys.stderr)
+        print("registry validation failed — attempting sync with raw machine config "
+              "(pull may fix the overlay)", file=sys.stderr)
+        reg = None
 
     # init/clone bootstrap the repo, so the machine's profile (which may live *in* the overlay
     # being set up) need not exist yet — the hub comes from --hub, not the sync: block.
@@ -498,10 +530,12 @@ def _cmd_sync(args) -> int:
                       "git commit -m 'configure sync' && git push")
         return 0
 
-    machine = reg.machines.get(args.machine)
+    machine = (reg.machines.get(args.machine) if reg is not None
+               else _load_machine_yaml(REPO_ROOT, args.machine))
     if machine is None:
-        print(f"error: unknown machine {args.machine!r}; known: "
-              f"{', '.join(sorted(reg.machines))}", file=sys.stderr)
+        known = (f"{', '.join(sorted(reg.machines))}" if reg is not None
+                 else "(registry failed to load — check machine yaml files)")
+        print(f"error: unknown machine {args.machine!r}; known: {known}", file=sys.stderr)
         return 2
     cfg = machine.get("sync")
     if not cfg or not (cfg.get("git") or {}).get("hub"):
@@ -519,10 +553,23 @@ def _cmd_sync(args) -> int:
         return 0
 
     from agentic import commands
+
+    def _deploy(m: str) -> int:
+        # Always reload the registry fresh so deploy uses the just-pulled overlay, not the
+        # pre-pull snapshot that may have been invalid (stale skill targets, etc.). If the
+        # registry is STILL invalid here, the pull didn't carry the fix (or the error is a
+        # genuine corruption no pull resolves) — fail loudly so push doesn't follow a bad deploy.
+        try:
+            fresh_reg = loader.load(REPO_ROOT)
+        except loader.RegistryError as err:
+            print(f"registry still invalid, deploy aborted: {err}", file=sys.stderr)
+            return 1
+        return commands.cmd_deploy(fresh_reg, m, False, False)
+
     try:
         for line in git_sync(REPO_ROOT, args.machine, cfg, action=args.action,
                              dry_run=args.dry_run,
-                             deploy=lambda m: commands.cmd_deploy(reg, m, False, False)):
+                             deploy=_deploy):
             print(line)
     except SyncError as e:
         print(f"sync error: {e}", file=sys.stderr)

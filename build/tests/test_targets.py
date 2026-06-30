@@ -1083,3 +1083,148 @@ def test_claude_app_in_known_targets():
     r.machines["example-windows"]["targets"] = ["claude-app"]
     loader._validate(r)   # must not raise
 
+
+def test_load_machine_yaml_prefers_local_overlay():
+    """_load_machine_yaml reads local overlay first; falls back to core machines/."""
+    import tempfile, shutil
+    import yaml as _y
+    from build.mitos import _load_machine_yaml
+
+    tmp = Path(tempfile.mkdtemp(prefix="ae-mymach-"))
+    try:
+        core_machines = tmp / "registry" / "machines"
+        local_machines = tmp / "registry" / "local" / "machines"
+        core_machines.mkdir(parents=True)
+        local_machines.mkdir(parents=True)
+
+        # core declares "boxA"
+        (core_machines / "boxa.yaml").write_text(
+            "name: boxA\nos: linux\nsync:\n  git:\n    hub: ssh://core/hub.git\n",
+            encoding="utf-8")
+
+        # local overrides "boxA" with a different hub
+        (local_machines / "boxa.yaml").write_text(
+            "name: boxA\nos: linux\nsync:\n  git:\n    hub: ssh://local/hub.git\n",
+            encoding="utf-8")
+
+        # local overlay wins
+        result = _load_machine_yaml(tmp, "boxA")
+        assert result is not None
+        assert result["sync"]["git"]["hub"] == "ssh://local/hub.git"
+
+        # unknown machine → None
+        assert _load_machine_yaml(tmp, "ghost") is None
+
+        # core-only machine (not in local) is still found
+        (core_machines / "boxc.yaml").write_text(
+            "name: boxC\nos: windows\n", encoding="utf-8")
+        result_c = _load_machine_yaml(tmp, "boxC")
+        assert result_c is not None and result_c["os"] == "windows"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_cmd_sync_proceeds_with_stale_registry():
+    """_cmd_sync must NOT abort when loader.load() raises RegistryError on pull/all actions, and
+    the deploy step must reload the registry FRESH (post-pull), not reuse a captured stale one.
+
+    The chicken-and-egg: a stale overlay (e.g. skill referencing a removed target) blocks
+    loader.load(), which previously prevented the pull that would have fixed it. Now _cmd_sync
+    falls back to _load_machine_yaml() for the sync config so the pull can fix the overlay,
+    then reloads the registry fresh for the deploy step.
+    """
+    import argparse
+    from unittest.mock import patch, MagicMock
+    from agentic.loader import RegistryError
+    from build.mitos import _cmd_sync
+
+    hub_cfg = "ssh://hub.example/overlay.git"
+    machine_cfg = {"name": "stale-box", "os": "linux",
+                   "sync": {"git": {"hub": hub_cfg, "branch": "main"}}}
+
+    args = argparse.Namespace(machine="stale-box", action="pull",
+                              dry_run=False, hub=None, remote=None, branch=None,
+                              ssh_key=None)
+
+    # loader.load: 1st call (top of _cmd_sync) raises (stale overlay), 2nd call (inside the
+    # deploy closure, AFTER the pull) returns a fresh registry sentinel — the pull fixed it.
+    fresh_reg = MagicMock(name="fresh_reg")
+    load_mock = MagicMock(side_effect=[RegistryError("stale target 'claude-ai'"), fresh_reg])
+
+    deploy_args: list = []
+
+    def fake_cmd_deploy(reg, machine, prune, force):
+        deploy_args.append((reg, machine, prune, force))
+        return 0
+
+    # fake git_sync mirrors the real pull/all path: it INVOKES the deploy callable between
+    # pull and push, so the fresh-reload closure is actually exercised.
+    sync_calls: list = []
+
+    def fake_git_sync(root, machine, cfg, *, action, dry_run, deploy):
+        sync_calls.append((machine, action))
+        rc = deploy(machine)        # the real git_sync raises SyncError if this is nonzero
+        assert rc == 0
+        return iter([f"deploy: applied overlay to {machine}"])
+
+    with patch("agentic.loader.load", load_mock):
+        with patch("build.mitos._load_machine_yaml", return_value=machine_cfg):
+            with patch("agentic.commands.cmd_deploy", side_effect=fake_cmd_deploy):
+                with patch("agentic.sync.git_sync", side_effect=fake_git_sync):
+                    with patch("build.mitos._compiler_check"):
+                        rc = _cmd_sync(args)
+
+    # must NOT have returned 2 (the old abort-on-RegistryError path)
+    assert rc == 0, f"expected 0 (sync proceeded), got {rc}"
+    # git_sync was actually called — sync was not short-circuited
+    assert sync_calls == [("stale-box", "pull")]
+    # loader.load was called twice: the failed pre-pull load + the fresh post-pull reload
+    assert load_mock.call_count == 2, "deploy must reload the registry fresh, not reuse the stale one"
+    # cmd_deploy received the FRESH registry (the 2nd load), never the stale pre-pull snapshot
+    assert len(deploy_args) == 1
+    assert deploy_args[0][0] is fresh_reg, "deploy must run against the post-pull registry"
+    assert deploy_args[0][1] == "stale-box"
+
+    # init/clone still abort on RegistryError — they need a valid registry to proceed
+    for bad_action in ("init", "clone"):
+        args2 = argparse.Namespace(machine="stale-box", action=bad_action,
+                                   dry_run=False, hub="ssh://h/x.git", remote=None,
+                                   branch=None, ssh_key=None)
+        with patch("agentic.loader.load", side_effect=RegistryError("stale target")):
+            with patch("build.mitos._compiler_check"):
+                rc2 = _cmd_sync(args2)
+        assert rc2 == 2, f"expected 2 (abort) for action={bad_action!r}, got {rc2}"
+
+
+def test_cmd_sync_deploy_fails_when_pull_did_not_fix_overlay():
+    """If the registry is STILL invalid after the pull (the fix wasn't in the hub, or it's a
+    genuine corruption), the deploy step must fail (rc 1 → SyncError), so a bad deploy is never
+    followed by a push."""
+    import argparse
+    from unittest.mock import patch, MagicMock
+    from agentic.loader import RegistryError
+    from agentic.sync import SyncError
+    from build.mitos import _cmd_sync
+
+    machine_cfg = {"name": "stale-box", "os": "linux",
+                   "sync": {"git": {"hub": "ssh://h/x.git", "branch": "main"}}}
+    args = argparse.Namespace(machine="stale-box", action="all",
+                              dry_run=False, hub=None, remote=None, branch=None, ssh_key=None)
+
+    # both loads raise — pre-pull AND post-pull (the pull did not carry a fix)
+    load_mock = MagicMock(side_effect=RegistryError("still stale"))
+
+    def fake_git_sync(root, machine, cfg, *, action, dry_run, deploy):
+        rc = deploy(machine)                 # the deploy closure reloads → still raises → rc 1
+        if rc != 0:
+            raise SyncError(f"deploy --machine {machine} failed (rc {rc})")
+        return iter([])
+
+    with patch("agentic.loader.load", load_mock):
+        with patch("build.mitos._load_machine_yaml", return_value=machine_cfg):
+            with patch("agentic.sync.git_sync", side_effect=fake_git_sync):
+                with patch("build.mitos._compiler_check"):
+                    rc = _cmd_sync(args)
+
+    assert rc == 1, "a deploy that fails on a still-invalid registry must surface as rc 1"
+

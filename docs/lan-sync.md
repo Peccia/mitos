@@ -107,6 +107,20 @@ Auto-deploy: after a sync pulls new overlay content, the installed `post-merge` 
 `deploy` for this machine, so its harnesses update without a second command. (It no-ops when the
 overlay didn't change and never force-deploys.)
 
+### Recovering a machine that's behind
+
+If a machine hasn't synced in a while, its local overlay can reference things the registry no
+longer knows about (e.g. a skill targeting a target that was since renamed). `mitos sync` would
+otherwise be stuck: it can't validate the stale overlay, but the pull that would fix it lives on
+the far side of that validation. So for `pull`/`push`/`refresh`/`status`/`all`, sync **does not
+abort** on a stale-overlay validation error — it reads just the machine's `sync:` config directly,
+runs the pull, then reloads the registry cleanly for the deploy step. You'll see a
+`registry validation failed — attempting sync …` warning; that's expected, and the pull resolves
+it. If the registry is *still* invalid after pulling (the fix wasn't on the hub, or it's a genuine
+malformation), the deploy stops with `registry still invalid, deploy aborted: …` and **no push
+follows** — fix the registry by hand, then re-run. (`init`/`clone` still require a valid registry,
+since they bootstrap one.)
+
 ## What never leaves your control
 
 - `registry/local/` (including `inbox/` inside it) is gitignored from the public Mitos repo
