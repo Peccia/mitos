@@ -132,9 +132,9 @@ in sync when you change `build/agentic/commands.py` or a target's `drift_policy`
 ## Verifying changes
 1. `python build/compile.py compile` — schema validation is the first test; it must
    pass with no unknown-partial or missing-field errors.
-2. Run the compiler test suite: `pytest build/tests/` (five per-area files:
+2. Run the compiler test suite: `pytest build/tests/` (six per-area files:
    `test_graph.py`, `test_connectors.py`, `test_commands.py`, `test_loader.py`,
-   `test_targets.py`; shared helpers in `conftest.py`).
+   `test_targets.py`, `test_review.py`; shared helpers in `conftest.py`).
 3. `python build/compile.py deploy --machine <m> --dry-run` — read the action list
    before any real deploy.
 
