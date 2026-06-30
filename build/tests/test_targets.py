@@ -138,7 +138,7 @@ def test_non_hermes_clone_uses_local_path():
     assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must still fire"
     assert any("apocalyptic_adventure" in d for d in dests), "local_path lane must also fire"
 
-def test_claude_ai_target_stages_uploadable_zip():
+def test_claude_app_target_stages_uploadable_zip():
     import copy
     import json as _json
     import tempfile
@@ -146,10 +146,12 @@ def test_claude_ai_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-ai via its frontmatter; the target spec's include curates
+    # gws opts into claude-app via its frontmatter; the target spec's include curates.
+    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
+    # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
     outs = [o for o in planner.plan_machine(reg2, "example-windows")
-            if o.target == "claude-ai"]
+            if o.target == "claude-app"]
     assert len(outs) == 1
     o = outs[0]
     assert (o.kind, o.lane, o.drift_policy) == ("zip", "content", "protect")
@@ -987,52 +989,97 @@ def test_gemini_prompt_render_is_plain_body():
     assert not rendered.startswith("---")
     assert rendered.strip() == "Plain content."
 
-def test_claude_desktop_mcp_config_planned():
-    """When claude_desktop_config path key is set, Desktop MCP config is planned."""
+def test_claude_app_desktop_mcp_config_planned():
+    """When claude_desktop_config is set, claude-app plans a json_merge MCP bridge."""
     import copy
-    from agentic.render import claude_desktop_mcp_config
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     r.machines["example-windows"]["paths"]["claude_desktop_config"] = (
         "C:/Users/Paul/AppData/Roaming/Claude/claude_desktop_config.json"
     )
     outputs = planner.plan_machine(r, "example-windows")
-    desktop_outs = [o for o in outputs if o.target == "claude-desktop"]
-    assert desktop_outs, "no claude-desktop output"
-    o = desktop_outs[0]
-    assert o.kind == "json"
+    mcp_outs = [o for o in outputs if o.target == "claude-app" and o.kind == "json_merge"]
+    assert mcp_outs, "no claude-app MCP output"
+    o = mcp_outs[0]
+    assert o.owned_keys == ["mcpServers"]
+    assert o.target_file == o.deploy_path
     assert o.lane == "connections"
-    assert o.drift_policy == "protect"
     assert "claude_desktop_config.json" in o.deploy_path
     import json
     parsed = json.loads(o.content)
     assert "mcpServers" in parsed
-    alias = r.targets["claude-desktop"]["server_alias"]
+    alias = r.targets["claude-app"]["server_alias"]
     assert alias in parsed["mcpServers"]
-    assert "url" in parsed["mcpServers"][alias]
-    assert parsed["mcpServers"][alias]["type"] == "sse"
+    # example-windows is os: windows -> npx is bridged via `cmd /c` (Electron can't
+    # spawn the .cmd shim directly). gws is streamable-http, so it gets the bridge.
+    entry = parsed["mcpServers"][alias]
+    assert entry["command"] == "cmd"
+    assert entry["args"][:3] == ["/c", "npx", "-y"]
 
-def test_claude_desktop_no_path_no_output():
-    """When claude_desktop_config path key is absent, Desktop target produces no outputs."""
+def test_claude_app_no_desktop_path_no_mcp_output():
+    """Without claude_desktop_config, claude-app emits no MCP config (skills still ok)."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     # deliberately no claude_desktop_config key in paths
     r.machines["example-windows"]["paths"].pop("claude_desktop_config", None)
     outputs = planner.plan_machine(r, "example-windows")
-    assert not any(o.target == "claude-desktop" for o in outputs)
+    assert not any(o.target == "claude-app" and o.kind == "json_merge" for o in outputs)
 
-def test_claude_desktop_render():
-    """claude_desktop_mcp_config produces the correct JSON schema."""
+def test_claude_app_bridge_pins_exact_version():
+    """SECURITY: the bridge package must be pinned to an exact version, never a bare or
+    floating spec — a floating tag would let a hijacked publish run on every launch."""
+    from agentic.render import claude_desktop_mcp_config, MCP_REMOTE_SPEC
+    assert "@" in MCP_REMOTE_SPEC, "bridge spec must carry an exact @version"
+    assert not MCP_REMOTE_SPEC.endswith("@latest")
+    server = {"url": "http://x/mcp", "transport": "streamable-http"}
+    for os_name in ("windows", "linux", "darwin"):
+        args = claude_desktop_mcp_config(server, "a", os_name=os_name)["mcpServers"]["a"]["args"]
+        assert MCP_REMOTE_SPEC in args, "bridge must reference the pinned spec"
+        assert "mcp-remote" not in args, "bare/floating package name must not appear"
+
+def test_claude_app_desktop_render():
+    """A streamable-http server over plain http: bridged via pinned mcp-remote with
+    `--transport http-only` (no SSE fallback) AND `--allow-http` (http opt-in), OS-aware."""
+    from agentic.render import claude_desktop_mcp_config, MCP_REMOTE_SPEC
+    server = {"url": "http://localhost:8000/mcp", "transport": "streamable-http", "tools": {}}
+    win = claude_desktop_mcp_config(server, "my-alias", os_name="windows")
+    assert win == {"mcpServers": {"my-alias": {
+        "command": "cmd",
+        "args": ["/c", "npx", "-y", MCP_REMOTE_SPEC, "http://localhost:8000/mcp",
+                 "--transport", "http-only", "--allow-http"]}}}
+    nix = claude_desktop_mcp_config(server, "my-alias", os_name="linux")
+    assert nix == {"mcpServers": {"my-alias": {
+        "command": "npx",
+        "args": ["-y", MCP_REMOTE_SPEC, "http://localhost:8000/mcp",
+                 "--transport", "http-only", "--allow-http"]}}}
+
+def test_claude_app_desktop_render_https_no_allow_http():
+    """An https server gets no --allow-http (only plain http needs the opt-in)."""
     from agentic.render import claude_desktop_mcp_config
-    server = {"url": "http://localhost:8000/mcp", "tools": {}}
-    result = claude_desktop_mcp_config(server, "my-alias")
-    assert result == {"mcpServers": {"my-alias": {"url": "http://localhost:8000/mcp", "type": "sse"}}}
+    server = {"url": "https://remote.example/mcp", "transport": "streamable-http"}
+    args = claude_desktop_mcp_config(server, "a", os_name="linux")["mcpServers"]["a"]["args"]
+    assert "--allow-http" not in args
+    assert args[-2:] == ["--transport", "http-only"]
 
-def test_claude_desktop_in_known_targets():
-    """claude-desktop is a valid KNOWN_TARGET — machines can list it without error."""
+def test_claude_app_desktop_render_sse_transport():
+    """An SSE server forces --transport sse-only."""
+    from agentic.render import claude_desktop_mcp_config
+    server = {"url": "https://remote.example/sse", "transport": "sse"}
+    args = claude_desktop_mcp_config(server, "a", os_name="linux")["mcpServers"]["a"]["args"]
+    assert args[-2:] == ["--transport", "sse-only"]
+
+def test_claude_app_desktop_render_stdio_passthrough():
+    """A native stdio server (command/args) is passed through unbridged."""
+    from agentic.render import claude_desktop_mcp_config
+    server = {"command": "my-server", "args": ["--flag"], "transport": "stdio"}
+    result = claude_desktop_mcp_config(server, "my-alias", os_name="windows")
+    assert result == {"mcpServers": {"my-alias": {"command": "my-server", "args": ["--flag"]}}}
+
+def test_claude_app_in_known_targets():
+    """claude-app is a valid KNOWN_TARGET — machines can list it without error."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["claude-desktop"]
+    r.machines["example-windows"]["targets"] = ["claude-app"]
     loader._validate(r)   # must not raise
 

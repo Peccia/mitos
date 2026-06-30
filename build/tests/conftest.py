@@ -37,7 +37,7 @@ def _full_windows_rig():
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = [
-        "claude-code", "gemini", "agents-md", "claude-ai"]
+        "claude-code", "gemini", "agents-md", "claude-app"]
     # pin the canonical drive layout too — projects_root is per-PC config (drive letters
     # vary by machine); path-resolution tests assert against this fixed value
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"

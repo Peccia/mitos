@@ -361,7 +361,7 @@ def test_target_filter_deploys_subset_and_preserves_lock():
     files0 = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
                          )["machines"]["example-windows"]["files"]
     assert cmd_deploy(rig, "example-windows", dry_run=False, force=False, root=root,
-                      target="claude-ai") == 0
+                      target="claude-app") == 0
     files1 = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
                          )["machines"]["example-windows"]["files"]
     assert set(files1) == set(files0), "a target-filtered deploy must not drop entries"

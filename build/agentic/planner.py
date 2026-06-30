@@ -62,10 +62,8 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             outputs += _plan_claude_code(reg, machine_name, spec)
         elif target == "gemini":
             outputs += _plan_gemini(reg, machine_name, spec, paths)
-        elif target == "claude-ai":
-            outputs += _plan_claude_ai(reg, spec, paths)
-        elif target == "claude-desktop":
-            outputs += _plan_claude_desktop(reg, machine_name, spec, paths)
+        elif target == "claude-app":
+            outputs += _plan_claude_app(reg, machine_name, spec, paths)
     outputs += _plan_env(reg, machine_name, paths)
     outputs += _plan_graph_tree(reg, machine_name, paths)
 
@@ -85,25 +83,54 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
     return outputs
 
 
-# ── claude-ai ────────────────────────────────────────────────────────────────
-def _plan_claude_ai(reg, spec, paths) -> list[Output]:
-    """Artifact deploys: claude.ai (web + Desktop) has no filesystem the compiler can
-    reach, so deploy STAGES ready-to-upload skill zips (<name>/SKILL.md inside) at the
-    machine's staging path. The upload is manual; a `pending` zip after a registry
-    edit is the re-upload reminder."""
+# ── claude-app (claude.ai account surface — web + Desktop) ───────────────────────
+def _plan_claude_app(reg, machine_name, spec, paths) -> list[Output]:
+    """The Claude consumer app — one account surface shared by claude.ai web and the
+    Desktop app. Skills and connectors set on the account appear in both. This target
+    emits two independent, opt-in-by-path-key kinds:
+
+      • SKILLS (content lane): claude.ai exposes no filesystem the compiler can reach,
+        so deploy STAGES ready-to-upload skill zips (<name>/SKILL.md inside) at
+        `claude_skills_staging`. Upload is MANUAL (Customize > Skills); a `pending` zip
+        after a registry edit is the re-upload reminder. Synced to web + Desktop.
+
+      • MCP (connections lane): the account Connectors UI accepts remote servers by
+        URL but only over https, so a LAN/HTTP server can't be added there. As a
+        Desktop-only workaround we splice an `npx mcp-remote` stdio bridge into
+        `claude_desktop_config.json` (when `claude_desktop_config` is set), owning just
+        the `mcpServers` key so Desktop's own preferences survive.
+
+    Each half is independent: a web-only machine sets `claude_skills_staging` only; a
+    Desktop machine sets both keys.
+    """
     outputs: list[Output] = []
+    # — skills —
     sk = spec.get("skills") or {}
-    staging = paths.get(sk.get("deploy_to_key", "claude_ai_staging"))
-    if not sk or not staging:
-        return outputs
-    for skill in _selected_skills(reg, sk):
-        deploy_path = f"{staging.rstrip('/')}/{skill.name}.zip"
+    staging = paths.get(sk.get("deploy_to_key", "claude_skills_staging"))
+    if sk and staging:
+        for skill in _selected_skills(reg, sk):
+            deploy_path = f"{staging.rstrip('/')}/{skill.name}.zip"
+            outputs.append(Output(
+                target="claude-app", kind="zip", deploy_path=deploy_path,
+                dist_rel=f"claude-app/{safe_rel(deploy_path)}",
+                content=render.render_skill(skill, "claude-app"),
+                drift_policy=sk.get("drift_policy", "protect"),
+                sources=[skill.rel], zip_member=f"{skill.name}/SKILL.md",
+            ))
+    # — Desktop MCP config (LAN/HTTP workaround) —
+    mc = spec.get("mcp_config") or {}
+    dest = paths.get(mc.get("deploy_to_key", "claude_desktop_config"))
+    if mc and dest:
+        alias = spec["server_alias"]
+        gws = _gws(reg, machine_name)
         outputs.append(Output(
-            target="claude-ai", kind="zip", deploy_path=deploy_path,
-            dist_rel=f"claude-ai/{safe_rel(deploy_path)}",
-            content=render.render_skill(skill, "claude-ai"),
-            drift_policy=sk.get("drift_policy", "protect"),
-            sources=[skill.rel], zip_member=f"{skill.name}/SKILL.md",
+            target="claude-app", kind="json_merge", deploy_path=dest,
+            dist_rel=f"claude-app/{safe_rel(dest)}",
+            content=_json(render.claude_desktop_mcp_config(
+                gws, alias, os_name=reg.machines[machine_name].get("os", ""))),
+            owned_keys=["mcpServers"], target_file=dest,
+            drift_policy=mc.get("drift_policy", "protect"), lane="connections",
+            sources=["connections/servers.yaml"],
         ))
     return outputs
 
@@ -708,31 +735,6 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
                 content=render.render_prompt(prompt, "gemini"),
                 drift_policy=pr.get("drift_policy", "harvest"), sources=[prompt.rel],
             ))
-    return outputs
-
-
-# ── claude-desktop ────────────────────────────────────────────────────────────
-def _plan_claude_desktop(reg, machine_name, spec, paths) -> list[Output]:
-    """Write claude_desktop_config.json to the Desktop MCP config path.
-
-    Skipped when the machine profile has no `claude_desktop_config` path key — a
-    deliberate opt-in so the target is present in the registry but doesn't deploy
-    where the user hasn't configured it yet.
-    """
-    outputs: list[Output] = []
-    mc = spec["mcp_config"]
-    dest = paths.get(mc["deploy_to_key"])
-    if not dest:
-        return outputs
-    alias = spec["server_alias"]
-    gws = _gws(reg, machine_name)
-    outputs.append(Output(
-        target="claude-desktop", kind="json", deploy_path=dest,
-        dist_rel=f"claude-desktop/{safe_rel(dest)}",
-        content=_json(render.claude_desktop_mcp_config(gws, alias)),
-        drift_policy=mc.get("drift_policy", "protect"), lane="connections",
-        sources=["connections/servers.yaml"],
-    ))
     return outputs
 
 

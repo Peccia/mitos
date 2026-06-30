@@ -126,7 +126,7 @@ def render_skill(skill: Skill, target: str) -> str:
         if hermes_meta:
             meta["metadata"] = {"hermes": hermes_meta}
         return _frontmatter_doc(meta, skill.body)
-    if target in ("claude-code", "claude-ai"):
+    if target in ("claude-code", "claude-app"):
         # Agent Skills standard frontmatter: name + description
         meta = {"name": fm["name"], "description": fm.get("description", "")}
         return _frontmatter_doc(meta, skill.body)
@@ -171,6 +171,17 @@ def _frontmatter_doc(meta: dict, body: str) -> str:
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────
+# The stdio<->HTTP bridge package + a PINNED version. `npx` launches whatever this
+# resolves to as a child process of Claude, so a floating tag ("mcp-remote" / "@latest")
+# would let a compromised or typosquatted publish run silently on every launch. Pinning
+# an exact version makes every upgrade a deliberate, reviewable change to this one line.
+# MAINTAINER: verify the version exists on npm (`npm view mcp-remote versions`) and bump
+# here intentionally — never widen this to a range or a floating tag.
+MCP_REMOTE_PKG = "mcp-remote"
+MCP_REMOTE_VERSION = "0.1.29"
+MCP_REMOTE_SPEC = f"{MCP_REMOTE_PKG}@{MCP_REMOTE_VERSION}"
+
+
 def flat_tools(server: dict) -> list[str]:
     """Flatten servers.yaml tools (domain -> [tool]) into an ordered list."""
     tools: list[str] = []
@@ -189,9 +200,40 @@ def gemini_mcp_config(server: dict, alias: str) -> dict:
     return {"mcpServers": {alias: {"url": url, "serverUrl": url}}}
 
 
-def claude_desktop_mcp_config(server: dict, alias: str) -> dict:
-    url = server["url"]
-    return {"mcpServers": {alias: {"url": url, "type": "sse"}}}
+def claude_desktop_mcp_config(server: dict, alias: str, *, os_name: str) -> dict:
+    """Claude Desktop's claude_desktop_config.json only launches **stdio** child
+    processes — it does not consume a remote `url`/`type` entry, and Anthropic's
+    Connectors UI rejects non-https URLs, so a LAN server can't be added there either.
+
+    For an HTTP/SSE server we therefore bridge stdio<->HTTP with `npx mcp-remote`,
+    which runs locally and connects out to the server's url. Two flags mcp-remote
+    requires for this case (confirmed against its README):
+      • `--transport http-only` for a streamable-http server (else mcp-remote's default
+        `http-first` makes a spurious SSE fallback attempt); `sse-only` for an SSE server.
+      • `--allow-http` when the url is plain `http://` — mcp-remote REFUSES a non-https
+        URL without it. Not added for https urls (not needed there).
+    On Windows `npx` is a `.cmd` shim that Electron's spawn can't resolve directly, so
+    the command is wrapped in `cmd /c`. A native stdio `command` server is passed through.
+
+    The bridge package is pinned to an exact version (MCP_REMOTE_SPEC) so a floating
+    tag can't silently pull a compromised publish on launch — see that constant.
+    """
+    transport = server.get("transport", "")
+    if transport in ("streamable-http", "sse", "http"):
+        url = server["url"]
+        mode = "sse-only" if transport == "sse" else "http-only"
+        bridge = [MCP_REMOTE_SPEC, url, "--transport", mode]
+        if url.startswith("http://"):           # plain http needs explicit opt-in
+            bridge.append("--allow-http")
+        npx_args = ["-y", *bridge]
+        if os_name == "windows":
+            return {"mcpServers": {alias: {"command": "cmd", "args": ["/c", "npx", *npx_args]}}}
+        return {"mcpServers": {alias: {"command": "npx", "args": npx_args}}}
+    # native stdio server: pass its command/args straight through
+    entry = {"command": server["command"]}
+    if server.get("args"):
+        entry["args"] = server["args"]
+    return {"mcpServers": {alias: entry}}
 
 
 def gemini_permission_grants(server: dict, alias: str) -> dict:

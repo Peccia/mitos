@@ -359,7 +359,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # the moat — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-ai, claude-desktop)
+targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

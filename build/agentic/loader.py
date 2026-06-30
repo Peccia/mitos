@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-ai", "claude-desktop"}
+KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 
 # Mitos overlay (the Mitos overlay design): registry/local/ is the gitignored personal

@@ -3,11 +3,16 @@
 name: example-windows
 example: true   # template — copy into registry/local/machines/ and rename; not a live machine
 os: windows
-targets: [gemini, claude-ai, claude-code, agents-md, claude-desktop]
+targets: [gemini, claude-app, claude-code, agents-md]
 paths:
   projects_root: "C:/Projects"
   gemini_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/skills"
-  claude_ai_staging: "~/ClaudeSkills"
+  claude_skills_staging: "~/ClaudeSkills"
   agentic_context_root: "C:/MitosAgent"
-  # claude_desktop_config: "%APPDATA%/Claude/claude_desktop_config.json"
+  # Classic .exe install:
+  # claude_desktop_config: "~/AppData/Roaming/Claude/claude_desktop_config.json"
+  # MSIX (Microsoft Store) install — virtualized under the package LocalCache; get the
+  # family name via `Get-AppxPackage *Claude* | Select PackageFamilyName`:
+  # claude_desktop_config: "~/AppData/Local/Packages/<PackageFamilyName>/LocalCache/Roaming/Claude/claude_desktop_config.json"
+  # (use the leading "~" form — io.expand() does NOT expand %APPDATA%)

@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
                                "are no longer planned (deselected skills, retired "
                                "projects); drifted ones are captured to inbox/ first")
     p_deploy.add_argument("--target",
-                          help="deploy only this adapter's outputs (e.g. claude-ai); "
+                          help="deploy only this adapter's outputs (e.g. claude-app); "
                                "other targets' files and lock entries are untouched")
 
     p_diff = sub.add_parser("diff", help="three-way drift report for a machine")
