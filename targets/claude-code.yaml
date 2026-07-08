@@ -19,14 +19,20 @@ context_file:
   stub_import:
     mitos: "@AGENTS.md"
 
-# Skills — bound per project in the manifest (`skills:` in registry/projects/<slug>.yaml)
-# AND compatible (their `targets:` contains "claude-code"). Deployed under .claude/skills/
-# in each bound project's checkout. A skill is reused across projects by naming it in each
-# manifest, never copied.
+# Skills — two scopes (the skill scoping design):
+#   scope: project (explicit) — bound per project in the manifest (`skills:` in
+#     registry/projects/<slug>.yaml) AND compatible (their `targets:` contains
+#     "claude-code"). Deployed under .claude/skills/ in each bound project's checkout
+#     only. A skill is reused across projects by naming it in each manifest, never copied.
+#   scope: global (default, omitted) — deployed once to `claude_code_skills`, Claude
+#     Code's personal/user-level skills directory (~/.claude/skills/), available in
+#     every project on this machine without per-project binding.
 skills:
   include_target: claude-code
   mode: copy
-  subdir: .claude/skills/{name}
+  subdir: .claude/skills/{name}          # project-scope deploy path (under local_path)
+  deploy_to_key: claude_code_skills      # global-scope deploy path (personal skills dir)
+  global_subdir: "{name}/SKILL.md"
   frontmatter: claude-code          # name + description only
   drift_policy: harvest
 

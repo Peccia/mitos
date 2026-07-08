@@ -15,6 +15,12 @@ Mitos has first-class integration with Antigravity, deploying assistant personas
 | **Prompts** | ✅ Full | Markdown files prefixed with `prompt-` copied to `antigravity_skills` directory |
 | **MCP Config** | ✅ Shared | Shares connection settings and permissions via the `gemini` target |
 
+> **Note:** Gemini CLI retires 2026-06-18, replaced by Antigravity CLI. Antigravity CLI's
+> config contract (`~/.gemini/antigravity-cli/settings.json`) differs from the
+> `mcp_config.json` / `config.json` surgical merge this target emits today — that migration
+> is tracked separately; the `~/.agents/skills` path above already matches the CLI's
+> convention.
+
 ---
 
 ## ⚙️ Configuration & machine setup
@@ -29,8 +35,10 @@ targets:
   - agents-md
 
 paths:
-  # The native directory where Antigravity loads skills and prompts
-  antigravity_skills: "~/.gemini/skills"
+  # The native directory where Antigravity loads skills and prompts (cross-vendor
+  # ~/.agents/skills convention, adopted by Antigravity CLI — Gemini CLI retires
+  # 2026-06-18)
+  antigravity_skills: "~/.agents/skills"
   
   # The root directory for your personal assistant context tree
   assistant_root: "~/MitosAgent"
@@ -52,9 +60,15 @@ Antigravity natively reads `AGENTS.md` files to understand identity and project 
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
 
 ### 2. Custom skills & prompts
-Skills and prompts targeting `gemini` are copied directly to `antigravity_skills` (`~/.gemini/skills/`):
-- **Skills**: Deployed as `{name}.md` containing plain markdown instructions.
-- **Prompts**: Deployed as `prompt-{name}.md`.
+Skills and prompts targeting `gemini` deploy to one of two scopes (a skill's `scope:`
+frontmatter key — mirrors the identical claude-code surface, see
+[docs/targets/claude-code.md](claude-code.md#skill-scope-global-vs-project)):
+- **`scope: global`** (default): copied to the shared `antigravity_skills` directory
+  (`~/.agents/skills/`) as `{name}.md` — available in every Antigravity session on this machine.
+- **`scope: project`**: copied ONLY to the projects that name this skill in their manifest's
+  `skills:` list, at `<project-root>/.agents/skills/{name}.md`.
+- **Prompts**: always deploy globally, as `prompt-{name}.md` in `antigravity_skills` (prompts
+  have no scope concept today).
 - **Frontmatter**: Mitos strips YAML frontmatter during deployment, presenting clean markdown instructions directly to the IDE.
 
 ---

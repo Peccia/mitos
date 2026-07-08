@@ -41,9 +41,9 @@ permissions:
   drift_policy: protect
 
 # Skills targeting gemini — plain markdown deployed to Antigravity's native skills dir.
-# Antigravity reads ~/.gemini/skills/ (confirmed path; docs/targets/antigravity.md).
-# Gemini CLI uses ~/.gemini/commands/ (TOML format) — not wired here until the format
-# question is resolved (see docs/targets/gemini-cli.md).
+# Antigravity CLI (successor to Gemini CLI, retiring 2026-06-18) reads the cross-vendor
+# ~/.agents/skills/ convention (confirmed path; docs/targets/antigravity.md). Gemini CLI
+# used ~/.gemini/commands/ (TOML format) — not wired here, moot once Gemini CLI retires.
 skills:
   include_target: gemini
   mode: copy

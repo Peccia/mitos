@@ -13,6 +13,14 @@ import yaml
 
 KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
+VALID_SKILL_SCOPES = {"global", "project"}
+# Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
+# gemini: <local_path>/.agents/skills/) — the only targets a project's `skills:` list binds a
+# skill for, and the only targets where `scope: project` changes anything. hermes and
+# claude-app have no project-scoped surface at all (account-wide/global only) and simply
+# IGNORE `scope` — always global, on any skill, regardless of value — the same way hermes
+# always did before this feature existed. See validate_skill_scope / Skill.scope.
+PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "gemini"}
 
 # The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
 # the single source of truth for the personalization placeholders render.py expands
@@ -119,6 +127,15 @@ class Skill:
     @property
     def category(self) -> str:
         return self.frontmatter.get("category", "general")
+
+    @property
+    def scope(self) -> str:
+        """`global` (default): deploys to every global surface a target offers
+        (hermes, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
+        into the project checkouts that bind it via that project's `skills:` list —
+        never a global directory. Hermes deliberately ignores this field (it has no
+        project-scoped skill surface); see validate_skill_scope."""
+        return self.frontmatter.get("scope", "global")
 
 
 @dataclass
@@ -502,6 +519,19 @@ def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict
     return None
 
 
+def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
+    """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
+    when valid. No per-target incompatibility to check: a target with no project-scoped
+    surface (hermes, claude-app) simply ignores `scope` and always deploys globally, so
+    `scope: project` is always a legal value regardless of which targets a skill declares
+    — see PROJECT_SCOPE_CAPABLE_TARGETS."""
+    scope = frontmatter.get("scope", "global")
+    if scope not in VALID_SKILL_SCOPES:
+        return (f"skill {skill_name!r}: invalid scope {scope!r}; must be one of "
+                f"{sorted(VALID_SKILL_SCOPES)}")
+    return None
+
+
 def _validate(reg: Registry) -> None:
     # audiences reference known targets
     for p in reg.partials.values():
@@ -520,6 +550,11 @@ def _validate(reg: Registry) -> None:
     # chained extensions, and a real anchor section to splice into
     for s in reg.skills.values():
         err = validate_skill_extension(reg, s.name, s.frontmatter)
+        if err:
+            raise RegistryError(err)
+    # scope: global (default) | project — see validate_skill_scope / Skill.scope
+    for s in reg.skills.values():
+        err = validate_skill_scope(s.name, s.frontmatter)
         if err:
             raise RegistryError(err)
     # prompts may omit targets (console-only is valid); when targets are set they must be known
@@ -612,10 +647,11 @@ def _validate(reg: Registry) -> None:
             if sname not in reg.skills:
                 raise RegistryError(
                     f"project {slug}: skills binds unknown skill {sname!r}")
-            if "claude-code" not in reg.skills[sname].targets:
+            if not set(reg.skills[sname].targets) & PROJECT_SCOPE_CAPABLE_TARGETS:
                 raise RegistryError(
                     f"project {slug}: bound skill {sname!r} does not target "
-                    f"'claude-code' — add it to the skill's targets: to bind it")
+                    f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
+                    f"takes effect on a target with a project-scoped skill surface")
             if reg.skills[sname].frontmatter.get("extends_skill"):
                 raise RegistryError(
                     f"project {slug}: skills binds {sname!r}, which is an extension "

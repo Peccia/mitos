@@ -633,6 +633,56 @@ def test_propose_meta_edit_rejects_bad_extension_pair():
     assert "must be specified together" in out["error"]
 
 
+# ── skill scope: global (default) | project — the Skills & Orgs Scope control ───
+def test_propose_meta_edit_accepts_valid_scope_and_it_survives_accept():
+    from agentic.review import decide, propose_meta_edit
+
+    treg, tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "project"}, skill.body, "scope to specific projects")
+    assert out["ok"], out
+    acc = decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"], acc
+    written = (tmp / "registry" / skill.rel).read_text(encoding="utf-8")
+    assert "scope: project" in written
+
+def test_propose_meta_edit_rejects_invalid_scope_value():
+    from agentic.review import propose_meta_edit
+
+    treg, _tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "workspace"}, skill.body)
+    assert not out["ok"]
+    assert "invalid scope" in out["error"]
+
+def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
+    """Unlike the extends_skill/target-binding checks, scope: project has no per-target
+    incompatibility — hermes/claude-app targets simply ignore it (see loader.
+    validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
+    from agentic.review import propose_meta_edit
+
+    treg, _tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "project", "targets": ["claude-app"]}, skill.body)
+    assert out["ok"], out
+
+def test_prompt_index_exposes_bound_projects_per_skill():
+    """The console's Scope section reads bound_projects to show which projects a
+    scope: project skill actually reaches — computed from each project's skills: list."""
+    from agentic.review import prompt_index
+
+    treg, _tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    skill = next(iter(treg.skills.values()))
+    treg.projects[slug]["skills"] = [skill.name]
+    payload = prompt_index(treg)
+    entry = next(s for s in payload["skills"] if s["name"] == skill.name)
+    assert entry["bound_projects"] == [slug]
+
+
 # ── skill supporting files via the console (examples/, scripts/) — R4/R5 ───────
 def test_propose_new_skill_with_resources_writes_files_and_accepts():
     from agentic.review import decide, propose_new_skill

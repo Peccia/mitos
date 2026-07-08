@@ -7,5 +7,6 @@ targets: [gemini, claude-app, claude-code]
 paths:
   projects_root: "C:/Projects"
   gemini_config: "~/.gemini/config"
-  antigravity_skills: "~/.gemini/skills"
+  antigravity_skills: "~/.agents/skills"
+  claude_code_skills: "~/.claude/skills"
   claude_skills_staging: "~/ClaudeSkills"

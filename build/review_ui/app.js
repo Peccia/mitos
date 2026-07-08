@@ -2360,6 +2360,12 @@ function skillRow(s, domain) {
   catBadge.dataset.category = s.category || "general";
   header.append(catBadge);
   if (domain) header.append(el("span", "skill-org-badge", "org: " + domain));
+  // scope: project is the noteworthy state (global is the silent default) — surface it
+  // in the collapsed header so it's visible without expanding the row.
+  const draftScope = (metaDrafts[`skill:${s.name}`] || {}).scope;
+  if ((draftScope || s.frontmatter.scope) === "project") {
+    header.append(el("span", "skill-org-badge", "scope: project"));
+  }
   if (s.description) header.append(el("span", "muted skill-row-desc", s.description));
 
   // target chips pinned to the right of the header
@@ -2409,6 +2415,7 @@ function skillRow(s, domain) {
 
     body.append(renderSkillFilesSection(s));
     body.append(renderSkillExtensionSection(s));
+    body.append(renderSkillScopeSection(s));
 
     // Org structure panel — only for org-domain skills
     if (domain && orgData && orgData[domain]) {
@@ -2540,6 +2547,96 @@ function renderSkillExtensionSection(s) {
   };
   actions.append(reason, save, revert);
   section.append(actions);
+  return section;
+}
+
+// ── skill-row scope assignment: global (default, deploys to every shared/global
+// directory a target offers — the antigravity_skills dir, the personal
+// claude_code_skills dir, hermes, claude-app) vs project (deploys ONLY to the
+// projects that name this skill in their manifest's `skills:` list, on whichever of
+// claude-code/gemini it targets). Mirrors renderSkillExtensionSection's pattern —
+// same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
+// projects itself is read-only here: the console doesn't write project manifests
+// (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
+// editing that project's registry/projects/<slug>.yaml `skills:` list directly. ──
+function renderSkillScopeSection(s) {
+  const key = `skill:${s.name}`;
+  const section = el("div", "skill-extension-section");
+
+  const header = el("div", "resources-panel-header");
+  header.append(el("h4", "", "Scope"));
+  const badge = el("span", "meta-modified-badge hidden", "● scope modified");
+  header.append(badge);
+  section.append(header);
+  section.append(el("div", "muted resources-hint",
+    "Global (default): deploys to every shared directory this skill's targets offer. "
+    + "Project: deploys only to the projects below, on claude-code/gemini — hermes and "
+    + "claude-app ignore this and always stay global."));
+
+  function refreshActionState() {
+    const d = metaDrafts[key];
+    const hasDraft = !!d && ("scope" in d);
+    save.disabled = !hasDraft;
+    revert.disabled = !hasDraft;
+    badge.classList.toggle("hidden", !hasDraft);
+  }
+
+  const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
+  const scopeRow = el("div", "meta-grid");
+  const scopeSelect = el("select");
+  for (const [val, label] of [["global", "Global"], ["project", "Project"]]) {
+    const opt = el("option", "", label);
+    opt.value = val;
+    if ((current.scope || "global") === val) opt.selected = true;
+    scopeSelect.append(opt);
+  }
+  scopeSelect.onchange = () => {
+    metaDrafts[key] = metaDrafts[key] || {};
+    metaDrafts[key].scope = scopeSelect.value;
+    refreshActionState();
+    renderSkills();
+  };
+  scopeRow.append(fieldWrap("Scope", scopeSelect));
+  section.append(scopeRow);
+
+  if ((current.scope || "global") === "project") {
+    const boundWrap = el("div", "graph-field");
+    boundWrap.append(el("label", "", "Bound projects (edit their manifest to change)"));
+    if (s.bound_projects && s.bound_projects.length) {
+      const chips = el("div", "doc-tags");
+      for (const slug of s.bound_projects) chips.append(el("span", "tag-chip", slug));
+      boundWrap.append(chips);
+    } else {
+      boundWrap.append(el("div", "muted",
+        "No project currently lists this skill — it will deploy nowhere until a "
+        + "project's registry/projects/<slug>.yaml adds it to `skills:`."));
+    }
+    section.append(boundWrap);
+  }
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+  const save = el("button", "accept tiny", "Save scope to inbox");
+  save.title = "Propose this skill's scope as an inbox candidate";
+  const revert = el("button", "reject tiny", "Revert scope");
+  revert.title = "Discard the local scope edit for this skill";
+  save.onclick = () => {
+    const body = drafts[key] != null ? drafts[key] : s.body;
+    saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
+  };
+  revert.onclick = () => {
+    const d = metaDrafts[key];
+    if (d) {
+      delete d.scope;
+      if (!Object.keys(d).length) delete metaDrafts[key];
+    }
+    renderSkills();
+  };
+  actions.append(reason, save, revert);
+  section.append(actions);
+  refreshActionState();
   return section;
 }
 

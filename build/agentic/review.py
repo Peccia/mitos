@@ -743,7 +743,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role"}
+                         "targets", "category", "extends_skill", "extends_role", "scope"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
 
@@ -839,6 +839,9 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         ext_err = loader.validate_skill_extension(reg, ident, new_fm)
         if ext_err:
             return {"ok": False, "error": ext_err}
+        scope_err = loader.validate_skill_scope(ident, new_fm)
+        if scope_err:
+            return {"ok": False, "error": scope_err}
 
     payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
               + "---\n\n" + str(body).rstrip("\n") + "\n")
@@ -907,6 +910,9 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         ext_err = loader.validate_skill_extension(reg, skill.name, fm)
         if ext_err:
             return ext_err
+        scope_err = loader.validate_skill_scope(skill.name, fm)
+        if scope_err:
+            return scope_err
     else:
         prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
         if prompt is not None:
@@ -1130,6 +1136,12 @@ def prompt_index(reg: Registry) -> dict:
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
         "extends_skill": s.frontmatter.get("extends_skill", ""),
         "extends_role": s.frontmatter.get("extends_role", ""),
+        # projects whose manifest `skills:` list names this skill — the read-only
+        # "where does scope: project actually apply" view (renderSkillScopeSection).
+        # Editing this list happens in the project manifest YAML directly; the console
+        # doesn't write project manifests (see docs/managing-state.md, invariant #3).
+        "bound_projects": sorted(slug for slug, proj in reg.projects.items()
+                                 if s.name in (proj.get("skills") or [])),
     } for s in sorted(reg.skills.values(), key=lambda s: (s.category, s.name))]
     partials = [{
         "rel": p.rel,

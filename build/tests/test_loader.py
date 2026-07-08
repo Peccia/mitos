@@ -743,6 +743,81 @@ def test_project_cannot_bind_extension_skill_to_claude_code():
         assert "extends_skill" in str(e) and "bind its parent skill instead" in str(e)
 
 
+# ── skill scope: global (default) | project ─────────────────────────────────────
+def test_skill_scope_defaults_global():
+    from agentic.loader import Skill
+    s = Skill(name="x", rel="skills/x/SKILL.md", frontmatter={"targets": ["hermes"]}, body="")
+    assert s.scope == "global"
+
+def test_skill_scope_reads_frontmatter():
+    from agentic.loader import Skill
+    s = Skill(name="x", rel="skills/x/SKILL.md",
+              frontmatter={"targets": ["gemini"], "scope": "project"}, body="")
+    assert s.scope == "project"
+
+def test_validate_skill_scope_rejects_unknown_value():
+    from agentic.loader import validate_skill_scope
+    err = validate_skill_scope("x", {"targets": ["gemini"], "scope": "workspace"})
+    assert err and "invalid scope" in err
+
+def test_validate_skill_scope_accepts_global_and_project_on_capable_targets():
+    from agentic.loader import validate_skill_scope
+    assert validate_skill_scope("x", {"targets": ["claude-code"]}) is None
+    assert validate_skill_scope("x", {"targets": ["gemini"], "scope": "project"}) is None
+    assert validate_skill_scope(
+        "x", {"targets": ["claude-code", "gemini"], "scope": "project"}) is None
+
+def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairing():
+    """A skill may target hermes/claude-app alongside a project-scope-capable target —
+    neither has a project-scoped surface, so both just ignore `scope` (always ship
+    globally) rather than being flagged incompatible."""
+    from agentic.loader import validate_skill_scope
+    assert validate_skill_scope(
+        "x", {"targets": ["hermes", "gemini"], "scope": "project"}) is None
+    assert validate_skill_scope(
+        "x", {"targets": ["claude-app", "claude-code"], "scope": "project"}) is None
+    assert validate_skill_scope("x", {"targets": ["claude-app"], "scope": "project"}) is None
+
+def test_registry_load_rejects_bad_skill_scope():
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["bad-scope"] = Skill(
+        name="bad-scope", rel="local/skills/bad-scope/SKILL.md",
+        frontmatter={"targets": ["claude-code"], "scope": "workspace"}, body="body")
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "invalid scope" in str(e)
+
+def test_project_can_bind_skill_that_only_targets_gemini():
+    """The project skills: binding check accepts any project-scope-capable target
+    (claude-code OR gemini), not just claude-code."""
+    import copy
+    from agentic.loader import Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["gemini-only"] = Skill(
+        name="gemini-only", rel="local/skills/gemini-only/SKILL.md",
+        frontmatter={"targets": ["gemini"], "scope": "project"}, body="body")
+    rig.projects["example-project"]["skills"] = ["gemini-only"]
+    _validate(rig)  # must not raise
+
+def test_project_cannot_bind_skill_with_no_project_scope_capable_target():
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["hermes-only"] = Skill(
+        name="hermes-only", rel="local/skills/hermes-only/SKILL.md",
+        frontmatter={"targets": ["hermes"]}, body="body")
+    rig.projects["example-project"]["skills"] = ["hermes-only"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "project-scoped skill surface" in str(e)
+
+
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
 def test_skill_resources_loaded_from_examples_and_scripts():
     treg, tmp = _temp_registry()

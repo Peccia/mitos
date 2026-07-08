@@ -1453,6 +1453,138 @@ def test_selected_skills_excludes_extension_skills():
     assert "org-software" in names
 
 
+# ── skill scope: global (default) | project ─────────────────────────────────────
+def test_gemini_deploys_global_scope_skill_to_shared_dir():
+    """Default scope (global): a gemini-targeted skill deploys to the shared
+    antigravity_skills directory, whether or not any project binds it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["global-skill"] = loader.Skill(
+        name="global-skill", rel="local/skills/global-skill/SKILL.md",
+        frontmatter={"targets": ["gemini"]}, body="global body")
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "global-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert matches[0].target == "gemini"
+
+def test_gemini_excludes_unbound_project_scoped_skill_from_shared_dir_and_everywhere():
+    """scope: project skill targeting gemini, not bound to any project, deploys nowhere —
+    NOT the shared antigravity_skills dir (that's the point of scoping it), and no
+    project picks it up because none binds it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+    outputs = planner.plan_machine(r, "example-windows")
+    assert not any("proj-skill" in o.deploy_path for o in outputs)
+
+def test_gemini_deploys_project_scoped_skill_only_to_bound_project_local_path():
+    """scope: project skill bound via a project's skills: list deploys to that project's
+    own <local_path>/.agents/skills/ — never the shared antigravity_skills directory."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-skill"]
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-skill" in o.deploy_path]
+    assert len(matches) == 1, "must deploy exactly once — project path only, no shared copy"
+    o = matches[0]
+    assert o.target == "gemini"
+    assert "example-project/.agents/skills/proj-skill.md" in o.deploy_path.replace("\\", "/")
+
+def test_gemini_project_scoped_skill_not_deployed_to_other_projects():
+    """A project-scoped skill bound to one project does not leak into a sibling project
+    that doesn't bind it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-skill"]
+    r.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    # mitos does NOT bind proj-skill
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert "example-project" in matches[0].deploy_path.replace("\\", "/")
+    assert "Mitos" not in matches[0].deploy_path
+
+def test_hermes_ignores_scope_and_still_deploys_project_scoped_skill_globally():
+    """Hermes deliberately does not participate in scoping — a scope: project skill
+    that also targets hermes still ships to the global hermes skills dir."""
+    treg, tmp = _temp_registry()
+    treg.skills["proj-and-hermes"] = loader.Skill(
+        name="proj-and-hermes", rel="local/skills/proj-and-hermes/SKILL.md",
+        frontmatter={"name": "proj-and-hermes", "targets": ["hermes", "gemini"],
+                    "scope": "project"}, body="body")
+    outputs = planner.plan_machine(treg, "rig")
+    matches = [o for o in outputs if o.target == "hermes" and "proj-and-hermes" in o.deploy_path]
+    assert len(matches) == 1, "hermes must still deploy a scope:project skill globally"
+
+def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
+    """Default scope (global): a claude-code-targeted skill deploys once to the personal
+    claude_code_skills directory (~/.claude/skills/) — no project binding needed. This is
+    the new capability that closes the historical claude-code/gemini asymmetry."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["personal-skill"] = loader.Skill(
+        name="personal-skill", rel="local/skills/personal-skill/SKILL.md",
+        frontmatter={"name": "personal-skill", "targets": ["claude-code"]}, body="global body")
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "personal-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert matches[0].target == "claude-code"
+    assert matches[0].deploy_path.replace("\\", "/").endswith("personal-skill/SKILL.md")
+
+def test_claude_code_project_scoped_skill_deploys_only_to_bound_project():
+    """scope: project skill bound via a project's skills: list deploys only to that
+    project's .claude/skills/ — never the personal claude_code_skills directory."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-cc-skill"] = loader.Skill(
+        name="proj-cc-skill", rel="local/skills/proj-cc-skill/SKILL.md",
+        frontmatter={"name": "proj-cc-skill", "targets": ["claude-code"], "scope": "project"},
+        body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-cc-skill"]
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-cc-skill" in o.deploy_path]
+    assert len(matches) == 1, "must deploy exactly once — project path only, no personal-dir copy"
+    assert ("example-project/.claude/skills/proj-cc-skill/SKILL.md"
+            in matches[0].deploy_path.replace("\\", "/"))
+
+def test_claude_code_global_scope_skill_unbound_to_any_project_still_deploys():
+    """Unlike scope: project (which requires a project binding to deploy anywhere),
+    scope: global needs no project manifest entry at all."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["unbound-global"] = loader.Skill(
+        name="unbound-global", rel="local/skills/unbound-global/SKILL.md",
+        frontmatter={"name": "unbound-global", "targets": ["claude-code"]}, body="body")
+    # no project manifest lists "unbound-global" in skills:
+    outputs = planner.plan_machine(r, "example-windows")
+    assert any("unbound-global" in o.deploy_path for o in outputs)
+
+
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
 def test_plan_hermes_emits_skill_resource_outputs():
     from agentic.loader import SkillResource

@@ -72,7 +72,7 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
         elif target == "hermes":
             outputs += _plan_hermes(reg, machine_name, spec, paths)
         elif target == "claude-code":
-            outputs += _plan_claude_code(reg, machine_name, spec)
+            outputs += _plan_claude_code(reg, machine_name, spec, paths)
         elif target == "gemini":
             outputs += _plan_gemini(reg, machine_name, spec, paths)
         elif target == "claude-app":
@@ -918,7 +918,7 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
 
 
 # ── claude-code ──────────────────────────────────────────────────────────────
-def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
+def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
     is_hermes_machine = "agents-md" in machine.get("targets", [])
@@ -1003,10 +1003,34 @@ def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
                 content=content, drift_policy=cf.get("drift_policy", "protect"),
                 sources=sources, section_bodies=section_bodies,
             ))
+    # scope: global (default) skills targeting claude-code deploy once to the personal
+    # skills directory (claude_code_skills, ~/.claude/skills/) — available in every
+    # project on this machine, no per-project binding needed. Mirrors gemini's
+    # antigravity_skills global surface (_plan_gemini).
+    sk = spec.get("skills") or {}
+    global_skills_dir = paths.get(sk.get("deploy_to_key", "claude_code_skills"))
+    if global_skills_dir and sk:
+        for skill in _selected_skills(reg, sk):
+            if skill.scope == "project":
+                continue
+            base_dir = f"{global_skills_dir.rstrip('/')}/{skill.name}"
+            policy = sk.get("drift_policy", "harvest")
+            body = render.compose_skill_body(reg, skill)
+            resources = render.compose_skill_resources(reg, skill)
+            deploy_path = f"{base_dir}/SKILL.md"
+            outputs.append(Output(
+                target="claude-code", kind="text", deploy_path=deploy_path,
+                dist_rel=f"claude-code/{safe_rel(deploy_path)}",
+                content=render.render_skill(skill, "claude-code", body=body),
+                drift_policy=policy, sources=[skill.rel],
+            ))
+            outputs += _skill_resource_outputs(skill, resources, "claude-code",
+                                               base_dir, policy)
     # per-project skills, agents, and prompts (the per-project binding design): each
     # project's manifest names the assets it uses; they deploy to that project's checkout.
-    # A skill/agent/prompt is reused across projects by naming it in each manifest, never copied.
-    sk = spec.get("skills") or {}
+    # A skill/agent/prompt is reused across projects by naming it in each manifest, never
+    # copied. Only scope: project skills are read here — a scope: global skill already
+    # deploys everywhere above, so a stray manifest listing for it is simply inert.
     ag = spec.get("agents") or {}
     pr = spec.get("prompts") or {}
     sk_subdir = sk.get("subdir", ".claude/skills/{name}")
@@ -1020,6 +1044,7 @@ def _plan_claude_code(reg, machine_name, spec) -> list[Output]:
         bound_skills = set(proj.get("skills") or [])
         for skill in reg.skills.values():
             if ("claude-code" not in skill.targets or skill.name not in bound_skills
+                    or skill.scope != "project"
                     or skill.frontmatter.get("extends_skill")):
                 continue
             base_dir = f"{local}/{sk_subdir.format(name=skill.name)}"
@@ -1090,7 +1115,11 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
     sk = spec.get("skills") or {}
     prompts_dir = paths.get("antigravity_skills")
     if prompts_dir and sk:
+        # scope: project skills are excluded here — they deploy only into the project
+        # checkouts that bind them (below), never this global directory.
         for skill in _selected_skills(reg, sk):
+            if skill.scope == "project":
+                continue
             fname = sk["subdir"].format(name=skill.name)
             deploy_path = f"{prompts_dir.rstrip('/')}/{fname}"
             outputs.append(Output(
@@ -1099,6 +1128,30 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
                 content=render.render_skill(skill, "gemini"),
                 drift_policy=sk.get("drift_policy", "harvest"), sources=[skill.rel],
             ))
+        # scope: project skills targeting gemini, bound to a project via that project's
+        # skills: list, deploy into <local_path>/.agents/skills/ — the Antigravity CLI
+        # project-scope convention, mirroring claude-code's per-project skill binding
+        # in _plan_claude_code.
+        policy = sk.get("drift_policy", "harvest")
+        for slug, proj in reg.projects.items():
+            local = _local(reg, machine_name, proj)
+            if not local:
+                continue
+            local = local.rstrip("/")
+            bound_skills = set(proj.get("skills") or [])
+            for skill in reg.skills.values():
+                if (skill.name not in bound_skills or "gemini" not in skill.targets
+                        or skill.scope != "project"
+                        or skill.frontmatter.get("extends_skill")):
+                    continue
+                fname = sk["subdir"].format(name=skill.name)
+                deploy_path = f"{local}/.agents/skills/{fname}"
+                outputs.append(Output(
+                    target="gemini", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"gemini/{safe_rel(deploy_path)}",
+                    content=render.render_skill(skill, "gemini"),
+                    drift_policy=policy, sources=[skill.rel],
+                ))
     pr = spec.get("prompts") or {}
     if prompts_dir and pr:
         for prompt in _selected_prompts(reg, pr):

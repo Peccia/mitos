@@ -4,6 +4,14 @@ This guide describes how to configure and deploy Mitos registry assets for the *
 
 The `gemini` target manages connection configurations and global permission grants for the Gemini command-line interface, ensuring it can seamlessly access your registered MCP servers.
 
+> **Deprecation notice:** Gemini CLI retires 2026-06-18 in favor of Antigravity CLI. Antigravity
+> CLI can import an existing `~/.gemini/` setup (`agy plugin import gemini`) — MCP servers,
+> allowlists, keybindings, and theme — into its own `~/.gemini/antigravity-cli/settings.json`.
+> This target's `mcp_config.json`/`config.json` merge still targets the old Gemini CLI contract;
+> repointing it at Antigravity CLI's `settings.json` format is a separate, not-yet-scoped change.
+> Skills/prompts already deploy to the Antigravity-native `~/.agents/skills/` path — see
+> [antigravity.md](antigravity.md).
+
 ---
 
 ## 📊 Support matrix

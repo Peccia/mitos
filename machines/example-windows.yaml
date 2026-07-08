@@ -7,7 +7,8 @@ targets: [gemini, claude-app, claude-code, agents-md]
 paths:
   projects_root: "C:/Projects"
   gemini_config: "~/.gemini/config"
-  antigravity_skills: "~/.gemini/skills"
+  antigravity_skills: "~/.agents/skills"
+  claude_code_skills: "~/.claude/skills"
   claude_skills_staging: "~/ClaudeSkills"
   agentic_context_root: "C:/MitosAgent"
   # Classic .exe install:
