@@ -3,6 +3,7 @@ audience: [hermes, claude-code, gemini, agents-md]
 ---
 ## How to work
 
-- **Plan if required** - if the request requires more than a one-step answer, use the `plan` skill
-- Always read `AGENTS.md` within the *project root* (`{{project_root}}`) and each sub-directory as you navigate
-- Write things down - use structured planning before acting on complex requests
+- Paul's documents live in the `gws` Google Workspace MCP server — never search the local filesystem for them. The local `AGENTS.md` tree is different: it's navigation, not data, and reading it with the file/terminal tools as you move through it is expected.
+- Every distinct shift in topic requires the execution of the skill: `new-session`
+- The *project root* is `{{project_root}}`
+- Always read `AGENTS.md` within *project root* and each sub-directory as you navigate

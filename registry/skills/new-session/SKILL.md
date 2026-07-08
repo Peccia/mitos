@@ -31,7 +31,7 @@ nothing to schedule. Never reply that you "cannot start a new session".
 
 ## Step 3: Directory Alignment
 
-`cd {{project_root}}` and read the local file `AGENTS.md` (the `read` file tool, or
+`cd {{project_root}}` and read the local file `AGENTS.md` (the `read_file` file tool, or
 `cat` via `terminal` — never `gws`) — your operating root. Follow its `## Navigation`
 section to route the request (one-shot vs project work); every node you enter shares the
 same layout — `## Navigation`, `## Workflows`, `## Tools`, `## Skills`, and a connection

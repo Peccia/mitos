@@ -40,7 +40,7 @@ memory of past sessions what a file can tell you now; re-read it.
 
 ## Tools
 
-- **Terminal & file operations** (the `read` / `terminal` tools) — use exclusively to
+- **Terminal & file operations** (the `read_file` / `terminal` tools) — use exclusively to
   navigate this tree: `cd` between folders and read `AGENTS.md` / `AGENTS_DETAILS.md`
   files. The owner's documents are never on this filesystem; they live in the connected
   document store.
