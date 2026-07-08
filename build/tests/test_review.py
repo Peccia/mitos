@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 
-from conftest import loader, reg, _plant_candidate, _temp_registry
+from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
 def test_graph_index_lists_local_projects_regardless_of_drive_key():
@@ -108,6 +108,143 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     # the new skill is now loadable from disk
     reloaded = loadermod.load(tmp)
     assert "widget-helper" in reloaded.skills
+
+
+def test_dismiss_and_restore_roundtrip():
+    """dismiss_docs moves a doc into the Recovery list; load_dismissed surfaces it;
+    restore_docs removes it again."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "example-project.json").write_text(
+        '{"slug": "example-project", "documents": []}', encoding="utf-8")
+
+    doc = {"id": "D1", "name": "Doc One", "dateModified": "2026-01-01",
+           "webUrl": "https://example.com/1"}
+    out = review.dismiss_docs(treg, "example-project", [doc])
+    assert out["ok"], out
+
+    recovered = review.load_dismissed(treg, "example-project")
+    assert recovered["ok"] and len(recovered["documents"]) == 1
+    entry = recovered["documents"][0]
+    assert entry["id"] == "D1" and entry["name"] == "Doc One"
+    assert entry["source"] == "manual" and entry["dismissed_at"]
+
+    # dismissing the same id again updates in place rather than duplicating
+    review.dismiss_docs(treg, "example-project", [doc])
+    recovered2 = review.load_dismissed(treg, "example-project")
+    assert len(recovered2["documents"]) == 1
+
+    restored = review.restore_docs(treg, "example-project", ["D1"])
+    assert restored["ok"], restored
+    recovered3 = review.load_dismissed(treg, "example-project")
+    assert recovered3["documents"] == []
+
+
+def test_dismiss_docs_rejects_invalid_slug():
+    """dismiss_docs/restore_docs refuse a traversal or empty slug, same as load_staged."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    for bad in ("../etc", "", ".", ".."):
+        r = review.dismiss_docs(treg, bad, [{"id": "X", "name": "X"}])
+        assert r["ok"] is False, f"expected ok=False for slug {bad!r}"
+        r2 = review.restore_docs(treg, bad, ["X"])
+        assert r2["ok"] is False, f"expected ok=False for slug {bad!r}"
+
+
+def test_dismiss_pool_fallback_mirrors_load_staged():
+    """No per-project staging file yet → dismissal lands in the shared unassigned
+    dismissed file (is_unassigned True). Once a project-specific staging file exists,
+    a fresh dismissal for that project lands in its own dismissed file instead."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+
+    out = review.dismiss_docs(treg, "example-project", [{"id": "U1", "name": "Unassigned Doc"}])
+    assert out["ok"]
+    unassigned_file = _inbox(tmp) / "staging" / "unassigned.dismissed.json"
+    assert unassigned_file.is_file()
+    result = review.load_dismissed(treg, "example-project")
+    assert result["is_unassigned"] is True
+    assert result["documents"][0]["id"] == "U1"
+
+    staging_dir = _inbox(tmp) / "staging"
+    (staging_dir / "example-project.json").write_text(
+        '{"slug": "example-project", "documents": []}', encoding="utf-8")
+    out2 = review.dismiss_docs(treg, "example-project", [{"id": "P1", "name": "Project Doc"}])
+    assert out2["ok"]
+    project_file = staging_dir / "example-project.dismissed.json"
+    assert project_file.is_file()
+    result2 = review.load_dismissed(treg, "example-project")
+    assert result2["is_unassigned"] is False
+    assert result2["documents"][0]["id"] == "P1"
+    # the earlier unassigned-pool dismissal is untouched, just no longer the active pool
+    unassigned_result = review.load_dismissed(treg, "example-project", pool="unassigned")
+    assert unassigned_result["documents"][0]["id"] == "U1"
+
+
+def test_dismiss_file_unreadable_is_tolerated():
+    """A corrupt dismissed-list file degrades to empty rather than raising — dismissal
+    state is best-effort, unlike staging artifacts which surface ok=False."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "unassigned.dismissed.json").write_text("not json", encoding="utf-8")
+    result = review.load_dismissed(treg, "example-project")
+    assert result["ok"] and result["documents"] == []
+    # a subsequent dismiss still succeeds and overwrites the corrupt file cleanly
+    out = review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc"}])
+    assert out["ok"]
+    result2 = review.load_dismissed(treg, "example-project")
+    assert result2["documents"][0]["id"] == "D1"
+
+
+def test_accept_removal_auto_dismisses_doc():
+    """Accepting a kind:graph candidate that removes a mapped document auto-dismisses
+    it (source: "removal") so it stops resurfacing in Discovery from the untouched
+    staging snapshot. A rejected removal candidate must NOT dismiss anything."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+
+    # map a document first
+    mapped = [{"id": "A", "name": "Alpha", "description": "a", "dateModified": "2026-01-01"}]
+    out = review.propose_graph_change(treg, "example-project", mapped, reason="seed")
+    assert out["ok"]
+    reg1 = loader.load(tmp)
+    acc = review.decide(reg1, out["id"], "accept", "")
+    assert acc["ok"]
+
+    # it must not be dismissed yet — nothing has removed it
+    assert review.load_dismissed(loader.load(tmp), "example-project")["documents"] == []
+
+    # propose + REJECT a removal — rejection must not dismiss anything
+    reg2 = loader.load(tmp)
+    rem_reject = review.propose_graph_change(reg2, "example-project", [], removals=["A"],
+                                             reason="removal to reject")
+    assert rem_reject["ok"]
+    rej = review.decide(loader.load(tmp), rem_reject["id"], "reject", "")
+    assert rej["ok"]
+    assert review.load_dismissed(loader.load(tmp), "example-project")["documents"] == []
+    merged_after_reject = graph.load_project_graph(gdir / "example-project.jsonld")
+    assert "A" in {d.drive_id for d in merged_after_reject.documents}
+
+    # propose + ACCEPT a removal — now it must be auto-dismissed
+    reg3 = loader.load(tmp)
+    rem_accept = review.propose_graph_change(reg3, "example-project", [], removals=["A"],
+                                             reason="removal to accept")
+    assert rem_accept["ok"]
+    acc2 = review.decide(loader.load(tmp), rem_accept["id"], "accept", "")
+    assert acc2["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    assert "A" not in {d.drive_id for d in merged.documents}
+
+    dismissed = review.load_dismissed(loader.load(tmp), "example-project")
+    assert len(dismissed["documents"]) == 1
+    entry = dismissed["documents"][0]
+    assert entry["id"] == "A" and entry["name"] == "Alpha" and entry["source"] == "removal"
 
 
 def test_propose_new_skill_rejects_name_collision_and_bad_shape():

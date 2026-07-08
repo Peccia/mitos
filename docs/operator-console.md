@@ -64,6 +64,20 @@ The **Knowledge Graph** tab is Stage 3 of mapping your workspace documents into 
 5. Click **Propose selected**. This writes a `kind: graph` candidate into your Inbox.
 6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which compiles into the Agentic Context roster on your next deploy.
 
+### 🗂️ Discovery and Recovery
+
+The left column is tabbed: **Discovery** (staged files not yet mapped — the checklist above) and
+**Recovery** (files dismissed from Discovery, or auto-dismissed when an accepted removal drops
+them from the graph). A staged file's own **Dismiss** action (per-row, or **Dismiss selected**
+for a batch) moves it to Recovery instead of proposing it — useful for staged noise (screenshots,
+scratch files) you never intend to map. Because staging snapshots are never pruned, a document
+you remove from the graph would otherwise resurface in Discovery the moment it's unmapped again;
+accepting a removal auto-dismisses it into Recovery instead, tagged **Removed** (a manual dismissal
+is tagged **Dismissed**). **Restore** in Recovery clears the dismissal so the file reappears in
+Discovery and can be mapped again. Dismissals live in `inbox/staging/<slug>.dismissed.json` (or
+`unassigned.dismissed.json`), mirroring the same project/unassigned pool fallback as staging
+itself.
+
 ### 🎭 Org domains on efforts
 
 One structured field in this tab drives the org model — the **effort `Org domain` select**: it tags an effort (Work grouping) with the org domain that governs it — e.g. a `Steam Launch` effort tagged `marketing` inside an otherwise software-heavy project. The tag compiles into an org routing line under that effort's heading in the generated files, which is how a session knows to load `org-marketing` for that work and `org-software` for the rest. **Projects themselves are never bound to one org** — the manifest has no `org:` field; the association lives on the work.

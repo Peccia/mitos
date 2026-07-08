@@ -443,18 +443,35 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
 
 def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[list[str], str | None]:
     """Accept a graph candidate: upsert the fragment into registry/graph/<slug>.jsonld,
-    written canonically. Returns (changed_paths, error)."""
+    written canonically. Returns (changed_paths, error).
+
+    A doc dropped by `removals` is also auto-dismissed (moved to the Recovery list) so
+    it stops resurfacing in Discovery just because it's no longer mapped — the staged
+    snapshot that surfaced it originally is never pruned. Snapshotted from the graph
+    BEFORE the merge (the fragment carries no metadata for a pure removal), and only
+    once the write has actually succeeded."""
     from . import graph as graphmod
     from .io import write_text
     slug = meta.get("project") or ""
     if slug not in reg.projects:
         return [], f"unknown project {slug!r} for graph candidate"
+    removals = [str(r) for r in (meta.get("removals") or [])]
+    removed_docs = []
+    if removals:
+        existing = reg.graphs.get(slug)
+        by_id = {d.drive_id: d for d in existing.documents} if existing else {}
+        removed_docs = [
+            {"id": rid, "name": by_id[rid].name, "dateModified": by_id[rid].date_modified,
+             "webUrl": by_id[rid].drive_url}
+            for rid in removals if rid in by_id]
     try:
         merged = _merged_graph(reg, slug, payload, meta.get("removals"),
                                meta.get("effort_removals"))
         write_text(_graph_file(reg, slug), graphmod.canonical_jsonld(merged))
     except graphmod.GraphError as e:
         return [], f"invalid graph fragment: {e}"
+    if removed_docs:
+        dismiss_docs(reg, slug, removed_docs, source="removal")
     return [_graph_rel(reg, slug)], None
 
 
@@ -1138,6 +1155,89 @@ def _read_staging(path: Path, slug: str, is_unassigned: bool) -> dict:
             "scope": data.get("scope", {}), "is_unassigned": is_unassigned}
 
 
+def _dismiss_file(reg: Registry, slug: str, pool: str = "") -> tuple[Path, bool]:
+    """Resolve which dismissed-list file backs `slug` for the given pool — mirrors
+    load_staged's own fallback so a dismissal always lands beside whichever staging
+    file Discovery is actually showing: pool=="unassigned" forces the shared file;
+    otherwise the per-project file is used when the per-project staging file exists,
+    else the shared unassigned file. Returns (path, is_unassigned)."""
+    staging = loader.inbox_dir(reg) / "staging"
+    unassigned = staging / "unassigned.dismissed.json"
+    if pool == "unassigned":
+        return unassigned, True
+    if (staging / f"{slug}.json").is_file():
+        return staging / f"{slug}.dismissed.json", False
+    return unassigned, True
+
+
+def _read_dismissed(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    docs = data.get("documents") if isinstance(data, dict) else None
+    return docs if isinstance(docs, list) else []
+
+
+def _write_dismissed(path: Path, docs: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"documents": docs}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def load_dismissed(reg: Registry, slug: str, pool: str = "") -> dict:
+    """Read the Recovery list backing `slug` — the console's Recovery tab."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    path, is_unassigned = _dismiss_file(reg, slug, pool)
+    return {"ok": True, "slug": slug, "documents": _read_dismissed(path),
+            "is_unassigned": is_unassigned}
+
+
+def dismiss_docs(reg: Registry, slug: str, docs: list[dict], pool: str = "",
+                 source: str = "manual") -> dict:
+    """Move one or more documents from Discovery into the Recovery list backing
+    `slug`/`pool` (see _dismiss_file). Idempotent — dismissing an already-dismissed id
+    updates its entry in place rather than duplicating it. `source` is "manual" (the
+    Discovery Dismiss action) or "removal" (auto-dismissed when accept drops the doc
+    from the graph)."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not docs:
+        return {"ok": False, "error": "no documents to dismiss"}
+    path, _ = _dismiss_file(reg, slug, pool)
+    existing = {d["id"]: d for d in _read_dismissed(path) if d.get("id")}
+    now = _now()
+    src = source if source in ("manual", "removal") else "manual"
+    for d in docs:
+        did = str(d.get("id") or "").strip()
+        if not did:
+            continue
+        existing[did] = {
+            "id": did, "name": d.get("name", ""), "dateModified": d.get("dateModified", ""),
+            "webUrl": d.get("webUrl", ""), "dismissed_at": now, "source": src,
+        }
+    _write_dismissed(path, list(existing.values()))
+    return {"ok": True}
+
+
+def restore_docs(reg: Registry, slug: str, ids: list[str], pool: str = "") -> dict:
+    """Remove one or more ids from the Recovery list backing `slug`/`pool` — the
+    document reappears in Discovery on its next fetch."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not ids:
+        return {"ok": False, "error": "no documents to restore"}
+    path, _ = _dismiss_file(reg, slug, pool)
+    id_set = {str(i) for i in ids}
+    remaining = [d for d in _read_dismissed(path) if d.get("id") not in id_set]
+    _write_dismissed(path, remaining)
+    return {"ok": True}
+
+
 def load_staged(reg: Registry, slug: str, pool: str = "") -> dict:
     """Read inbox/staging/<slug>.json (a connector-produced listing) for the console to
     curate offline. `pool == "unassigned"` forces the shared unassigned pool
@@ -1402,6 +1502,12 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 slug = (q.get("slug") or [""])[0]
                 pool = (q.get("pool") or [""])[0]
                 return self._json(200, load_staged(holder["reg"], slug, pool))
+            if self.path.startswith("/api/graph/dismissed"):
+                from urllib.parse import parse_qs, urlsplit
+                q = parse_qs(urlsplit(self.path).query)
+                slug = (q.get("slug") or [""])[0]
+                pool = (q.get("pool") or [""])[0]
+                return self._json(200, load_dismissed(holder["reg"], slug, pool))
             if self.path == "/api/org":
                 return self._json(200, org_index(holder["reg"]))
             if self.path.startswith("/api/org/tree"):
@@ -1425,6 +1531,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
 
         def do_POST(self):
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
+                                  "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/prompts/favorite", "/api/skills/new",
                                   "/api/org/new-domain"):
                 return self._json(404, {"ok": False, "error": "not found"})
@@ -1488,6 +1595,22 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     str(body.get("reason", "") or ""),
                     effs if isinstance(effs, list) else [],
                     eff_rem if isinstance(eff_rem, list) else [])
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/dismiss":
+                # Discovery's manual Dismiss action — moves doc(s) to Recovery
+                docs = body.get("documents")
+                result = dismiss_docs(
+                    holder["reg"], str(body.get("slug", "")),
+                    docs if isinstance(docs, list) else [],
+                    str(body.get("pool", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/restore":
+                # Recovery tab's Restore action — the doc reappears in Discovery
+                ids = body.get("ids")
+                result = restore_docs(
+                    holder["reg"], str(body.get("slug", "")),
+                    ids if isinstance(ids, list) else [],
+                    str(body.get("pool", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             result = decide(holder["reg"], str(body.get("id", "")),
                             str(body.get("decision", "")),

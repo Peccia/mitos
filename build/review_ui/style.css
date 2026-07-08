@@ -510,6 +510,8 @@ select:focus, textarea:focus {
 .badge.new    { background: var(--ok-bg); color: var(--ok); }
 .badge.draft  { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
 .badge.pending { background: var(--warn-bg); color: var(--warn); }
+.badge.removed { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
+.badge.dismissed { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
 
 /* ── Diff table ──────────────────────────────────────────────────────────── */
 .diff {
@@ -1129,6 +1131,15 @@ details.payload pre {
 }
 .pane-head strong { flex: 1; }
 .pane-hint { padding: .4rem 0; }
+
+.left-pane-tabs { display: flex; gap: 1rem; margin-bottom: .55rem; border-bottom: 1px solid var(--line); }
+.left-tab {
+  padding: .35rem 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .15s ease, border-color .15s ease;
+}
+.left-tab:hover { color: var(--ink); }
+.left-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 
 .pool-toggle { display: inline-flex; gap: .3rem; }
 .pool-opt {

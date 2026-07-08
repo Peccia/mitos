@@ -53,6 +53,9 @@ let stagedSel = { project: new Set(), unassigned: new Set() };
 function curStagedSel() { return stagedSel[stagedPool]; }
 let stagedFilter = "";     // client-side search text for the staged list
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
+let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
+let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
+let recoverFilter = "";    // client-side search text for the recovery list
 let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified,keywords}, lockId }
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
@@ -123,6 +126,10 @@ async function refresh() {
   if (rootEl) { rootEl.textContent = STATE.root; rootEl.title = STATE.root; }
   const countEl = $("inbox-count");
   if (countEl) countEl.textContent = STATE.candidates.length || "";
+  // An accepted graph candidate may have auto-dismissed a removed doc (see
+  // _apply_graph_candidate) — refetch Recovery so it doesn't linger stale and let a
+  // now-unmapped-but-still-dismissed doc reappear in Discovery until a full reload.
+  if (graphSlug && dismissedData) loadDismissed(graphSlug);
   // render the panes independently — a fault in one must not blank the others
   safeRender($("view-inbox"), renderInbox);
   safeRender($("view-graph"), renderGraph);
@@ -456,6 +463,19 @@ async function loadStaged(slug) {
   }
 }
 
+// Recovery list mirrors the same Staged/Unassigned pool the Discovery toggle shows —
+// a dismissal always lands beside whichever staging file surfaced the document.
+async function loadDismissed(slug) {
+  try {
+    const r = await fetch("/api/graph/dismissed?slug=" + encodeURIComponent(slug)
+      + (stagedPool === "unassigned" ? "&pool=unassigned" : ""));
+    dismissedData = await r.json();
+    renderGraph();
+  } catch (e) {
+    // fail silently — recovery pane shows an empty state
+  }
+}
+
 // Document IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
 // for this project (upsert OR removal) can't be drafted again until it's accepted/rejected.
 function pendingDocIds(slug) {
@@ -533,12 +553,14 @@ function selectProject(slug) {
   graphSlug = slug;
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
+  dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   renderGraph();
   loadStaged(slug);
+  loadDismissed(slug);
 }
 
-// ── right: workspace = Discovery pane | Registry pane ─────────────────────────
+// ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
 function buildGraphWorkspace(g) {
   const ws = el("section"); ws.id = "graph-workspace";
   const head = el("div", "graph-ws-head");
@@ -555,13 +577,33 @@ function buildGraphWorkspace(g) {
   const registry = el("div", "graph-pane");
   panes.append(discovery, registry);
   ws.append(panes);
-  buildDiscoveryPane(discovery, g);
+  buildLeftPane(discovery, g);
   buildRegistryPane(registry, g);
   return ws;
 }
 
-// Documents in the staged pool that aren't already mapped into the project graph, plus the
-// subset matching the current filter. Recomputed cheaply on each targeted update.
+// Left column is tabbed: Discovery (staged docs not yet mapped) and Recovery (docs
+// dismissed from Discovery, or auto-dismissed when removed from the registry).
+function buildLeftPane(container, g) {
+  const tabs = el("div", "left-pane-tabs");
+  for (const [val, label] of [["discovery", "Discovery"], ["recovery", "Recovery"]]) {
+    const b = el("button", "left-tab" + (leftTab === val ? " active" : ""), label);
+    b.onclick = () => {
+      if (leftTab === val) return;
+      leftTab = val;
+      renderGraph();
+      if (val === "recovery" && (!dismissedData || dismissedData.slug !== g.slug)) loadDismissed(g.slug);
+    };
+    tabs.append(b);
+  }
+  container.append(tabs);
+  if (leftTab === "recovery") buildRecoveryPane(container, g);
+  else buildDiscoveryPane(container, g);
+}
+
+// Documents in the staged pool that aren't already mapped into the project graph or
+// dismissed into Recovery, plus the subset matching the current filter. Recomputed
+// cheaply on each targeted update.
 function stagedVisible(g) {
   const mappedIds = new Set((g.documents || []).map((d) => d.id));
   // The shared unassigned pool is drawn from across all projects, so a document already
@@ -571,7 +613,11 @@ function stagedVisible(g) {
     ((STATE && STATE.graphs) || []).forEach((gr) =>
       (gr.documents || []).forEach((d) => mappedIds.add(d.id)));
   }
-  const all = (stagedData.documents || []).filter((d) => !mappedIds.has(d.id));
+  const dismissedIds = new Set(
+    ((dismissedData && dismissedData.slug === g.slug && dismissedData.documents) || [])
+      .map((d) => d.id));
+  const all = (stagedData.documents || [])
+    .filter((d) => !mappedIds.has(d.id) && !dismissedIds.has(d.id));
   const q = stagedFilter.trim().toLowerCase();
   const filtered = q
     ? all.filter((d) => (d.name + " " + (d.description || "")).toLowerCase().includes(q))
@@ -581,15 +627,15 @@ function stagedVisible(g) {
 
 function buildDiscoveryPane(container, g) {
   const head = el("div", "pane-head");
-  head.append(el("strong", "", "Discovery"));
   const toggle = el("div", "pool-toggle");
   for (const [val, label] of [["project", "Staged"], ["unassigned", "Unassigned"]]) {
     const b = el("button", "pool-opt" + (stagedPool === val ? " active" : ""), label);
     b.onclick = () => {
       if (stagedPool === val) return;
       // selection is per-pool (stagedSel[val]) — switching pools must not touch it
-      stagedPool = val; stagedData = null; stagedFilter = "";
+      stagedPool = val; stagedData = null; stagedFilter = ""; dismissedData = null;
       loadStaged(g.slug);
+      loadDismissed(g.slug);
     };
     toggle.append(b);
   }
@@ -623,7 +669,14 @@ function buildDiscoveryPane(container, g) {
   clr.onclick = () => { curStagedSel().clear(); renderStagedRows(g); };
   const add = el("button", "accept tiny staged-add");
   add.onclick = () => addSelectedStaged(g);
-  sbar.append(search, info, selAll, clr, add);
+  const dismissSel = el("button", "ghost tiny danger", "Dismiss selected");
+  dismissSel.title = "Move the selected documents to Recovery so they stop showing up here";
+  dismissSel.onclick = () => {
+    const picked = (stagedData && stagedData.documents || []).filter((d) => curStagedSel().has(d.id));
+    if (!picked.length) { toast("Tick at least one document."); return; }
+    dismissStaged(g, picked);
+  };
+  sbar.append(search, info, selAll, clr, add, dismissSel);
   container.append(sbar);
   container.append(el("div", "staged-rows"));
   // Defer until the workspace is in the DOM (querySelector needs #graph-workspace present)
@@ -687,7 +740,10 @@ function renderStagedRows(g) {
         const tweak = el("button", "ghost tiny", "Tweak & map");
         tweak.title = "Edit the title/description before adding to the draft";
         tweak.onclick = () => openTweak(g, d);
-        actions.append(map, tweak);
+        const dismiss = el("button", "ghost tiny danger", "Dismiss");
+        dismiss.title = "Move to Recovery — won't reappear here until restored";
+        dismiss.onclick = () => dismissStaged(g, [d]);
+        actions.append(map, tweak, dismiss);
         meta.append(actions);
       }
       if (d.webUrl) {
@@ -733,6 +789,109 @@ function addSelectedStaged(g) {
   curStagedSel().clear();
   toast(`Added ${picked.length} to the draft — review in the dock, then Propose.`);
   renderGraph();
+}
+
+// Moves one or more staged docs to Recovery — a manual dismissal (as opposed to the
+// server's auto-dismissal of docs dropped by an accepted removal).
+async function dismissStaged(g, docs) {
+  if (!docs.length) return;
+  try {
+    const r = await fetch("/api/graph/dismiss", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, documents: docs,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Dismiss failed."); return; }
+    for (const d of docs) curStagedSel().delete(d.id);
+    dismissedData = null;
+    toast(`Dismissed ${docs.length} — find ${docs.length === 1 ? "it" : "them"} in Recovery.`);
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Dismiss failed — server unreachable.");
+  }
+}
+
+// ── left pane (Recovery tab): docs dismissed from Discovery or dropped by a removal ──
+function buildRecoveryPane(container, g) {
+  const head = el("div", "pane-head");
+  const search = el("input", "staged-search");
+  search.type = "search"; search.placeholder = "Filter recovered…"; search.value = recoverFilter;
+  search.oninput = () => { recoverFilter = search.value; renderRecoveryRows(g); };
+  head.append(search);
+  container.append(head);
+  container.append(el("div", "recover-rows"));
+  setTimeout(() => renderRecoveryRows(g), 0);
+}
+
+function renderRecoveryRows(g) {
+  const rows = document.querySelector("#graph-workspace .recover-rows");
+  if (!rows) return;
+  rows.replaceChildren();
+  if (!dismissedData || !dismissedData.ok || dismissedData.slug !== g.slug) {
+    rows.append(el("div", "muted pane-hint", "Nothing recovered yet."));
+    return;
+  }
+  const all = dismissedData.documents || [];
+  const q = recoverFilter.trim().toLowerCase();
+  const visible = q ? all.filter((d) => (d.name || "").toLowerCase().includes(q)) : all;
+  if (all.length === 0) {
+    rows.append(el("div", "muted",
+      "Nothing dismissed, and nothing removed from this project yet."));
+    return;
+  }
+  if (visible.length === 0) {
+    rows.append(el("div", "muted", "No matches for current filter."));
+    return;
+  }
+  for (const d of visible) {
+    const row = el("div", "staged-row");
+    const body = el("div", "staged-body");
+    const nameLine = el("div", "staged-nameline");
+    nameLine.append(el("span", "staged-name", d.name || d.id));
+    const isRemoval = d.source === "removal";
+    nameLine.append(el("span", "badge " + (isRemoval ? "removed" : "dismissed"),
+      isRemoval ? "Removed" : "Dismissed"));
+    body.append(nameLine);
+    const meta = el("div", "staged-meta");
+    if (d.dismissed_at) meta.append(el("span", "muted staged-mod", d.dismissed_at));
+    const actions = el("span", "row-actions");
+    const restore = el("button", "ghost tiny", "Restore");
+    restore.title = "Move back to Discovery so it can be mapped again";
+    restore.onclick = () => restoreDoc(g, d.id);
+    actions.append(restore);
+    meta.append(actions);
+    if (d.webUrl) {
+      const a = el("a", "staged-link", "Open");
+      a.target = "_blank"; a.rel = "noopener";
+      a.href = d.webUrl;
+      meta.append(a);
+    }
+    body.append(meta);
+    row.append(body);
+    rows.append(row);
+  }
+}
+
+async function restoreDoc(g, id) {
+  try {
+    const r = await fetch("/api/graph/restore", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, ids: [id],
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Restore failed."); return; }
+    dismissedData = null;
+    toast("Restored — back in Discovery.");
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Restore failed — server unreachable.");
+  }
 }
 
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
@@ -3055,7 +3214,11 @@ document.addEventListener("keydown", (e) => {
 
 // sidebar navigation
 $("nav-inbox").onclick = () => showTab("inbox");
-$("nav-graph").onclick = () => { showTab("graph"); if (graphSlug && !stagedData) loadStaged(graphSlug); };
+$("nav-graph").onclick = () => {
+  showTab("graph");
+  if (graphSlug && !stagedData) loadStaged(graphSlug);
+  if (graphSlug && !dismissedData) loadDismissed(graphSlug);
+};
 $("nav-skills").onclick = () => showTab("skills");
 $("nav-prompts").onclick = () => { filterChip = "all"; showTab("prompts"); renderChips(); renderList(); };
 
