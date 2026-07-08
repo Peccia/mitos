@@ -364,7 +364,7 @@ def skills_block(skills: list) -> str:
         return ""
     lines = ["## Skills", "",
              "Local instruction files at `{{skills_root}}/<category>/<name>/SKILL.md` — "
-             "read one with the `read` file tool and follow it; a skill is never a "
+             "read one with the `read_file` file tool and follow it; a skill is never a "
              "callable tool.", ""]
     for s in general:
         desc = (s.frontmatter.get("description") or "").strip()
