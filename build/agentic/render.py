@@ -311,6 +311,22 @@ def dynamic_branches_block(branches: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def agentic_tree_note_block(subdir: str) -> str:
+    """The `<generated>` cross-reference appended to a project's own root AGENTS.md when
+    that project ALSO has an agentic_tree: mount — the "project within a project" note:
+    two AGENTS.md-shaped files legitimately coexist (this one is the project's own
+    document/repo index; the mount is a full operating tree), so name the split
+    explicitly rather than leaving a reader to wonder which one is authoritative."""
+    subdir = subdir.rstrip("/")
+    return (
+        f"## Operating Tree\n\n"
+        f"This project also has a full agentic operating tree mounted at `{subdir}/` — "
+        f"the same Navigation/Workflows/Skills shape a dedicated agentic machine gets. "
+        f"See [`{subdir}/AGENTS.md`]({subdir}/AGENTS.md) for that context; this file is "
+        f"this project's own document/repo index, generated separately.\n"
+    )
+
+
 def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:
     """The `(heading, detail)` for a connection: `heading` is the STABLE section title
     `<Name> (`key`)` that SOUL and skills reference by name (never the raw description

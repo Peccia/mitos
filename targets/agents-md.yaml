@@ -10,11 +10,20 @@ target: agents-md
 # no provenance markers, no per-file template (invariant #5). render.plain_document
 # joins the sections; there is no .j2 layer.
 
-# Tree 1 — the personal-assistant context tree (Hermes / Antigravity assistant root).
-# `root` is a machine path key resolved in machines/*.yaml.
+# Tree 1 — the personal-assistant context tree. Two mount kinds render this same tree
+# shape (Navigation/Workflows/Skills, roster, dynamic branches): a MACHINE mount at
+# `root_key` (a path in machines/*.yaml — the Hermes/agentic-machine combo), or a
+# PROJECT mount inside a project's own checkout (a workstation's `agentic_tree:` in
+# registry/projects/<slug>.yaml — the counterpart for e.g. Antigravity operating against
+# one project the way Hermes operates against a whole machine). project_mountable opts
+# this tree into the second kind; drift_policy: protect applies to both — every mount is
+# an operating surface whose edits reconcile back to the registry (contrast the
+# `agentic_context_root`/agentic-graph lane, which is drift_policy: generated — a
+# read-only reference map, never an editing surface).
 trees:
   assistant:
     root_key: assistant_root
+    project_mountable: true
     drift_policy: protect
     files:
       # Root entry point: the first file new-session reads. Lean routing + personal-context

@@ -79,6 +79,7 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             outputs += _plan_claude_app(reg, machine_name, spec, paths)
     outputs += _plan_env(reg, machine_name, paths)
     outputs += _plan_graph_tree(reg, machine_name, paths)
+    outputs += _plan_agentic_tree_mounts(reg, machine_name)
 
     # Validate output path collisions (prevent two targets/rules from deploying to the
     # same file). Merge kinds (yaml_merge/json_merge) are exempt from the single-owner
@@ -575,6 +576,241 @@ def _gws(reg: Registry, machine_name: str) -> dict:
 
 
 # ── agents-md ────────────────────────────────────────────────────────────────
+def _plan_agentic_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
+    """Project-mounted operating trees (agentic_tree: on a project manifest) — the
+    workstation-side counterpart to a machine's assistant_root mount. Called
+    unconditionally from plan_machine (like _plan_graph_tree), deliberately independent
+    of whether THIS machine lists agents-md as a target: agents-md is a context format a
+    project opts into, not a harness a machine opts into, so one project's mount must not
+    require a machine-wide target-list edit (which would also flip is_hermes_machine for
+    every OTHER project's co-located AGENTS.md in _plan_claude_code).
+
+    No-op on an agentic (hermes) machine — it already hosts this tree at its machine
+    root; a project mount there would be a redundant second reconciliation surface over
+    the exact same content."""
+    machine = reg.machines[machine_name]
+    if "hermes" in machine.get("targets", []):
+        return []
+    spec = reg.targets.get("agents-md") or {}
+    outputs: list[Output] = []
+    for tree in (spec.get("trees") or {}).values():
+        if not tree.get("project_mountable"):
+            continue
+        for slug, proj in sorted(reg.projects.items()):
+            subdir = proj.get("agentic_tree")
+            if not subdir:
+                continue
+            local = _local(reg, machine_name, proj)
+            if not local:
+                continue
+            mount_root = f"{local.rstrip('/')}/{subdir}"
+            outputs += _emit_tree(reg, machine_name, tree, mount_root, [])
+    return outputs
+
+
+def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Output]:
+    """Render one agents-md tree at `root` — a machine's tree-root path key, or a
+    project's agentic_tree mount inside its own checkout. Mount-point-agnostic: the
+    output (Navigation/Workflows/Skills, roster, dynamic branches, per-project doc
+    entries) is identical either way, only the deploy root differs.
+    """
+    machine = reg.machines[machine_name]
+    outputs: list[Output] = []
+    policy = tree.get("drift_policy", "protect")
+
+    # Dynamic branches (the dynamic-branches design): any partial matching
+    # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch — the
+    # only way an overlay user extends this tree without forking
+    # targets/agents-md.yaml, which is not overlayable. Discovered before the
+    # static-files loop so the root AGENTS.md's generated block can list them.
+    reserved = {rf.split("/", 1)[0].lower() for rf in tree["files"] if "/" in rf}
+    branches: set[str] = set()
+    for logical in reg.partials:
+        m = _BRANCH_RE.match(logical)
+        if m:
+            branches.add(m.group(1))
+    for branch in sorted(branches):
+        if branch.lower() in reserved:
+            raise RegistryError(
+                f"context/{branch}/AGENTS.md: branch name {branch!r} collides "
+                f"with a reserved top-level entry ({sorted(reserved)}) — choose a "
+                f"different folder name under registry/context/")
+
+    # Roster for the generated Project Roster block on Projects/AGENTS.md: exactly
+    # the projects that get a Projects/<name>/ folder in this tree — via the
+    # ctx-key route (context.<project_context_key>) or the builder route (a
+    # builder-context project whose local_path lands under <root>/Projects/, e.g.
+    # Mitos self-hosting). Shipped examples suppressed, same as the folders.
+    roster_key = tree.get("project_context_key")
+    roster: list[dict] = []
+    if roster_key:
+        _sup = _suppressed_examples(reg)
+        proj_prefix = f"{root.rstrip('/')}/Projects/".replace("\\", "/")
+        for slug, proj in sorted(reg.projects.items()):
+            if slug in _sup:
+                continue
+            ctx = proj.get("context") or {}
+            if roster_key in ctx:
+                roster.append(proj)
+                continue
+            if "builder" in ctx:
+                local = _local(reg, machine_name, proj)
+                if local and local.replace("\\", "/").rstrip("/").startswith(proj_prefix):
+                    roster.append(proj)
+
+    for rel_file, srcs in tree["files"].items():
+        sections = _sections(reg, srcs, "agents-md")
+        deploy_path = f"{root.rstrip('/')}/{rel_file}"
+        # For Projects/AGENTS.md, append the org-domain table (the `## Skills` section)
+        # and then the generated Project Roster as ONE <generated> section — in that
+        # order so the file follows the reserved section order (Skills before rosters).
+        # The table replaces the retired static org-roles.md partial; the roster
+        # replaces the hand-written list that used to live in projects-index.md — both
+        # always reflect the active registry.
+        if rel_file == "Projects/AGENTS.md":
+            gen_parts = []
+            org_block = render.org_domain_table(list(reg.skills.values()))
+            if org_block:
+                gen_parts.append(org_block.rstrip("\n"))
+            roster_block = render.project_roster_block(roster)
+            if roster_block:
+                gen_parts.append(roster_block.rstrip("\n"))
+            if gen_parts:
+                combined_sections = list(sections) + [
+                    (render.GENERATED_SECTION, "\n\n".join(gen_parts))]
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                    content=render.plain_document(combined_sections),
+                    drift_policy=policy,
+                    sources=srcs,
+                    section_bodies=combined_sections,
+                ))
+                continue
+        # For the tree root AGENTS.md, append connections (this machine's document
+        # store), the general-skills catalog, and the dynamic-branches roster — each
+        # only when it has content — combined into ONE <generated> section (a second
+        # tuple sharing the same GENERATED_SECTION source key would collide in the
+        # section-map dict that adopt/split_live_sections builds).
+        if rel_file == "AGENTS.md":
+            # Reserved section order: `## Skills`, then the connection section, then the
+            # dynamic-branches roster (navigation appendix).
+            gen_parts = []
+            sk_block = render.skills_block(hermes_selected_skills)
+            if sk_block:
+                gen_parts.append(sk_block.rstrip("\n"))
+            conn_block = render.connections_block(
+                reg.servers.get("servers") or {}, machine, reg.user)
+            if conn_block:
+                gen_parts.append(conn_block.rstrip("\n"))
+            if branches:
+                gen_parts.append(render.dynamic_branches_block(sorted(branches)).rstrip("\n"))
+            if gen_parts:
+                combined_sections = list(sections) + [
+                    (render.GENERATED_SECTION, "\n\n".join(gen_parts))]
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                    content=render.plain_document(combined_sections),
+                    drift_policy=policy, sources=srcs,
+                    section_bodies=combined_sections,
+                ))
+                continue
+        # For the Assistant branch root, append this machine's connections as a
+        # <generated> section — the one-shot workflow's own "what's wired up" note.
+        if rel_file == "Assistant/AGENTS.md":
+            conn_block = render.connections_block(
+                reg.servers.get("servers") or {}, machine, reg.user)
+            if conn_block:
+                combined_sections = list(sections) + [
+                    (render.GENERATED_SECTION, conn_block.rstrip("\n"))]
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                    content=render.plain_document(combined_sections),
+                    drift_policy=policy, sources=srcs,
+                    section_bodies=combined_sections,
+                ))
+                continue
+        outputs.append(Output(
+            target="agents-md", kind="text", deploy_path=deploy_path,
+            dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+            content=render.plain_document(sections), drift_policy=policy,
+            sources=srcs, section_bodies=_multi(sections),
+        ))
+
+    # Emit every file under each discovered branch (not just its AGENTS.md) at
+    # <root>/<branch>/<relative-path-after-branch>.
+    for branch in sorted(branches):
+        prefix_key = f"context/{branch}/"
+        for logical in sorted(reg.partials):
+            if not logical.startswith(prefix_key):
+                continue
+            sub_rel = logical[len(prefix_key):]
+            sections = _sections(reg, [logical], "agents-md")
+            if not sections:
+                continue
+            deploy_path = f"{root.rstrip('/')}/{branch}/{sub_rel}"
+            outputs.append(Output(
+                target="agents-md", kind="text", deploy_path=deploy_path,
+                dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                content=render.plain_document(sections), drift_policy=policy,
+                sources=[logical], section_bodies=_multi(sections),
+            ))
+
+    # Dynamic per-project entries: generate "Projects/<name>/AGENTS.md" for each
+    # project whose manifest declares context.<project_context_key>.
+    # When the project also has a knowledge graph, append the titles-index and
+    # emit a companion AGENTS_DETAILS.md (non-adoptable, drift_policy generated).
+    ctx_key = tree.get("project_context_key")
+    if ctx_key:
+        from . import graph as graphmod
+        suppressed = _suppressed_examples(reg)
+        for slug, proj in sorted(reg.projects.items()):
+            if slug in suppressed:
+                continue
+            ctx = proj.get("context") or {}
+            if ctx_key not in ctx:
+                continue
+            src_rel = _strip_reg(ctx[ctx_key])
+            name = proj.get("name", slug)
+            rel_file = f"Projects/{name}/AGENTS.md"
+            sections = _sections(reg, [src_rel], "agents-md")
+            if not sections:
+                continue
+            deploy_path = f"{root.rstrip('/')}/{rel_file}"
+            pg = reg.graphs.get(slug)
+            if pg:
+                # prose header (protected) + lightweight titles index (generated);
+                # full per-document detail lives in the companion AGENTS_DETAILS.md.
+                prose_body = render.plain_document(sections).rstrip("\n")
+                outputs.append(_mixed_doc_output(
+                    "agents-md", deploy_path, prose_body,
+                    graphmod.project_index_markdown(
+                        pg, _doc_store_heading(reg, proj),
+                        emit_heading=_connection_emit(proj, prose_body)),
+                    src_rel, policy))
+            else:
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                    content=render.plain_document(sections),
+                    drift_policy=policy,
+                    sources=[src_rel], section_bodies=_multi(sections),
+                ))
+            if pg:
+                details_path = (f"{root.rstrip('/')}/Projects/{name}/"
+                                f"{graphmod.DETAILS_FILENAME}")
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=details_path,
+                    dist_rel=f"agents-md/{safe_rel(details_path)}",
+                    content=graphmod.project_details_markdown(
+                        pg, _doc_store_heading(reg, proj)),
+                    drift_policy="generated", sources=[],
+                ))
+    return outputs
+
+
 def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
@@ -586,204 +822,19 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     hermes_selected_skills = (
         _selected_skills(reg, hermes_sk_spec)
         if "hermes" in machine.get("targets", []) and hermes_sk_spec else [])
-    # tree: assistant
+    # tree: assistant — the machine mount (root_key resolves in this machine's paths).
+    # Project mounts (agentic_tree: on a project manifest) are a SEPARATE, unconditional
+    # call site (_plan_agentic_tree_mounts, below) — deliberately not gated on "agents-md"
+    # being one of THIS machine's targets, since agents-md is a context format a project
+    # opts into, not a harness a machine opts into. Keeping it here would tie a project's
+    # own mount to a machine-wide target-list edit that also reshapes every OTHER
+    # project's co-located AGENTS.md on that machine (is_hermes_machine in
+    # _plan_claude_code) — a blast radius far wider than one project's own field.
     for tree_name, tree in (spec.get("trees") or {}).items():
         root_key = tree["root_key"]
-        if root_key not in paths:
-            continue  # this machine doesn't host the tree
-        root = paths[root_key]
-        policy = tree.get("drift_policy", "protect")
+        if root_key in paths:
+            outputs += _emit_tree(reg, machine_name, tree, paths[root_key], hermes_selected_skills)
 
-        # Dynamic branches (the dynamic-branches design): any partial matching
-        # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch — the
-        # only way an overlay user extends this tree without forking
-        # targets/agents-md.yaml, which is not overlayable. Discovered before the
-        # static-files loop so the root AGENTS.md's generated block can list them.
-        reserved = {rf.split("/", 1)[0].lower() for rf in tree["files"] if "/" in rf}
-        branches: set[str] = set()
-        for logical in reg.partials:
-            m = _BRANCH_RE.match(logical)
-            if m:
-                branches.add(m.group(1))
-        for branch in sorted(branches):
-            if branch.lower() in reserved:
-                raise RegistryError(
-                    f"context/{branch}/AGENTS.md: branch name {branch!r} collides "
-                    f"with a reserved top-level entry ({sorted(reserved)}) — choose a "
-                    f"different folder name under registry/context/")
-
-        # Roster for the generated Project Roster block on Projects/AGENTS.md: exactly
-        # the projects that get a Projects/<name>/ folder in this tree — via the
-        # ctx-key route (context.<project_context_key>) or the builder route (a
-        # builder-context project whose local_path lands under <root>/Projects/, e.g.
-        # Mitos self-hosting). Shipped examples suppressed, same as the folders.
-        roster_key = tree.get("project_context_key")
-        roster: list[dict] = []
-        if roster_key:
-            _sup = _suppressed_examples(reg)
-            proj_prefix = f"{root.rstrip('/')}/Projects/".replace("\\", "/")
-            for slug, proj in sorted(reg.projects.items()):
-                if slug in _sup:
-                    continue
-                ctx = proj.get("context") or {}
-                if roster_key in ctx:
-                    roster.append(proj)
-                    continue
-                if "builder" in ctx:
-                    local = _local(reg, machine_name, proj)
-                    if local and local.replace("\\", "/").rstrip("/").startswith(proj_prefix):
-                        roster.append(proj)
-
-        for rel_file, srcs in tree["files"].items():
-            sections = _sections(reg, srcs, "agents-md")
-            deploy_path = f"{root.rstrip('/')}/{rel_file}"
-            # For Projects/AGENTS.md, append the org-domain table (the `## Skills` section)
-            # and then the generated Project Roster as ONE <generated> section — in that
-            # order so the file follows the reserved section order (Skills before rosters).
-            # The table replaces the retired static org-roles.md partial; the roster
-            # replaces the hand-written list that used to live in projects-index.md — both
-            # always reflect the active registry.
-            if rel_file == "Projects/AGENTS.md":
-                gen_parts = []
-                org_block = render.org_domain_table(list(reg.skills.values()))
-                if org_block:
-                    gen_parts.append(org_block.rstrip("\n"))
-                roster_block = render.project_roster_block(roster)
-                if roster_block:
-                    gen_parts.append(roster_block.rstrip("\n"))
-                if gen_parts:
-                    combined_sections = list(sections) + [
-                        (render.GENERATED_SECTION, "\n\n".join(gen_parts))]
-                    outputs.append(Output(
-                        target="agents-md", kind="text", deploy_path=deploy_path,
-                        dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                        content=render.plain_document(combined_sections),
-                        drift_policy=policy,
-                        sources=srcs,
-                        section_bodies=combined_sections,
-                    ))
-                    continue
-            # For the tree root AGENTS.md, append connections (this machine's document
-            # store), the general-skills catalog, and the dynamic-branches roster — each
-            # only when it has content — combined into ONE <generated> section (a second
-            # tuple sharing the same GENERATED_SECTION source key would collide in the
-            # section-map dict that adopt/split_live_sections builds).
-            if rel_file == "AGENTS.md":
-                # Reserved section order: `## Skills`, then the connection section, then the
-                # dynamic-branches roster (navigation appendix).
-                gen_parts = []
-                sk_block = render.skills_block(hermes_selected_skills)
-                if sk_block:
-                    gen_parts.append(sk_block.rstrip("\n"))
-                conn_block = render.connections_block(
-                    reg.servers.get("servers") or {}, machine, reg.user)
-                if conn_block:
-                    gen_parts.append(conn_block.rstrip("\n"))
-                if branches:
-                    gen_parts.append(render.dynamic_branches_block(sorted(branches)).rstrip("\n"))
-                if gen_parts:
-                    combined_sections = list(sections) + [
-                        (render.GENERATED_SECTION, "\n\n".join(gen_parts))]
-                    outputs.append(Output(
-                        target="agents-md", kind="text", deploy_path=deploy_path,
-                        dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                        content=render.plain_document(combined_sections),
-                        drift_policy=policy, sources=srcs,
-                        section_bodies=combined_sections,
-                    ))
-                    continue
-            # For the Assistant branch root, append this machine's connections as a
-            # <generated> section — the one-shot workflow's own "what's wired up" note.
-            if rel_file == "Assistant/AGENTS.md":
-                conn_block = render.connections_block(
-                    reg.servers.get("servers") or {}, machine, reg.user)
-                if conn_block:
-                    combined_sections = list(sections) + [
-                        (render.GENERATED_SECTION, conn_block.rstrip("\n"))]
-                    outputs.append(Output(
-                        target="agents-md", kind="text", deploy_path=deploy_path,
-                        dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                        content=render.plain_document(combined_sections),
-                        drift_policy=policy, sources=srcs,
-                        section_bodies=combined_sections,
-                    ))
-                    continue
-            outputs.append(Output(
-                target="agents-md", kind="text", deploy_path=deploy_path,
-                dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                content=render.plain_document(sections), drift_policy=policy,
-                sources=srcs, section_bodies=_multi(sections),
-            ))
-
-        # Emit every file under each discovered branch (not just its AGENTS.md) at
-        # <root>/<branch>/<relative-path-after-branch>.
-        for branch in sorted(branches):
-            prefix_key = f"context/{branch}/"
-            for logical in sorted(reg.partials):
-                if not logical.startswith(prefix_key):
-                    continue
-                sub_rel = logical[len(prefix_key):]
-                sections = _sections(reg, [logical], "agents-md")
-                if not sections:
-                    continue
-                deploy_path = f"{root.rstrip('/')}/{branch}/{sub_rel}"
-                outputs.append(Output(
-                    target="agents-md", kind="text", deploy_path=deploy_path,
-                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                    content=render.plain_document(sections), drift_policy=policy,
-                    sources=[logical], section_bodies=_multi(sections),
-                ))
-
-        # Dynamic per-project entries: generate "Projects/<name>/AGENTS.md" for each
-        # project whose manifest declares context.<project_context_key>.
-        # When the project also has a knowledge graph, append the titles-index and
-        # emit a companion AGENTS_DETAILS.md (non-adoptable, drift_policy generated).
-        ctx_key = tree.get("project_context_key")
-        if ctx_key:
-            from . import graph as graphmod
-            suppressed = _suppressed_examples(reg)
-            for slug, proj in sorted(reg.projects.items()):
-                if slug in suppressed:
-                    continue
-                ctx = proj.get("context") or {}
-                if ctx_key not in ctx:
-                    continue
-                src_rel = _strip_reg(ctx[ctx_key])
-                name = proj.get("name", slug)
-                rel_file = f"Projects/{name}/AGENTS.md"
-                sections = _sections(reg, [src_rel], "agents-md")
-                if not sections:
-                    continue
-                deploy_path = f"{root.rstrip('/')}/{rel_file}"
-                pg = reg.graphs.get(slug)
-                if pg:
-                    # prose header (protected) + lightweight titles index (generated);
-                    # full per-document detail lives in the companion AGENTS_DETAILS.md.
-                    prose_body = render.plain_document(sections).rstrip("\n")
-                    outputs.append(_mixed_doc_output(
-                        "agents-md", deploy_path, prose_body,
-                        graphmod.project_index_markdown(
-                            pg, _doc_store_heading(reg, proj),
-                            emit_heading=_connection_emit(proj, prose_body)),
-                        src_rel, policy))
-                else:
-                    outputs.append(Output(
-                        target="agents-md", kind="text", deploy_path=deploy_path,
-                        dist_rel=f"agents-md/{safe_rel(deploy_path)}",
-                        content=render.plain_document(sections),
-                        drift_policy=policy,
-                        sources=[src_rel], section_bodies=_multi(sections),
-                    ))
-                if pg:
-                    details_path = (f"{root.rstrip('/')}/Projects/{name}/"
-                                    f"{graphmod.DETAILS_FILENAME}")
-                    outputs.append(Output(
-                        target="agents-md", kind="text", deploy_path=details_path,
-                        dist_rel=f"agents-md/{safe_rel(details_path)}",
-                        content=graphmod.project_details_markdown(
-                            pg, _doc_store_heading(reg, proj)),
-                        drift_policy="generated", sources=[],
-                    ))
     # per-project root AGENTS.md (builder context)
     pa = spec.get("project_agents")
     if pa:
@@ -808,6 +859,10 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
             deploy_path = f"{local}/{pa.get('filename', 'AGENTS.md')}"
             policy = pa.get("drift_policy", "protect")
             pg = reg.graphs.get(slug)
+            # A project may ALSO have an agentic_tree mount — two AGENTS.md-shaped files
+            # then legitimately coexist (this one: doc/repo index; the mount: a full
+            # operating tree). Name the split rather than leave a reader to guess.
+            at_subdir = proj.get("agentic_tree")
             if pg and local_norm != reg_root:
                 # A builder-context project (e.g. Mitos self-hosting) still gets the same
                 # lightweight titles-index + companion AGENTS_DETAILS.md that every other
@@ -820,6 +875,8 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 prose_body = render.plain_document(sections).rstrip("\n")
                 gen_body = graphmod.project_index_markdown(
                     pg, heading, emit_heading=_connection_emit(proj, prose_body))
+                if at_subdir:
+                    gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
                     (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
                 outputs.append(Output(
@@ -835,6 +892,17 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                     dist_rel=f"agents-md/{safe_rel(details_path)}",
                     content=graphmod.project_details_markdown(pg, heading),
                     drift_policy="generated", sources=[],
+                ))
+                continue
+            if at_subdir:
+                note = render.agentic_tree_note_block(at_subdir)
+                combined_sections = list(sections) + [(render.GENERATED_SECTION, note.rstrip("\n"))]
+                outputs.append(Output(
+                    target="agents-md", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"agents-md/{safe_rel(deploy_path)}",
+                    content=render.plain_document(combined_sections),
+                    drift_policy=policy, sources=srcs,
+                    section_bodies=combined_sections,
                 ))
                 continue
             outputs.append(Output(
@@ -949,6 +1017,12 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
                 pg, repos or None, _doc_store_heading(reg, proj),
                 level=2 if prose_src else 1,
                 emit_heading=_connection_emit(proj, prose))
+            # A project may ALSO have an agentic_tree mount — two AGENTS.md-shaped files
+            # then legitimately coexist (this one: the doc/repo index; the mount: a full
+            # operating tree). Name the split rather than leave a reader to guess.
+            at_subdir = proj.get("agentic_tree")
+            if at_subdir:
+                gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
             agents_path = f"{local}/AGENTS.md"
             if prose_src:
                 outputs.append(_mixed_doc_output(

@@ -185,6 +185,68 @@ def test_path_validation_workspace_overlap():
     except RegistryError as e:
         assert "must not overlap with project 'example-project' workspace path" in str(e)
 
+def test_machine_role_exclusivity_hermes_vs_coding():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md", "claude-code"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError due to hermes + coding target on one machine")
+    except RegistryError as e:
+        assert "cannot share a machine with coding harness target(s)" in str(e)
+        assert "claude-code" in str(e)
+
+def test_machine_role_agents_md_alone_is_not_a_coding_harness():
+    """agents-md is the context format, not a harness — it may coexist with hermes
+    (the agentic machine-mount combo) with no exclusivity violation."""
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md"]
+    _validate(rig)  # must not raise
+
+def test_agentic_tree_valid():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    _validate(rig)  # must not raise
+
+def test_agentic_tree_rejects_path_separators():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "sub/dir"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for path-like agentic_tree")
+    except RegistryError as e:
+        assert "must be a single directory name" in str(e)
+
+def test_agentic_tree_rejects_empty():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "   "
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty agentic_tree")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_agentic_tree_collides_with_repo_checkout_dir():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "git@github.com:example/MitosAgent.git"
+    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for agentic_tree/repo checkout collision")
+    except RegistryError as e:
+        assert "collides with the checkout dir of repo" in str(e)
+
 def test_planner_output_path_collision():
     import copy
     from agentic import planner

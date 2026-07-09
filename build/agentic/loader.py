@@ -630,6 +630,32 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: local_path references unknown machine {mname!r}")
             resolve_local_path(mname, reg.machines[mname], raw)  # fails loudly if a
             # relative entry has no projects_root to resolve against
+        # agentic_tree (optional): mounts the full agents-md operating tree (the same
+        # Navigation/Workflows/Skills/roster shape a Hermes machine gets at its
+        # assistant_root) inside this project's own checkout, at
+        # <local_path>/<agentic_tree>/ — the workstation-side counterpart to a machine
+        # mount, e.g. so Antigravity can operate against a project like an agentic
+        # harness. A single relative subdirectory name, not a path — must not collide
+        # with a repo checkout basename landing in the same local_path (both mounts
+        # share that directory).
+        at = proj.get("agentic_tree")
+        if at is not None:
+            if not isinstance(at, str) or not at.strip():
+                raise RegistryError(
+                    f"project {slug}: 'agentic_tree' must be a non-empty string "
+                    f"(a subdirectory name under local_path, e.g. 'MitosAgent')")
+            at = at.strip()
+            if at in (".", "..") or "/" in at or "\\" in at:
+                raise RegistryError(
+                    f"project {slug}: 'agentic_tree' must be a single directory name, "
+                    f"not a path — got {at!r}")
+            for url in repo_raw if isinstance(repo_raw, list) else (
+                    [repo_raw] if isinstance(repo_raw, str) and repo_raw.strip() else []):
+                if _repo_basename(url.strip()) == at:
+                    raise RegistryError(
+                        f"project {slug}: 'agentic_tree' subdirectory {at!r} collides "
+                        f"with the checkout dir of repo {url.strip()!r} — choose a "
+                        f"different subdirectory name")
         for label, rel in (proj.get("context") or {}).items():
             rel_in_reg = rel.split("registry/", 1)[-1]
             if rel_in_reg not in reg.partials:
@@ -699,9 +725,26 @@ def _validate(reg: Registry) -> None:
                 f"(registry/projects/)")
     # machines reference known targets
     for name, m in reg.machines.items():
-        bad = set(m.get("targets", [])) - KNOWN_TARGETS
+        targets = set(m.get("targets", []))
+        bad = targets - KNOWN_TARGETS
         if bad:
             raise RegistryError(f"machine {name}: unknown target(s) {sorted(bad)}")
+        # Machine roles are exclusive: an agentic-harness machine (hermes) is dedicated
+        # to that purpose — it does not also run coding harnesses. This keeps every
+        # machine's operating-mount tree (assistant_root) unambiguous and lets the
+        # planner's role checks key off "hermes in targets" alone. agents-md itself is
+        # NOT a harness (it's the context format both roles can consume — a reference
+        # mount via agentic_context_root, or an operating mount via assistant_root or a
+        # project's agentic_tree:), so it is never part of this exclusion.
+        _CODING_TARGETS = {"antigravity", "claude-app", "claude-code"}
+        if "hermes" in targets:
+            coding_present = targets & _CODING_TARGETS
+            if coding_present:
+                raise RegistryError(
+                    f"machine {name}: 'hermes' (the agentic harness) cannot share a "
+                    f"machine with coding harness target(s) {sorted(coding_present)}. "
+                    f"An agentic machine is dedicated to that purpose — put coding "
+                    f"harnesses on a separate machine profile.")
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
         # shape/validation as a project's document_store.

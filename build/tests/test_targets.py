@@ -224,6 +224,102 @@ def test_project_agents_md_drops_identity_on_hermes_machines():
     assert "About Me" in out2.content
     assert any(s.startswith("identity/") for s in out2.sources)
 
+def test_agentic_tree_project_mount_emits_full_tree():
+    """A workstation project with agentic_tree: gets the full operating tree (the same
+    Navigation/Workflows/Skills/roster shape a Hermes machine gets at its assistant_root)
+    at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.machines["example-windows"]["paths"].pop("assistant_root", None)
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)  # don't let the shipped-sample guard suppress it
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+
+    outs = planner.plan_machine(rig, "example-windows")
+    mount_root = "C:/Projects/example-project/MitosAgent"
+    by_path = {o.deploy_path: o for o in outs}
+
+    root_agents = by_path.get(f"{mount_root}/AGENTS.md")
+    assert root_agents is not None, "project mount must emit its own root AGENTS.md"
+    assert root_agents.target == "agents-md"
+    assert root_agents.drift_policy == "protect"
+
+    projects_agents = by_path.get(f"{mount_root}/Projects/AGENTS.md")
+    assert projects_agents is not None
+    assert "example-project" in projects_agents.content, "roster must list the mounting project"
+
+    per_project = by_path.get(f"{mount_root}/Projects/Example Project/AGENTS.md")
+    assert per_project is not None, "the ctx_key dynamic entry must also render at the mount root"
+
+def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
+    """A workstation project with BOTH a knowledge graph and agentic_tree: gets a
+    generated cross-reference note in its normal doc-index AGENTS.md pointing at the
+    separate operating-tree mount — two AGENTS.md-shaped files legitimately coexist, so
+    the split is named rather than left for a reader to guess at."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+    rig.graphs["example-project"] = graphmod.ProjectGraph(
+        slug="example-project", name="Example Project", description="",
+        documents=[_doc("EX_DOC_1", "Notes", "notes", "2026-06-27")],
+        efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path.get("C:/Projects/example-project/AGENTS.md")
+    assert out is not None
+    assert "Operating Tree" in out.content
+    assert "MitosAgent/AGENTS.md" in out.content
+
+def test_agentic_tree_cross_reference_note_on_project_agents_lane():
+    """The Hermes-style project_agents lane (context.builder projects) gets the same
+    cross-reference note when agentic_tree: is set — consistent with the claude-code
+    graph lane above."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.projects["mitos"]["document_store"] = "gws"
+    rig.projects["mitos"]["agentic_tree"] = "MitosAgent"
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
+        efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path["C:/Projects/Mitos/AGENTS.md"]
+    assert "Operating Tree" in out.content
+    assert "MitosAgent/AGENTS.md" in out.content
+
+def test_agentic_tree_no_effect_on_agentic_machine():
+    """agentic_tree is a workstation-only concept — an agentic (hermes) machine already
+    hosts the tree at its assistant_root, so a project's agentic_tree must not produce a
+    second, redundant mount there."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["hermes", "agents-md"]
+    rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/MitosAgent"
+    rig.machines["example-windows"]["paths"]["hermes_home"] = "C:/hermes"
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+
+    outs = planner.plan_machine(rig, "example-windows")
+    mount_root = "C:/Projects/example-project/MitosAgent"
+    paths = {o.deploy_path for o in outs}
+    assert f"{mount_root}/AGENTS.md" not in paths, \
+        "agentic_tree must be a no-op on an agentic machine"
+
 def test_non_hermes_clone_uses_local_path():
     """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
     absent-only — never nesting into the Mitos repo root."""
