@@ -7,6 +7,6 @@ targets: [antigravity, claude-app, claude-code]
 paths:
   projects_root: "C:/Projects"
   antigravity_config: "~/.gemini/config"
-  antigravity_skills: "~/.agents/skills"
+  antigravity_skills: "~/.gemini/config/skills"   # Antigravity's global skills dir
   claude_code_skills: "~/.claude/skills"
   claude_skills_staging: "~/ClaudeSkills"

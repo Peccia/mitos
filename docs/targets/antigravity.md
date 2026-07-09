@@ -6,8 +6,10 @@ Google's agentic IDE + CLI (`target: antigravity`) — the successor to Gemini C
 separate `gemini` target.
 
 Mitos has first-class integration with Antigravity, deploying assistant personas, project
-builder instructions, custom skills, and reusable prompt libraries directly to the paths
-consumed by the IDE/CLI.
+builder instructions, and custom skills directly to the paths consumed by the IDE/CLI.
+Antigravity follows the directory-based **Agent Skills open standard** (the same shape
+Claude Code consumes), so Mitos treats it like the other harnesses — one skill folder with
+`SKILL.md` plus supporting files, no Antigravity-specific packaging.
 
 ---
 
@@ -16,8 +18,8 @@ consumed by the IDE/CLI.
 | Surface | Support | Mechanism / Path |
 |---|---|---|
 | **Context** | ✅ Full | `AGENTS.md` files written to project/assistant roots (via `agents-md` target) |
-| **Skills** | ✅ Full | Global or project scope — see [Skill scope](#skill-scope-global-vs-project) below |
-| **Prompts** | ✅ Full | Markdown files prefixed with `prompt-` copied to `antigravity_skills` directory (global only — prompts have no scope concept today) |
+| **Skills** | ✅ Full | Agent Skills standard folders (`<name>/SKILL.md` + supporting files), global or project scope — see [Skill scope](#skill-scope-global-vs-project) below |
+| **Prompts** | ❌ Retired | The flat `prompt-<name>.md` lane was removed — Antigravity's skill discovery only reads `<folder>/SKILL.md`, so those files were never visible to it. Discoverable content belongs in a skill; prompts stay console-only |
 | **MCP Config** | ✅ Confirmed | `mcp_config.json` under `antigravity_config` — confirmed shared across Antigravity 2.0/IDE/CLI |
 | **Tool Permissions** | ⚠️ Unverified | `config.json` merge — see the caveat below |
 
@@ -50,9 +52,10 @@ targets:
   - agents-md
 
 paths:
-  # The native directory where Antigravity loads skills and prompts — the cross-vendor
-  # ~/.agents/skills convention
-  antigravity_skills: "~/.agents/skills"
+  # Antigravity's GLOBAL skills directory (all workspaces) — per the official
+  # Antigravity 2.0 docs (Customizations > Skills). Workspace-specific skills live at
+  # <workspace-root>/.agents/skills/ and are covered by scope: project bindings below.
+  antigravity_skills: "~/.gemini/config/skills"
 
   # The root directory for your personal assistant context tree
   assistant_root: "~/MitosAgent"
@@ -73,24 +76,33 @@ Antigravity natively reads `AGENTS.md` files to understand identity and project 
 - **Assistant tree**: Deployed to `assistant_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster + org structure) with a `Projects/<project>/AGENTS.md` per project.
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
 
-### 2. Custom skills & prompts
+### 2. Custom skills
+
+Each skill deploys as an Agent Skills standard folder: `<name>/SKILL.md` with `name` +
+`description` frontmatter (the description is what Antigravity's discovery matches against),
+plus any supporting files (`examples/`, `scripts/`, `references/`, `templates/`,
+`resources/`) alongside it. Extension skills (`extends_skill`) are spliced into the parent's
+body at render time, exactly as on hermes/claude-code.
 
 #### Skill scope: global vs. project
 Skills targeting `antigravity` deploy to one of two scopes (a skill's `scope:` frontmatter key —
 mirrors the identical claude-code surface, see
-[docs/targets/claude-code.md](claude-code.md#skill-scope-global-vs-project)):
+[docs/targets/claude-code.md](claude-code.md#skill-scope-global-vs-project)). The two
+directories map onto Antigravity's documented discovery locations:
 
-- **`scope: global`** (default): copied to the shared `antigravity_skills` directory
-  (`~/.agents/skills/`) as `{name}.md` — available in every Antigravity session on this machine.
+- **`scope: global`** (default): copied to the machine's `antigravity_skills` directory
+  (`~/.gemini/config/skills/<name>/SKILL.md`) — Antigravity's global location, available in
+  every workspace on this machine.
 - **`scope: project`**: copied ONLY to the projects that name this skill in their manifest's
-  `skills:` list, at `<project-root>/.agents/skills/{name}.md`.
+  `skills:` list, at `<project-root>/.agents/skills/<name>/SKILL.md` — Antigravity's
+  workspace-specific location.
 
 Confirmed working in practice: a skill deployed to `<project>/.agents/skills/<name>/` is
 discovered and loaded by Antigravity for that project automatically.
 
-- **Prompts**: always deploy globally, as `prompt-{name}.md` in `antigravity_skills` (prompts
-  have no scope concept today).
-- **Frontmatter**: Mitos strips YAML frontmatter during deployment, presenting clean markdown instructions directly to the IDE.
+> **Migration note:** earlier Mitos versions deployed flat `{name}.md` files (frontmatter
+> stripped) plus `prompt-{name}.md` prompt files. After upgrading, those become **orphans**
+> on the next deploy — review the orphan list and remove them with `deploy --prune`.
 
 ---
 
@@ -100,4 +112,4 @@ discovered and loaded by Antigravity for that project automatically.
   ```bash
   python build/compile.py adopt /path/to/AGENTS.md
   ```
-- **Skills & Prompts (`harvest` policy)**: Skills and prompts are expected to adapt during use. If the IDE refines a skill on disk, Mitos will automatically snapshot the changes to your `inbox/` as proposals during the next deploy, then align the file back to the registry. You can accept these proposals in the Operator Console.
+- **Skills (`harvest` policy)**: Skills are expected to adapt during use. If the IDE refines a skill on disk, Mitos will automatically snapshot the changes to your `inbox/` as proposals during the next deploy, then align the file back to the registry. You can accept these proposals in the Operator Console.

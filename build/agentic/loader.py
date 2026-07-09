@@ -37,10 +37,13 @@ _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
 # role heading, so a role rename never orphans an extension (the R2 design decision).
 EXTENSION_ANCHOR = "## Extended C-suite Roles"
 
-# Supporting-file subdirectories a skill folder may carry alongside SKILL.md
-# (registry/skills/<name>/examples/, .../scripts/) — auto-deployed next to the
-# rendered SKILL.md and bundled into claude-app zips.
-_SKILL_RESOURCE_DIRS = ("examples", "scripts")
+# Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
+# auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
+# The set is the union of the harnesses' documented conventions: examples/ + scripts/
+# (Claude Code, Antigravity), references/ + templates/ (Hermes), resources/
+# (Antigravity). A whitelist rather than "any file" — it keeps the console's
+# Supporting Files panel and adopt routing over a known, enumerable surface.
+_SKILL_RESOURCE_DIRS = ("examples", "scripts", "references", "templates", "resources")
 
 # Mitos overlay (the Mitos overlay design): registry/local/ is the gitignored personal
 # overlay — the public core ships neutral defaults, a user's identity/projects/graph/skills
@@ -103,7 +106,7 @@ class Partial:
 
 @dataclass
 class SkillResource:
-    """One supporting file under a skill's examples/ or scripts/ subdirectory.
+    """One supporting file under a skill's resource subdirectories (_SKILL_RESOURCE_DIRS).
     `rel` is its OWN registry-relative path (not SKILL.md's) — so adopt/harvest routes
     an edited script back to the file that authored it (see planner._skill_resource_outputs)."""
     text: str
@@ -330,7 +333,7 @@ def _load_partials(base: Path, *, prefix: str = "") -> dict[str, Partial]:
 
 def _load_skill_resources(skill_dir: Path, base: Path, prefix: str,
                           rel: str) -> dict[str, SkillResource]:
-    """Supporting files under a skill's examples/ and scripts/ subdirectories, keyed by
+    """Supporting files under a skill's resource subdirectories (_SKILL_RESOURCE_DIRS), keyed by
     path relative to the skill folder. v1 is text-only — a binary asset fails loudly
     (no silent truncation/corruption) rather than being supported half-way."""
     resources: dict[str, SkillResource] = {}

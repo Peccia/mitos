@@ -1119,8 +1119,10 @@ def test_prompt_overlay_replaces_by_name():
     assert p.category == "overridden"
     assert p.rel.startswith("local/")
 
-def test_antigravity_deploys_targeted_prompt():
-    """A prompt with targets:[antigravity] produces a text output in the antigravity prompts dir."""
+def test_antigravity_deploys_no_prompts():
+    """The antigravity prompt lane is retired: Antigravity's skill discovery only reads
+    <folder>/SKILL.md, so the old flat prompt-<name>.md files were invisible to it. A
+    prompt still declaring targets:[antigravity] deploys nowhere (console-only)."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["antigravity"]
@@ -1131,10 +1133,8 @@ def test_antigravity_deploys_targeted_prompt():
         body="My reusable prompt body.",
     )
     outputs = planner.plan_machine(r, "example-windows")
-    prompt_outputs = [o for o in outputs
-                      if o.target == "antigravity" and "prompt-test-prompt" in o.deploy_path]
-    assert prompt_outputs, "no antigravity output for targeted prompt"
-    assert prompt_outputs[0].content == "My reusable prompt body.\n"
+    assert not any(o.target == "antigravity" and "test-prompt" in o.deploy_path
+                   for o in outputs)
 
 def test_console_only_prompt_not_deployed():
     """A prompt with no targets produces no file outputs."""
@@ -1564,6 +1564,11 @@ def test_antigravity_deploys_global_scope_skill_to_shared_dir():
     matches = [o for o in outputs if "global-skill" in o.deploy_path]
     assert len(matches) == 1
     assert matches[0].target == "antigravity"
+    # Agent Skills standard shape: a folder per skill, SKILL.md inside, with
+    # name/description frontmatter (description drives Antigravity's discovery).
+    assert matches[0].deploy_path.replace("\\", "/").endswith("global-skill/SKILL.md")
+    assert matches[0].content.startswith("---\n")
+    assert "name: global-skill" in matches[0].content
 
 def test_antigravity_excludes_unbound_project_scoped_skill_from_shared_dir_and_everywhere():
     """scope: project skill targeting antigravity, not bound to any project, deploys
@@ -1596,7 +1601,8 @@ def test_antigravity_deploys_project_scoped_skill_only_to_bound_project_local_pa
     assert len(matches) == 1, "must deploy exactly once — project path only, no shared copy"
     o = matches[0]
     assert o.target == "antigravity"
-    assert "example-project/.agents/skills/proj-skill.md" in o.deploy_path.replace("\\", "/")
+    assert ("example-project/.agents/skills/proj-skill/SKILL.md"
+            in o.deploy_path.replace("\\", "/"))
 
 def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
     """A project-scoped skill bound to one project does not leak into a sibling project
@@ -1702,6 +1708,37 @@ def test_plan_hermes_emits_skill_resource_outputs():
     assert example_out.drift_policy == skill_md.drift_policy
     assert script_out.executable is True
     assert example_out.executable is False
+
+def test_plan_antigravity_emits_skill_resources_and_composed_body():
+    """Antigravity mirrors claude-code: supporting files deploy alongside SKILL.md and
+    an extension's body is spliced in — the historical antigravity path dropped both."""
+    import copy
+    from agentic.loader import Skill, SkillResource
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["ag-skill"] = Skill(
+        name="ag-skill", rel="local/skills/ag-skill/SKILL.md",
+        frontmatter={"name": "ag-skill", "targets": ["antigravity"]},
+        body="## Extended C-suite Roles\n\nbase body",
+        resources={"scripts/check.sh": SkillResource(
+            text="#!/bin/sh\necho ok\n", rel="local/skills/ag-skill/scripts/check.sh")})
+    r.skills["ag-ext"] = Skill(
+        name="ag-ext", rel="local/skills/ag-ext/SKILL.md",
+        frontmatter={"name": "ag-ext", "targets": ["antigravity"],
+                     "extends_skill": "ag-skill", "extends_role": "CTO"},
+        body="extension body")
+    outs = planner.plan_machine(r, "example-windows")
+    skill_md = next(o for o in outs if o.target == "antigravity"
+                    and o.deploy_path.replace("\\", "/").endswith("ag-skill/SKILL.md"))
+    assert "extension body" in skill_md.content          # extension spliced at render
+    base_dir = skill_md.deploy_path.rsplit("/", 1)[0]
+    script_out = next(o for o in outs if o.deploy_path == f"{base_dir}/scripts/check.sh")
+    assert script_out.executable is True
+    assert script_out.sources == ["local/skills/ag-skill/scripts/check.sh"]
+    # the extension itself never deploys standalone
+    assert not any(o.deploy_path.replace("\\", "/").endswith("ag-ext/SKILL.md")
+                   for o in outs)
 
 def test_plan_claude_app_zip_bundles_resources_deterministically():
     import dataclasses

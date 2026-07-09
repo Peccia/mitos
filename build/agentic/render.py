@@ -437,13 +437,12 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
         if hermes_meta:
             meta["metadata"] = {"hermes": hermes_meta}
         return _frontmatter_doc(meta, b)
-    if target in ("claude-code", "claude-app"):
-        # Agent Skills standard frontmatter: name + description
-        meta = {"name": fm["name"], "description": fm.get("description", "")}
+    if target in ("claude-code", "claude-app", "antigravity"):
+        # Agent Skills standard frontmatter: name + description. Antigravity follows
+        # the same open standard — one shared branch, deliberately not a fourth flavor.
+        meta = {"name": fm.get("name", skill.name),
+                "description": fm.get("description", "")}
         return _frontmatter_doc(meta, b)
-    if target == "antigravity":
-        # plain prompt: drop frontmatter entirely
-        return b.rstrip("\n") + "\n"
     raise ValueError(f"skill rendering not defined for target {target!r}")
 
 

@@ -18,8 +18,8 @@ def test_idea_revision_targeting():
     rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["antigravity"]}, body="")
     linux = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")]
     assert not any("idea-revision" in p for p in linux)        # antigravity-only, not hermes
-    win = [o.deploy_path for o in planner.plan_machine(rig, "example-windows")]
-    assert any("idea-revision.md" in p for p in win)           # emitted as antigravity prompt
+    win = [o.deploy_path.replace("\\", "/") for o in planner.plan_machine(rig, "example-windows")]
+    assert any("idea-revision/SKILL.md" in p for p in win)     # antigravity skill folder
 
 def test_classify_create_for_absent_path():
     o = planner.plan_machine(reg, "example-linux")[0]

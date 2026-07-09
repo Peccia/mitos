@@ -49,22 +49,20 @@ permissions:
   render: antigravity_permission_grants
   drift_policy: protect
 
-# Skills targeting antigravity — plain markdown deployed to Antigravity's native skills
-# dir. Antigravity CLI (successor to Gemini CLI, retiring 2026-06-18) reads the
-# cross-vendor ~/.agents/skills/ convention (confirmed path; docs/targets/antigravity.md).
+# Skills targeting antigravity — Antigravity follows the directory-based Agent Skills
+# open standard (same shape as claude-code): each skill is a folder holding SKILL.md
+# (name + description frontmatter — the description drives discovery) plus optional
+# supporting files. Discovery paths (official docs, Antigravity 2.0 > Customizations >
+# Skills): global = ~/.gemini/config/skills/ (the machine's `antigravity_skills` path),
+# workspace = <workspace-root>/.agents/skills/ (used for scope: project bindings).
 skills:
   include_target: antigravity
   mode: copy
   deploy_to_key: antigravity_skills
-  subdir: "{name}.md"
-  frontmatter: none
+  subdir: "{name}"                   # skill FOLDER name; SKILL.md lands inside it
+  frontmatter: antigravity           # Agent Skills standard: name + description
   drift_policy: harvest
 
-# Prompts targeting antigravity — harness-agnostic text deployed as plain markdown.
-# Same antigravity_skills directory as skills; prefixed "prompt-" to avoid name
-# collisions with skills of the same name.
-prompts:
-  include_target: antigravity
-  deploy_to_key: antigravity_skills
-  subdir: "prompt-{name}.md"
-  drift_policy: harvest
+# No prompts block: Antigravity's skill discovery only reads <folder>/SKILL.md, so the
+# old flat prompt-<name>.md lane (a Gemini-CLI-era artifact) was invisible to it.
+# Prompts remain console-only (the Prompt Library) unless a target re-adds a block.

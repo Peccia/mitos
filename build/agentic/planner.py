@@ -24,12 +24,6 @@ from .loader import Registry, RegistryError, resolve_local_path, _repo_basename
 _BRANCH_RE = re.compile(r"^context/([^/]+)/AGENTS\.md$")
 
 
-def _selected_prompts(reg: Registry, pr_spec: dict) -> list:
-    """Prompts a target receives: those whose `targets:` includes this target."""
-    tgt = pr_spec["include_target"]
-    return [p for p in reg.prompts.values() if tgt in p.targets]
-
-
 @dataclass
 class Output:
     target: str
@@ -1186,27 +1180,30 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             owned_keys=["userSettings.globalPermissionGrants.allow"],
             owned_prefix=f"mcp({alias}/", target_file=deploy_path,
         ))
+    # Skills — Antigravity follows the directory-based Agent Skills standard, so this
+    # mirrors _plan_claude_code exactly: <dir>/<name>/SKILL.md with extension-composed
+    # body plus supporting-file outputs. Global scope deploys to the machine's
+    # antigravity_skills path (~/.gemini/config/skills/); project scope deploys only
+    # into bound checkouts at <local_path>/.agents/skills/ (the workspace convention).
     sk = spec.get("skills") or {}
-    prompts_dir = paths.get("antigravity_skills")
-    if prompts_dir and sk:
-        # scope: project skills are excluded here — they deploy only into the project
-        # checkouts that bind them (below), never this global directory.
+    skills_dir = paths.get(sk.get("deploy_to_key", "antigravity_skills"))
+    if skills_dir and sk:
+        policy = sk.get("drift_policy", "harvest")
         for skill in _selected_skills(reg, sk):
             if skill.scope == "project":
                 continue
-            fname = sk["subdir"].format(name=skill.name)
-            deploy_path = f"{prompts_dir.rstrip('/')}/{fname}"
+            base_dir = f"{skills_dir.rstrip('/')}/{sk['subdir'].format(name=skill.name)}"
+            body = render.compose_skill_body(reg, skill)
+            resources = render.compose_skill_resources(reg, skill)
+            deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
                 target="antigravity", kind="text", deploy_path=deploy_path,
                 dist_rel=f"antigravity/{safe_rel(deploy_path)}",
-                content=render.render_skill(skill, "antigravity"),
-                drift_policy=sk.get("drift_policy", "harvest"), sources=[skill.rel],
+                content=render.render_skill(skill, "antigravity", body=body),
+                drift_policy=policy, sources=[skill.rel],
             ))
-        # scope: project skills targeting antigravity, bound to a project via that
-        # project's skills: list, deploy into <local_path>/.agents/skills/ — the
-        # Antigravity CLI project-scope convention, mirroring claude-code's per-project
-        # skill binding in _plan_claude_code.
-        policy = sk.get("drift_policy", "harvest")
+            outputs += _skill_resource_outputs(skill, resources, "antigravity",
+                                               base_dir, policy)
         for slug, proj in reg.projects.items():
             local = _local(reg, machine_name, proj)
             if not local:
@@ -1218,25 +1215,18 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
                         or skill.scope != "project"
                         or skill.frontmatter.get("extends_skill")):
                     continue
-                fname = sk["subdir"].format(name=skill.name)
-                deploy_path = f"{local}/.agents/skills/{fname}"
+                base_dir = f"{local}/.agents/skills/{sk['subdir'].format(name=skill.name)}"
+                body = render.compose_skill_body(reg, skill)
+                resources = render.compose_skill_resources(reg, skill)
+                deploy_path = f"{base_dir}/SKILL.md"
                 outputs.append(Output(
                     target="antigravity", kind="text", deploy_path=deploy_path,
                     dist_rel=f"antigravity/{safe_rel(deploy_path)}",
-                    content=render.render_skill(skill, "antigravity"),
+                    content=render.render_skill(skill, "antigravity", body=body),
                     drift_policy=policy, sources=[skill.rel],
                 ))
-    pr = spec.get("prompts") or {}
-    if prompts_dir and pr:
-        for prompt in _selected_prompts(reg, pr):
-            fname = pr["subdir"].format(name=prompt.name)
-            deploy_path = f"{prompts_dir.rstrip('/')}/{fname}"
-            outputs.append(Output(
-                target="antigravity", kind="text", deploy_path=deploy_path,
-                dist_rel=f"antigravity/{safe_rel(deploy_path)}",
-                content=render.render_prompt(prompt, "antigravity"),
-                drift_policy=pr.get("drift_policy", "harvest"), sources=[prompt.rel],
-            ))
+                outputs += _skill_resource_outputs(skill, resources, "antigravity",
+                                                   base_dir, policy)
     return outputs
 
 

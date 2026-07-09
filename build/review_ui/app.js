@@ -1990,9 +1990,10 @@ function buildMetaPanel(p) {
   return wrap;
 }
 
-// ── skill supporting files (examples/, scripts/) — a shared inline editor ───────
+// ── skill supporting files — a shared inline editor ─────────────────────────────
 // used by both the skill detail pane (Prompt Library) and the New Skill form.
-const RESOURCE_PATH_RE = /^(examples|scripts)\/[^/].*[^/]$/;
+// Mirrors loader._SKILL_RESOURCE_DIRS (the union of the harnesses' conventions).
+const RESOURCE_PATH_RE = /^(examples|scripts|references|templates|resources)\/[^/].*[^/]$/;
 const RESOURCE_SCRIPT_EXTENSIONS = new Set(["py", "js", "sh", "ps1"]);
 
 function routeForFilename(filename) {
@@ -2078,7 +2079,7 @@ function buildResourceEditor(getResources, setResources) {
   addBtn.onclick = () => {
     const p = pathInput.value.trim();
     if (!RESOURCE_PATH_RE.test(p)) {
-      toast("Path must be under examples/ or scripts/, e.g. examples/sample.md", 4000);
+      toast("Path must be under examples/, scripts/, references/, templates/ or resources/ — e.g. examples/sample.md", 4000);
       return;
     }
     pathInput.value = "";

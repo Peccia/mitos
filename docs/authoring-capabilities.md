@@ -15,8 +15,14 @@ registry/local/skills/<name>/
 ├── SKILL.md                 ← Required: metadata + markdown instructions
 ├── scripts/                 ← Optional: helper scripts (Python, Bash, etc.)
 ├── examples/                ← Optional: reference inputs/outputs
-└── references/              ← Optional: additional documentation
+├── references/              ← Optional: additional documentation (Hermes convention)
+├── templates/               ← Optional: fill-in templates (Hermes convention)
+└── resources/               ← Optional: other supporting assets (Antigravity convention)
 ```
+
+All five supporting subdirectories are deployed alongside `SKILL.md` (and bundled into
+claude-app zips); anything outside them is ignored. UTF-8 text only — a binary file
+fails the load loudly.
 
 ### `SKILL.md` Schema
 The `SKILL.md` file must start with a YAML frontmatter block containing metadata:
@@ -44,7 +50,7 @@ manifest. The `scope:` frontmatter key picks which one:
 
 - **`scope: global`** (default, or omitted): deploys to every shared directory the skill's
   `targets:` declare — `hermes`'s skills dir, `claude-app`'s account-wide zip staging,
-  antigravity's `antigravity_skills` (`~/.agents/skills/`), and claude-code's personal
+  antigravity's `antigravity_skills` (`~/.gemini/config/skills/`), and claude-code's personal
   `claude_code_skills` (`~/.claude/skills/`). No project binding needed.
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
   manifest's `skills:` key, never the shared directory. `hermes` and `claude-app` have no
@@ -59,7 +65,8 @@ regardless of scope) is bound the same way for both targets:
      - changelog
    ```
    This deploys to `<project-root>/.claude/skills/changelog/SKILL.md` (if the skill targets
-   `claude-code`) and/or `<project-root>/.agents/skills/changelog.md` (if it targets `antigravity`).
+   `claude-code`) and/or `<project-root>/.agents/skills/changelog/SKILL.md` (if it targets
+   `antigravity` — the same Agent Skills folder shape on both).
 2. The skill's `SKILL.md` **must** list `claude-code` or `antigravity` in its `targets:` frontmatter
    list — one of the two targets with a project-scoped surface. If a project manifest binds a
    skill with neither, the compiler will fail loudly.

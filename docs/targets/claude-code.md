@@ -18,7 +18,7 @@ Claude Code reads skills from the same two levels it reads slash-commands from
 - **Project:** `<project-root>/.claude/skills/<name>/SKILL.md` — available only there
 
 A skill's `scope:` frontmatter key picks which one Mitos deploys to (mirrors the identical
-`antigravity` target surface — `~/.agents/skills/` global vs. `<project>/.agents/skills/`):
+`antigravity` target surface — `~/.gemini/config/skills/` global vs. `<project>/.agents/skills/`):
 
 - **`scope: global`** (default, or omitted): deploys once to the machine's
   `claude_code_skills` path (`~/.claude/skills/`) — every project on that machine sees it,

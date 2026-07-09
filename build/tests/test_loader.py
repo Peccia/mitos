@@ -898,6 +898,25 @@ def test_skill_resources_loaded_from_examples_and_scripts():
     assert skill.resources["examples/sample.md"].rel == "skills/res-skill/examples/sample.md"
     assert skill.resources["scripts/validate.sh"].rel == "skills/res-skill/scripts/validate.sh"
 
+def test_skill_resources_loaded_from_all_harness_convention_dirs():
+    """_SKILL_RESOURCE_DIRS is the union of the harnesses' documented conventions:
+    examples/scripts (Claude Code, Antigravity), references/templates (Hermes),
+    resources (Antigravity). A file under any of them loads; anything else is ignored."""
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "conv-skill"
+    for sub in ("references", "templates", "resources", "unrelated"):
+        (skill_dir / sub).mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: conv-skill\ndescription: d\ntargets: [hermes]\ncategory: general\n---\n"
+        "body\n", encoding="utf-8")
+    (skill_dir / "references" / "api.md").write_text("api\n", encoding="utf-8")
+    (skill_dir / "templates" / "config.yaml").write_text("k: v\n", encoding="utf-8")
+    (skill_dir / "resources" / "notes.md").write_text("notes\n", encoding="utf-8")
+    (skill_dir / "unrelated" / "junk.md").write_text("junk\n", encoding="utf-8")
+    reg2 = loader.load(tmp)
+    assert set(reg2.skills["conv-skill"].resources) == {
+        "references/api.md", "templates/config.yaml", "resources/notes.md"}
+
 def test_skill_resource_binary_file_rejected():
     from agentic.loader import RegistryError
     treg, tmp = _temp_registry()

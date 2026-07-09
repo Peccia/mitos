@@ -177,7 +177,7 @@ paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
   agentic_context_root: "C:/Mitos"      # where the graph-derived AGENTS.md roster + Projects/<slug>/ land
   antigravity_config: "~/.gemini/config"
-  antigravity_skills: "~/.agents/skills"
+  antigravity_skills: "~/.gemini/config/skills"
   claude_skills_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
   gws_env: ".local/gws.env"             # <server>_env → where a merged MCP env file is written
 hermes_settings:                        # optional — Hermes config.yaml runtime knobs Mitos owns
@@ -218,7 +218,7 @@ sync:                                   # optional — consumed only by `mitos s
 | `projects_root` | all | Base directory that relative project `local_path` entries resolve under. |
 | `agentic_context_root` | claude-code (Hermes machines) | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on **Hermes machines** (`agents-md` in `targets`). On pure workstation machines (without `agents-md`), project AGENTS.md files deploy directly to each project's `local_path` instead — `agentic_context_root` is not required. |
 | `antigravity_config` | antigravity | Antigravity config dir (`mcp_config.json` + `config.json`) — also shared with the classic Gemini CLI it succeeds, until that CLI retires 2026-06-18. |
-| `antigravity_skills` | antigravity | Antigravity's native skill dir — the cross-vendor `~/.agents/skills/` convention. `scope: global` (default) skills/prompts targeting `antigravity` deploy here; `scope: project` skills deploy per-project instead — see [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project). |
+| `antigravity_skills` | antigravity | Antigravity's **global** skills dir (`~/.gemini/config/skills/`, per the official Antigravity 2.0 docs). Skills deploy as Agent Skills standard folders (`<name>/SKILL.md` + supporting files). `scope: global` (default) skills targeting `antigravity` deploy here; `scope: project` skills deploy to `<project>/.agents/skills/` (Antigravity's workspace-level location) instead — see [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project). |
 | `claude_code_skills` | claude-code | Claude Code's personal/user-level skill dir (`~/.claude/skills/`, [confirmed](https://code.claude.com/docs/en/skills)). `scope: global` (default) skills targeting `claude-code` deploy here; `scope: project` skills deploy only to the projects that bind them instead. |
 | `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). claude-app has no project-scoped surface — it ignores a skill's `scope` and always stages every skill it targets. |
 | `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |

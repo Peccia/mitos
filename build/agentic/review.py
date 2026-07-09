@@ -490,26 +490,30 @@ def _graph_note(n_docs: int, n_removals: int,
     return (" + ".join(parts) or "no changes") + " proposed in the operator console"
 
 
-_RESOURCE_PATH_RE = re.compile(r"^(examples|scripts)/[^/].*[^/]$")
+# Built from the loader's whitelist so the console accepts exactly the set the
+# compiler deploys — one source of truth, never a second hand-kept list.
+_RESOURCE_PATH_RE = re.compile(
+    r"^(" + "|".join(loader._SKILL_RESOURCE_DIRS) + r")/[^/].*[^/]$")
 
 
 def _write_resource_file(folder: Path, relpath: str, text: str) -> None:
-    """Write one skill supporting file into a candidate folder, under examples/ or
-    scripts/ only — the same two subdirectories the loader scans (loader._SKILL_RESOURCE_DIRS)."""
+    """Write one skill supporting file into a candidate folder, under one of the
+    resource subdirectories the loader scans (loader._SKILL_RESOURCE_DIRS)."""
     relpath = str(relpath).replace("\\", "/").strip()
     if not _RESOURCE_PATH_RE.match(relpath) or ".." in PurePosixPath(relpath).parts:
-        raise ValueError(f"invalid resource path {relpath!r} — must be under "
-                         f"examples/ or scripts/ (no '..')")
+        raise ValueError(f"invalid resource path {relpath!r} — must be under one of "
+                         f"{'/, '.join(loader._SKILL_RESOURCE_DIRS)}/ (no '..')")
     dest = folder / relpath
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(str(text), encoding="utf-8", newline="\n")
 
 
 def _candidate_resources(folder: Path) -> dict[str, str]:
-    """examples/*, scripts/* files staged alongside a skill candidate's payload, for the
-    console's Supporting Files panel. Empty if the candidate carries none."""
+    """Supporting files (loader._SKILL_RESOURCE_DIRS subdirectories) staged alongside a
+    skill candidate's payload, for the console's Supporting Files panel. Empty if the
+    candidate carries none."""
     out: dict[str, str] = {}
-    for sub in ("examples", "scripts"):
+    for sub in loader._SKILL_RESOURCE_DIRS:
         subdir = folder / sub
         if not subdir.is_dir():
             continue
@@ -521,12 +525,13 @@ def _candidate_resources(folder: Path) -> dict[str, str]:
 
 
 def _sync_skill_resources(dest_skill_md: Path, candidate_folder: Path) -> None:
-    """Replace a skill's examples/ and scripts/ directories with what the candidate
-    carries. Only ever called when the candidate's meta marked `resources_provided`
-    (R4: an absent resources block must never touch existing files) — an explicit empty
-    set deletes both directories, a populated one replaces them wholesale."""
+    """Replace a skill's resource directories (loader._SKILL_RESOURCE_DIRS) with what
+    the candidate carries. Only ever called when the candidate's meta marked
+    `resources_provided` (R4: an absent resources block must never touch existing files)
+    — an explicit empty set deletes the directories, a populated one replaces them
+    wholesale."""
     dest_dir = dest_skill_md.parent
-    for sub in ("examples", "scripts"):
+    for sub in loader._SKILL_RESOURCE_DIRS:
         existing = dest_dir / sub
         if existing.is_dir():
             shutil.rmtree(existing)

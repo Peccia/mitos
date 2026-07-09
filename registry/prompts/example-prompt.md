@@ -21,11 +21,14 @@ packaging, no frontmatter in the deployed artifact.
 
 **Targets currently supporting prompt deployment:**
 
-- `antigravity` — deployed to `antigravity_skills/prompt-<name>.md` (the same directory as
-  Antigravity skills, prefixed `prompt-` to avoid name collisions).
+- `claude-code` — bound per project via the manifest's `prompts:` list; deployed as
+  `.claude/commands/<name>.md`, invoked as `/<name>`.
 
-Additional targets are added after research confirms their native prompt surface
-(see `docs/targets/` for per-harness findings notes and `RC1_PLAN.md` for the roadmap).
+(The former `antigravity` prompt lane was retired: Antigravity's skill discovery only
+reads `<folder>/SKILL.md`, so flat `prompt-<name>.md` files were never visible to it.
+Content that should be discoverable in Antigravity belongs in a skill.) Additional
+targets are added after research confirms their native prompt surface
+(see `docs/targets/` for per-harness findings notes).
 
 **To author your own:**
 

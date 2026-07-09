@@ -184,7 +184,7 @@ the thing most worth understanding up front:
 *global* skills location only — a skill targeting either is simply available everywhere on it, no
 scoping possible, so one axis (compatibility) is enough there; they ignore `scope` entirely. Claude
 Code and Antigravity each offer **two** surfaces — a personal/global directory
-(`~/.claude/skills/`, `~/.agents/skills/`) and a per-project one
+(`~/.claude/skills/`, `~/.gemini/config/skills/`) and a per-project one
 (`<checkout>/.claude/skills/`, `<checkout>/.agents/skills/`) — so a skill's `scope` picks which one
 it lands in on those two tools.
 
