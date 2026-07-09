@@ -549,12 +549,20 @@ def _write_candidate(reg: Registry, slug: str, meta: dict, payload_filename: str
     inbox = loader.inbox_dir(reg)
     inbox.mkdir(parents=True, exist_ok=True)
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+    # mkdir() itself is the existence check — two concurrent requests (e.g. a
+    # double-clicked Propose button) racing a separate exists()-then-mkdir() would
+    # otherwise both pass the check and one loses with an uncaught FileExistsError,
+    # which the server has no handler for: it drops the connection with no HTTP
+    # response, surfacing to the browser as a bare "Failed to fetch".
     folder = inbox / f"{ts}--console--{slug}"
     n = 2
-    while folder.exists():
-        folder = inbox / f"{ts}--console--{slug}-{n}"
-        n += 1
-    folder.mkdir()
+    while True:
+        try:
+            folder.mkdir()
+            break
+        except FileExistsError:
+            folder = inbox / f"{ts}--console--{slug}-{n}"
+            n += 1
     (folder / "meta.yaml").write_text(
         yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
     (folder / payload_filename).write_text(payload_text, encoding="utf-8")
@@ -1557,6 +1565,18 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"ok": False, "error": "bad request body"})
+            try:
+                return self._dispatch_post(body)
+            except Exception as e:
+                # BaseHTTPRequestHandler has no handler of its own for an exception
+                # raised inside do_POST: it propagates out, the connection is dropped
+                # with zero bytes written, and the browser reports a bare "Failed to
+                # fetch" with no indication of what went wrong. Always answer instead.
+                import traceback
+                traceback.print_exc()
+                return self._json(500, {"ok": False, "error": f"internal error: {e}"})
+
+        def _dispatch_post(self, body):
             if self.path == "/api/prompts/favorite":
                 # toggle a prompt/skill name in the user's favorites list
                 name = str(body.get("name", ""))
