@@ -43,7 +43,7 @@ Any MCP-compatible client can connect to the running server:
 * **Transport**: `streamable-http` or `http`
 
 For Mitos-managed tools you do **not** copy any config by hand: `deploy --machine <name>`
-renders the `gws` server into each tool's native MCP config (for Gemini, a surgical
+renders the `gws` server into each tool's native MCP config (for Antigravity, a surgical
 `json_merge` into `~/.gemini/config`; for Hermes, a `yaml_merge` into its `config.yaml`).
 Run a deploy and the wiring lands automatically. Only connect manually if you're using a
 client Mitos doesn't manage.

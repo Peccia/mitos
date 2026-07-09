@@ -190,16 +190,16 @@ def test_planner_output_path_collision():
     from agentic import planner
     from agentic.loader import RegistryError, Skill
     rig = copy.deepcopy(reg)
-    # inject a second skill targeting gemini to force a collision
-    rig.skills["mock-skill"] = Skill(name="mock-skill", rel="skills/mock-skill/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
-    rig.machines["example-windows"]["paths"]["antigravity_skills"] = "C:/GeminiPrompts"
-    rig.targets["gemini"]["skills"]["subdir"] = "AGENTS.md"
+    # inject a second skill targeting antigravity to force a collision
+    rig.skills["mock-skill"] = Skill(name="mock-skill", rel="skills/mock-skill/SKILL.md", frontmatter={"targets": ["antigravity"]}, body="")
+    rig.machines["example-windows"]["paths"]["antigravity_skills"] = "C:/AntigravityPrompts"
+    rig.targets["antigravity"]["skills"]["subdir"] = "AGENTS.md"
     try:
         planner.plan_machine(rig, "example-windows")
         raise AssertionError("expected RegistryError due to duplicate output path")
     except RegistryError as e:
         assert "output path collision on" in str(e)
-        assert "Target 'gemini'" in str(e)
+        assert "Target 'antigravity'" in str(e)
 
 def test_filter_prior_by_machine_paths():
     from agentic.commands import _filter_prior_by_machine_paths
@@ -208,7 +208,7 @@ def test_filter_prior_by_machine_paths():
 
     # Configure path keys
     rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"]["gemini_config"] = "~/.gemini/config"
+    rig.machines["example-windows"]["paths"]["antigravity_config"] = "~/.gemini/config"
 
     prior = {
         "C:/Projects/mitos/CLAUDE.md": {"deployed_hash": "h1"},
@@ -752,20 +752,20 @@ def test_skill_scope_defaults_global():
 def test_skill_scope_reads_frontmatter():
     from agentic.loader import Skill
     s = Skill(name="x", rel="skills/x/SKILL.md",
-              frontmatter={"targets": ["gemini"], "scope": "project"}, body="")
+              frontmatter={"targets": ["antigravity"], "scope": "project"}, body="")
     assert s.scope == "project"
 
 def test_validate_skill_scope_rejects_unknown_value():
     from agentic.loader import validate_skill_scope
-    err = validate_skill_scope("x", {"targets": ["gemini"], "scope": "workspace"})
+    err = validate_skill_scope("x", {"targets": ["antigravity"], "scope": "workspace"})
     assert err and "invalid scope" in err
 
 def test_validate_skill_scope_accepts_global_and_project_on_capable_targets():
     from agentic.loader import validate_skill_scope
     assert validate_skill_scope("x", {"targets": ["claude-code"]}) is None
-    assert validate_skill_scope("x", {"targets": ["gemini"], "scope": "project"}) is None
+    assert validate_skill_scope("x", {"targets": ["antigravity"], "scope": "project"}) is None
     assert validate_skill_scope(
-        "x", {"targets": ["claude-code", "gemini"], "scope": "project"}) is None
+        "x", {"targets": ["claude-code", "antigravity"], "scope": "project"}) is None
 
 def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairing():
     """A skill may target hermes/claude-app alongside a project-scope-capable target —
@@ -773,7 +773,7 @@ def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairin
     globally) rather than being flagged incompatible."""
     from agentic.loader import validate_skill_scope
     assert validate_skill_scope(
-        "x", {"targets": ["hermes", "gemini"], "scope": "project"}) is None
+        "x", {"targets": ["hermes", "antigravity"], "scope": "project"}) is None
     assert validate_skill_scope(
         "x", {"targets": ["claude-app", "claude-code"], "scope": "project"}) is None
     assert validate_skill_scope("x", {"targets": ["claude-app"], "scope": "project"}) is None
@@ -791,16 +791,16 @@ def test_registry_load_rejects_bad_skill_scope():
     except RegistryError as e:
         assert "invalid scope" in str(e)
 
-def test_project_can_bind_skill_that_only_targets_gemini():
+def test_project_can_bind_skill_that_only_targets_antigravity():
     """The project skills: binding check accepts any project-scope-capable target
-    (claude-code OR gemini), not just claude-code."""
+    (claude-code OR antigravity), not just claude-code."""
     import copy
     from agentic.loader import Skill, _validate
     rig = copy.deepcopy(reg)
-    rig.skills["gemini-only"] = Skill(
-        name="gemini-only", rel="local/skills/gemini-only/SKILL.md",
-        frontmatter={"targets": ["gemini"], "scope": "project"}, body="body")
-    rig.projects["example-project"]["skills"] = ["gemini-only"]
+    rig.skills["antigravity-only"] = Skill(
+        name="antigravity-only", rel="local/skills/antigravity-only/SKILL.md",
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="body")
+    rig.projects["example-project"]["skills"] = ["antigravity-only"]
     _validate(rig)  # must not raise
 
 def test_project_cannot_bind_skill_with_no_project_scope_capable_target():

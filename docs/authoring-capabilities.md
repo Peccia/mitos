@@ -38,19 +38,19 @@ To draft a changelog, follow these steps...
 
 ### Skill scope: global vs. project
 
-`claude-code` and `gemini` both offer two deploy surfaces per skill — a shared/personal
+`claude-code` and `antigravity` both offer two deploy surfaces per skill — a shared/personal
 directory available everywhere, and a per-project directory bound through the project
 manifest. The `scope:` frontmatter key picks which one:
 
 - **`scope: global`** (default, or omitted): deploys to every shared directory the skill's
   `targets:` declare — `hermes`'s skills dir, `claude-app`'s account-wide zip staging,
-  gemini's `antigravity_skills` (`~/.agents/skills/`), and claude-code's personal
+  antigravity's `antigravity_skills` (`~/.agents/skills/`), and claude-code's personal
   `claude_code_skills` (`~/.claude/skills/`). No project binding needed.
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
   manifest's `skills:` key, never the shared directory. `hermes` and `claude-app` have no
   project-scoped surface at all, so they ignore `scope` and stay global regardless.
 
-### Binding to Projects (claude-code and gemini)
+### Binding to Projects (claude-code and antigravity)
 A `scope: project` skill (or any skill you want a specific project's checkout to carry,
 regardless of scope) is bound the same way for both targets:
 1. List the skill under the `skills` key in your project manifest (`registry/local/projects/<project-slug>.yaml`):
@@ -59,8 +59,8 @@ regardless of scope) is bound the same way for both targets:
      - changelog
    ```
    This deploys to `<project-root>/.claude/skills/changelog/SKILL.md` (if the skill targets
-   `claude-code`) and/or `<project-root>/.agents/skills/changelog.md` (if it targets `gemini`).
-2. The skill's `SKILL.md` **must** list `claude-code` or `gemini` in its `targets:` frontmatter
+   `claude-code`) and/or `<project-root>/.agents/skills/changelog.md` (if it targets `antigravity`).
+2. The skill's `SKILL.md` **must** list `claude-code` or `antigravity` in its `targets:` frontmatter
    list — one of the two targets with a project-scoped surface. If a project manifest binds a
    skill with neither, the compiler will fail loudly.
 

@@ -21,8 +21,8 @@ packaging, no frontmatter in the deployed artifact.
 
 **Targets currently supporting prompt deployment:**
 
-- `gemini` — deployed to `antigravity_skills/prompt-<name>.md` (the same directory as
-  Gemini/Antigravity skills, prefixed `prompt-` to avoid name collisions).
+- `antigravity` — deployed to `antigravity_skills/prompt-<name>.md` (the same directory as
+  Antigravity skills, prefixed `prompt-` to avoid name collisions).
 
 Additional targets are added after research confirms their native prompt surface
 (see `docs/targets/` for per-harness findings notes and `RC1_PLAN.md` for the roadmap).

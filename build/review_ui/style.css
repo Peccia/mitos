@@ -1350,12 +1350,12 @@ details.payload pre {
 .tag-chip[data-target="hermes"] { background: #e0e7ff; border-color: #a5b4fc; color: #4338ca; }
 .tag-chip[data-target="claude-code"] { background: #ffedd5; border-color: #fdba74; color: #c2410c; }
 .tag-chip[data-target="claude-app"] { background: #ffe4e6; border-color: #fda4af; color: #be123c; }
-.tag-chip[data-target="gemini"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
+.tag-chip[data-target="antigravity"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
 @media (prefers-color-scheme: dark) {
   .tag-chip[data-target="hermes"] { background: #1e1b4b; border-color: #3730a3; color: #a5b4fc; }
   .tag-chip[data-target="claude-code"] { background: #431407; border-color: #9a3412; color: #fdba74; }
   .tag-chip[data-target="claude-app"] { background: #4c0519; border-color: #9f1239; color: #fda4af; }
-  .tag-chip[data-target="gemini"] { background: #0c2a52; border-color: #1d4ed8; color: #93c5fd; }
+  .tag-chip[data-target="antigravity"] { background: #0c2a52; border-color: #1d4ed8; color: #93c5fd; }
 }
 
 .skill-actions-bar { display: flex; gap: .5rem; margin-bottom: .9rem; }

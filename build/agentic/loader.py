@@ -11,16 +11,16 @@ from pathlib import Path
 
 import yaml
 
-KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-app"}
+KNOWN_TARGETS = {"hermes", "claude-code", "antigravity", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 VALID_SKILL_SCOPES = {"global", "project"}
 # Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
-# gemini: <local_path>/.agents/skills/) — the only targets a project's `skills:` list binds a
-# skill for, and the only targets where `scope: project` changes anything. hermes and
+# antigravity: <local_path>/.agents/skills/) — the only targets a project's `skills:` list
+# binds a skill for, and the only targets where `scope: project` changes anything. hermes and
 # claude-app have no project-scoped surface at all (account-wide/global only) and simply
 # IGNORE `scope` — always global, on any skill, regardless of value — the same way hermes
 # always did before this feature existed. See validate_skill_scope / Skill.scope.
-PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "gemini"}
+PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
 # The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
 # the single source of truth for the personalization placeholders render.py expands

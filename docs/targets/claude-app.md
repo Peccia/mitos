@@ -110,7 +110,7 @@ constant intentionally — never widen it to a range.
 > endpoint (reverse proxy + TLS) so the Connectors UI accepts it, or doing without GWS
 > tools on Desktop. A one-time Node install is the lower-maintenance option.
 
-**Merge, not overwrite:** Claude Desktop keeps its own preferences (theme, layout, account state) in this *same* file, so a whole-file write would erase them. The target uses `kind: json_merge` owning the top-level `mcpServers` key (`owned_keys: [mcpServers]`) — the same mechanism as Hermes `config.yaml` and Gemini `config.json` — splicing the Mitos server block in and leaving every other key untouched.
+**Merge, not overwrite:** Claude Desktop keeps its own preferences (theme, layout, account state) in this *same* file, so a whole-file write would erase them. The target uses `kind: json_merge` owning the top-level `mcpServers` key (`owned_keys: [mcpServers]`) — the same mechanism as Hermes `config.yaml` and Antigravity `config.json` — splicing the Mitos server block in and leaving every other key untouched.
 
 ## Skills
 
@@ -138,7 +138,7 @@ two opt-in-by-path-key halves is the honest model:
 
 A web-only machine sets only `claude_skills_staging`; a Desktop machine that needs a LAN/HTTP
 MCP server sets `claude_desktop_config` too. The precedent for one target spanning two
-lanes is `gemini` (MCP config on connections + prompts on content).
+lanes is `antigravity` (MCP config on connections + prompts on content).
 
 **Path key (`claude_desktop_config`), per install:**
 
@@ -156,7 +156,7 @@ paths:
 
 **MCP ownership:** `kind: json_merge` owning the top-level `mcpServers` key
 (`owned_keys: [mcpServers]`) — the same surgical-merge pattern as Hermes `config.yaml` and
-Gemini `config.json`. Claude Desktop stores its own preferences in this *same* file, so a
+Antigravity `config.json`. Claude Desktop stores its own preferences in this *same* file, so a
 whole-file write would erase them; owning just `mcpServers` splices the bridge in and
 leaves every sibling key intact. A user-added entry *inside* `mcpServers` is replaced on
 the next deploy (Mitos owns that whole key) — add servers to `connections/servers.yaml`.

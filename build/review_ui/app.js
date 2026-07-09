@@ -2554,7 +2554,7 @@ function renderSkillExtensionSection(s) {
 // directory a target offers — the antigravity_skills dir, the personal
 // claude_code_skills dir, hermes, claude-app) vs project (deploys ONLY to the
 // projects that name this skill in their manifest's `skills:` list, on whichever of
-// claude-code/gemini it targets). Mirrors renderSkillExtensionSection's pattern —
+// claude-code/antigravity it targets). Mirrors renderSkillExtensionSection's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
 // projects itself is read-only here: the console doesn't write project manifests
 // (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
@@ -2570,7 +2570,7 @@ function renderSkillScopeSection(s) {
   section.append(header);
   section.append(el("div", "muted resources-hint",
     "Global (default): deploys to every shared directory this skill's targets offer. "
-    + "Project: deploys only to the projects below, on claude-code/gemini — hermes and "
+    + "Project: deploys only to the projects below, on claude-code/antigravity — hermes and "
     + "claude-app ignore this and always stay global."));
 
   function refreshActionState() {

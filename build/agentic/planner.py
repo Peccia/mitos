@@ -73,8 +73,8 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             outputs += _plan_hermes(reg, machine_name, spec, paths)
         elif target == "claude-code":
             outputs += _plan_claude_code(reg, machine_name, spec, paths)
-        elif target == "gemini":
-            outputs += _plan_gemini(reg, machine_name, spec, paths)
+        elif target == "antigravity":
+            outputs += _plan_antigravity(reg, machine_name, spec, paths)
         elif target == "claude-app":
             outputs += _plan_claude_app(reg, machine_name, spec, paths)
     outputs += _plan_env(reg, machine_name, paths)
@@ -1005,8 +1005,8 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             ))
     # scope: global (default) skills targeting claude-code deploy once to the personal
     # skills directory (claude_code_skills, ~/.claude/skills/) — available in every
-    # project on this machine, no per-project binding needed. Mirrors gemini's
-    # antigravity_skills global surface (_plan_gemini).
+    # project on this machine, no per-project binding needed. Mirrors antigravity's
+    # antigravity_skills global surface (_plan_antigravity).
     sk = spec.get("skills") or {}
     global_skills_dir = paths.get(sk.get("deploy_to_key", "claude_code_skills"))
     if global_skills_dir and sk:
@@ -1083,19 +1083,19 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     return outputs
 
 
-# ── gemini ───────────────────────────────────────────────────────────────────
-def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
+# ── antigravity ────────────────────────────────────────────────────────────────
+def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     alias = spec["server_alias"]
     gws = _gws(reg, machine_name)
-    cfg_dir = paths.get("gemini_config")
+    cfg_dir = paths.get("antigravity_config")
     if cfg_dir:
         mc = spec["mcp_config"]
         deploy_path = f"{cfg_dir.rstrip('/')}/{mc['filename']}"
         outputs.append(Output(
-            target="gemini", kind="json", deploy_path=deploy_path,
-            dist_rel=f"gemini/{safe_rel(deploy_path)}",
-            content=_json(render.gemini_mcp_config(gws, alias)),
+            target="antigravity", kind="json", deploy_path=deploy_path,
+            dist_rel=f"antigravity/{safe_rel(deploy_path)}",
+            content=_json(render.antigravity_mcp_config(gws, alias)),
             drift_policy=mc.get("drift_policy", "protect"), lane="connections",
             sources=["connections/servers.yaml"],
         ))
@@ -1104,9 +1104,9 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
         perm = spec["permissions"]
         deploy_path = f"{cfg_dir.rstrip('/')}/{perm['filename']}"
         outputs.append(Output(
-            target="gemini", kind="json_merge", deploy_path=deploy_path,
-            dist_rel=f"gemini/{safe_rel(deploy_path)}",
-            content=_json(render.gemini_permission_grants(gws, alias)),
+            target="antigravity", kind="json_merge", deploy_path=deploy_path,
+            dist_rel=f"antigravity/{safe_rel(deploy_path)}",
+            content=_json(render.antigravity_permission_grants(gws, alias)),
             drift_policy=perm.get("drift_policy", "protect"), lane="connections",
             sources=["connections/servers.yaml"],
             owned_keys=["userSettings.globalPermissionGrants.allow"],
@@ -1123,15 +1123,15 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
             fname = sk["subdir"].format(name=skill.name)
             deploy_path = f"{prompts_dir.rstrip('/')}/{fname}"
             outputs.append(Output(
-                target="gemini", kind="text", deploy_path=deploy_path,
-                dist_rel=f"gemini/{safe_rel(deploy_path)}",
-                content=render.render_skill(skill, "gemini"),
+                target="antigravity", kind="text", deploy_path=deploy_path,
+                dist_rel=f"antigravity/{safe_rel(deploy_path)}",
+                content=render.render_skill(skill, "antigravity"),
                 drift_policy=sk.get("drift_policy", "harvest"), sources=[skill.rel],
             ))
-        # scope: project skills targeting gemini, bound to a project via that project's
-        # skills: list, deploy into <local_path>/.agents/skills/ — the Antigravity CLI
-        # project-scope convention, mirroring claude-code's per-project skill binding
-        # in _plan_claude_code.
+        # scope: project skills targeting antigravity, bound to a project via that
+        # project's skills: list, deploy into <local_path>/.agents/skills/ — the
+        # Antigravity CLI project-scope convention, mirroring claude-code's per-project
+        # skill binding in _plan_claude_code.
         policy = sk.get("drift_policy", "harvest")
         for slug, proj in reg.projects.items():
             local = _local(reg, machine_name, proj)
@@ -1140,16 +1140,16 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
             local = local.rstrip("/")
             bound_skills = set(proj.get("skills") or [])
             for skill in reg.skills.values():
-                if (skill.name not in bound_skills or "gemini" not in skill.targets
+                if (skill.name not in bound_skills or "antigravity" not in skill.targets
                         or skill.scope != "project"
                         or skill.frontmatter.get("extends_skill")):
                     continue
                 fname = sk["subdir"].format(name=skill.name)
                 deploy_path = f"{local}/.agents/skills/{fname}"
                 outputs.append(Output(
-                    target="gemini", kind="text", deploy_path=deploy_path,
-                    dist_rel=f"gemini/{safe_rel(deploy_path)}",
-                    content=render.render_skill(skill, "gemini"),
+                    target="antigravity", kind="text", deploy_path=deploy_path,
+                    dist_rel=f"antigravity/{safe_rel(deploy_path)}",
+                    content=render.render_skill(skill, "antigravity"),
                     drift_policy=policy, sources=[skill.rel],
                 ))
     pr = spec.get("prompts") or {}
@@ -1158,9 +1158,9 @@ def _plan_gemini(reg, machine_name, spec, paths) -> list[Output]:
             fname = pr["subdir"].format(name=prompt.name)
             deploy_path = f"{prompts_dir.rstrip('/')}/{fname}"
             outputs.append(Output(
-                target="gemini", kind="text", deploy_path=deploy_path,
-                dist_rel=f"gemini/{safe_rel(deploy_path)}",
-                content=render.render_prompt(prompt, "gemini"),
+                target="antigravity", kind="text", deploy_path=deploy_path,
+                dist_rel=f"antigravity/{safe_rel(deploy_path)}",
+                content=render.render_prompt(prompt, "antigravity"),
                 drift_policy=pr.get("drift_policy", "harvest"), sources=[prompt.rel],
             ))
     return outputs

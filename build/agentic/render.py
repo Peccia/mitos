@@ -425,7 +425,7 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
         # Agent Skills standard frontmatter: name + description
         meta = {"name": fm["name"], "description": fm.get("description", "")}
         return _frontmatter_doc(meta, b)
-    if target == "gemini":
+    if target == "antigravity":
         # plain prompt: drop frontmatter entirely
         return b.rstrip("\n") + "\n"
     raise ValueError(f"skill rendering not defined for target {target!r}")
@@ -541,7 +541,7 @@ def hermes_settings_block(paths: dict, hermes_settings: dict) -> dict:
     return block
 
 
-def gemini_mcp_config(server: dict, alias: str) -> dict:
+def antigravity_mcp_config(server: dict, alias: str) -> dict:
     url = server["url"]
     return {"mcpServers": {alias: {"url": url, "serverUrl": url}}}
 
@@ -582,7 +582,7 @@ def claude_desktop_mcp_config(server: dict, alias: str, *, os_name: str) -> dict
     return {"mcpServers": {alias: entry}}
 
 
-def gemini_permission_grants(server: dict, alias: str) -> dict:
+def antigravity_permission_grants(server: dict, alias: str) -> dict:
     allow = [f"mcp({alias}/{tool})" for tool in flat_tools(server)]
     return {"sidecars": {}, "userSettings": {"globalPermissionGrants": {"allow": allow}}}
 

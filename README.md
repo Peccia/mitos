@@ -2,7 +2,7 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Gemini/Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
 
 The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -175,19 +175,22 @@ the thing most worth understanding up front:
 | Axis | Question it answers | Where you set it |
 |---|---|---|
 | **Compatibility** | *Can* this skill run on tool X? | the skill's own `targets:` frontmatter |
-| **Binding** | *Should* this project's checkout receive it? | the project manifest's `skills:` list — **Claude Code only** |
+| **Scope** | Does it deploy everywhere, or only to specific projects? | the skill's own `scope: global \| project` frontmatter (default `global`) |
 
-**Why only Claude Code needs the second axis:** Hermes, Gemini, and claude.ai each have one
-*global* skills location, so a skill targeting that tool is simply available everywhere on it —
-one axis (compatibility) is enough. Claude Code installs skills **per-project**
-(`<checkout>/.claude/skills/`), so it needs a second axis to say *which* projects get a given
-skill, keeping each checkout lean instead of holding every skill.
+**Why only Claude Code and Antigravity need the second axis:** Hermes and claude.ai each have one
+*global* skills location only — a skill targeting either is simply available everywhere on it, no
+scoping possible, so one axis (compatibility) is enough there; they ignore `scope` entirely. Claude
+Code and Antigravity each offer **two** surfaces — a personal/global directory
+(`~/.claude/skills/`, `~/.agents/skills/`) and a per-project one
+(`<checkout>/.claude/skills/`, `<checkout>/.agents/skills/`) — so a skill's `scope` picks which one
+it lands in on those two tools.
 
-That asymmetry is the one rule to internalize: **a skill named in a project's `skills:` list must
-also list `claude-code` in its own `targets:`.** The manifest decides *which projects*; the skill
-decides *which tools*. A Hermes-only skill (one calling an MCP server that isn't in a Claude Code
-checkout) lives globally on Hermes and never appears in a project manifest — binding it there is a
-category error the compiler rejects.
+`scope: project` skills reach a project's checkout via that project manifest's `skills:` list —
+**the skill must also list `claude-code` or `antigravity`** (whichever has the project-scoped
+surface you want) in its own `targets:`. The manifest decides *which projects*; the skill decides
+*which tools*. A Hermes-only skill (one calling an MCP server that isn't in a Claude Code checkout)
+lives globally on Hermes and never appears in a project manifest — binding it there is a category
+error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
 Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
 `skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
@@ -363,7 +366,7 @@ Explore our comprehensive guides to mastering Mitos:
 - 🧵 **[Documentation Map](docs/README.md)** — The central hub for all deep-dive guides.
 - 🔄 **[Managing State & Drift](docs/managing-state.md)** — Understanding deploy, adopt, harvest, and conflict resolution.
 - 💻 **[Operator Console](docs/operator-console.md)** — How to use the local `review` web UI to manage your registry.
-- 🛠️ **[Target Setup Guides](docs/README.md#tool--target-setup)** — Detailed configuration and support for Claude Code, Gemini CLI, Claude Desktop, and Antigravity.
+- 🛠️ **[Target Setup Guides](docs/README.md#tool--target-setup)** — Detailed configuration and support for Claude Code, Claude Desktop, and Antigravity.
 - 🔌 **[Workspace Connectors](docs/connectors/README.md)** — Connecting Google Workspace and custom MCP servers.
 - 🤝 **[Overlay Synchronization](docs/lan-sync.md)** — How `mitos sync` keeps your fleet in step using Git.
 
@@ -372,7 +375,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # the moat — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-app)
+targets/         # one adapter per tool (claude-code, hermes, antigravity, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

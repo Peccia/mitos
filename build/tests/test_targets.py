@@ -1,4 +1,4 @@
-"""Claude-code, Gemini, Hermes, skill, prompt, and git-sync tests."""
+"""Claude-code, Antigravity, Hermes, skill, prompt, and git-sync tests."""
 from __future__ import annotations
 
 import sys
@@ -56,11 +56,11 @@ def test_lint_node_markdown_ignores_headings_in_code_fences():
     assert _lint("x/AGENTS.md", body) == []
 
 
-def test_gemini_grants_normalized():
-    grants = render.gemini_permission_grants(reg.servers["servers"]["gws"], "gws-mcp-local")
+def test_antigravity_grants_normalized():
+    grants = render.antigravity_permission_grants(reg.servers["servers"]["gws"], "gws-mcp-local")
     allow = grants["userSettings"]["globalPermissionGrants"]["allow"]
     assert "mcp(gws-mcp-local/search_drive_files)" in allow
-    # normalization dropped the extended-tier tools Gemini used to grant
+    # normalization dropped the extended-tier tools Antigravity used to grant
     assert not any("draft_gmail_message" in a for a in allow)
     assert len(allow) == 31
 
@@ -1023,28 +1023,28 @@ def test_prompt_overlay_replaces_by_name():
     assert p.category == "overridden"
     assert p.rel.startswith("local/")
 
-def test_gemini_deploys_targeted_prompt():
-    """A prompt with targets:[gemini] produces a text output in the gemini prompts dir."""
+def test_antigravity_deploys_targeted_prompt():
+    """A prompt with targets:[antigravity] produces a text output in the antigravity prompts dir."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.prompts["test-prompt"] = loader.Prompt(
         name="test-prompt", rel="prompts/test-prompt.md",
-        frontmatter={"name": "test-prompt", "targets": ["gemini"]},
+        frontmatter={"name": "test-prompt", "targets": ["antigravity"]},
         body="My reusable prompt body.",
     )
     outputs = planner.plan_machine(r, "example-windows")
     prompt_outputs = [o for o in outputs
-                      if o.target == "gemini" and "prompt-test-prompt" in o.deploy_path]
-    assert prompt_outputs, "no gemini output for targeted prompt"
+                      if o.target == "antigravity" and "prompt-test-prompt" in o.deploy_path]
+    assert prompt_outputs, "no antigravity output for targeted prompt"
     assert prompt_outputs[0].content == "My reusable prompt body.\n"
 
 def test_console_only_prompt_not_deployed():
     """A prompt with no targets produces no file outputs."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.prompts["private-prompt"] = loader.Prompt(
         name="private-prompt", rel="prompts/private-prompt.md",
@@ -1134,15 +1134,15 @@ def test_claude_code_prompt_render_adds_description_frontmatter():
     assert "description: My test prompt" in rendered
     assert "Do the thing." in rendered
 
-def test_gemini_prompt_render_is_plain_body():
+def test_antigravity_prompt_render_is_plain_body():
     """render_prompt for non-claude-code targets returns plain body (no frontmatter)."""
     from agentic.render import render_prompt
     p = loader.Prompt(
         name="my-prompt", rel="prompts/my-prompt.md",
-        frontmatter={"name": "my-prompt", "description": "desc", "targets": ["gemini"]},
+        frontmatter={"name": "my-prompt", "description": "desc", "targets": ["antigravity"]},
         body="Plain content.",
     )
-    rendered = render_prompt(p, "gemini")
+    rendered = render_prompt(p, "antigravity")
     assert not rendered.startswith("---")
     assert rendered.strip() == "Plain content."
 
@@ -1454,64 +1454,64 @@ def test_selected_skills_excludes_extension_skills():
 
 
 # ── skill scope: global (default) | project ─────────────────────────────────────
-def test_gemini_deploys_global_scope_skill_to_shared_dir():
-    """Default scope (global): a gemini-targeted skill deploys to the shared
+def test_antigravity_deploys_global_scope_skill_to_shared_dir():
+    """Default scope (global): an antigravity-targeted skill deploys to the shared
     antigravity_skills directory, whether or not any project binds it."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.skills["global-skill"] = loader.Skill(
         name="global-skill", rel="local/skills/global-skill/SKILL.md",
-        frontmatter={"targets": ["gemini"]}, body="global body")
+        frontmatter={"targets": ["antigravity"]}, body="global body")
     outputs = planner.plan_machine(r, "example-windows")
     matches = [o for o in outputs if "global-skill" in o.deploy_path]
     assert len(matches) == 1
-    assert matches[0].target == "gemini"
+    assert matches[0].target == "antigravity"
 
-def test_gemini_excludes_unbound_project_scoped_skill_from_shared_dir_and_everywhere():
-    """scope: project skill targeting gemini, not bound to any project, deploys nowhere —
-    NOT the shared antigravity_skills dir (that's the point of scoping it), and no
-    project picks it up because none binds it."""
+def test_antigravity_excludes_unbound_project_scoped_skill_from_shared_dir_and_everywhere():
+    """scope: project skill targeting antigravity, not bound to any project, deploys
+    nowhere — NOT the shared antigravity_skills dir (that's the point of scoping it), and
+    no project picks it up because none binds it."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.skills["proj-skill"] = loader.Skill(
         name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
-        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
     outputs = planner.plan_machine(r, "example-windows")
     assert not any("proj-skill" in o.deploy_path for o in outputs)
 
-def test_gemini_deploys_project_scoped_skill_only_to_bound_project_local_path():
+def test_antigravity_deploys_project_scoped_skill_only_to_bound_project_local_path():
     """scope: project skill bound via a project's skills: list deploys to that project's
     own <local_path>/.agents/skills/ — never the shared antigravity_skills directory."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.skills["proj-skill"] = loader.Skill(
         name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
-        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
     r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
     r.projects["example-project"]["skills"] = ["proj-skill"]
     outputs = planner.plan_machine(r, "example-windows")
     matches = [o for o in outputs if "proj-skill" in o.deploy_path]
     assert len(matches) == 1, "must deploy exactly once — project path only, no shared copy"
     o = matches[0]
-    assert o.target == "gemini"
+    assert o.target == "antigravity"
     assert "example-project/.agents/skills/proj-skill.md" in o.deploy_path.replace("\\", "/")
 
-def test_gemini_project_scoped_skill_not_deployed_to_other_projects():
+def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
     """A project-scoped skill bound to one project does not leak into a sibling project
     that doesn't bind it."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.skills["proj-skill"] = loader.Skill(
         name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
-        frontmatter={"targets": ["gemini"], "scope": "project"}, body="proj body")
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
     r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
     r.projects["example-project"]["skills"] = ["proj-skill"]
     r.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
@@ -1528,7 +1528,7 @@ def test_hermes_ignores_scope_and_still_deploys_project_scoped_skill_globally():
     treg, tmp = _temp_registry()
     treg.skills["proj-and-hermes"] = loader.Skill(
         name="proj-and-hermes", rel="local/skills/proj-and-hermes/SKILL.md",
-        frontmatter={"name": "proj-and-hermes", "targets": ["hermes", "gemini"],
+        frontmatter={"name": "proj-and-hermes", "targets": ["hermes", "antigravity"],
                     "scope": "project"}, body="body")
     outputs = planner.plan_machine(treg, "rig")
     matches = [o for o in outputs if o.target == "hermes" and "proj-and-hermes" in o.deploy_path]
@@ -1537,7 +1537,7 @@ def test_hermes_ignores_scope_and_still_deploys_project_scoped_skill_globally():
 def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
     """Default scope (global): a claude-code-targeted skill deploys once to the personal
     claude_code_skills directory (~/.claude/skills/) — no project binding needed. This is
-    the new capability that closes the historical claude-code/gemini asymmetry."""
+    the new capability that closes the historical claude-code/antigravity asymmetry."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["claude-code"]

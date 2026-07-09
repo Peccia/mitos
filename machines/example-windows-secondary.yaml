@@ -3,10 +3,10 @@
 name: example-windows-secondary
 example: true   # template — copy into registry/local/machines/ and rename; not a live machine
 os: windows
-targets: [gemini, claude-app, claude-code]
+targets: [antigravity, claude-app, claude-code]
 paths:
   projects_root: "C:/Projects"
-  gemini_config: "~/.gemini/config"
+  antigravity_config: "~/.gemini/config"
   antigravity_skills: "~/.agents/skills"
   claude_code_skills: "~/.claude/skills"
   claude_skills_staging: "~/ClaudeSkills"
