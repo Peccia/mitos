@@ -223,7 +223,7 @@ def _plan_claude_app(reg, machine_name, spec, paths) -> list[Output]:
     sk = spec.get("skills") or {}
     staging = paths.get(sk.get("deploy_to_key", "claude_skills_staging"))
     if sk and staging:
-        for skill in _selected_skills(reg, sk):
+        for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
             body = render.compose_skill_body(reg, skill)
             resources = render.compose_skill_resources(reg, skill)
             content = render.render_skill(skill, "claude-app", body=body)
@@ -513,24 +513,67 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
     return None, ""
 
 
-def _selected_skills(reg: Registry, sk_spec: dict) -> list:
-    """Skills a target receives. Two layers compose:
+# hermes and claude-app have no project-scoped surface (loader.PROJECT_SCOPE_CAPABLE_
+# TARGETS is the other two) — they IGNORE `scope: project` and always deploy globally.
+# Kept in sync with loader.KNOWN_TARGETS - loader.PROJECT_SCOPE_CAPABLE_TARGETS.
+SCOPE_IGNORING_SKILL_TARGETS = {"hermes", "claude-app"}
+
+
+def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
+    """Skills a target receives, for ONE machine. Two layers compose:
     - push: the skill's `targets:` frontmatter declares which tools it is FOR;
-    - pull: the target spec's optional `include:`/`exclude:` curates that set in one
-      place (names validated against the registry at load time).
+    - pull: the machine profile's optional `skills: {<target>: {include:/exclude:}}`
+      curates that set in one place (names validated against the registry at load
+      time). Curation is a personal, per-box choice, so it lives on the (overlayable)
+      machine profile — never on the target spec, which is core and shared by everyone.
 
     A skill carrying `extends_skill` never deploys standalone — it splices into its
     parent's body at render time only (render.compose_skill_body); shipping it as its
     own duplicate file would clutter every target it targets.
     """
     tgt = sk_spec["include_target"]
-    include = sk_spec.get("include")
-    exclude = set(sk_spec.get("exclude") or [])
+    curation = ((machine or {}).get("skills") or {}).get(tgt) or {}
+    include = curation.get("include")
+    exclude = set(curation.get("exclude") or [])
     return [s for s in reg.skills.values()
             if tgt in s.targets
             and not s.frontmatter.get("extends_skill")
             and (include is None or s.name in include)
             and s.name not in exclude]
+
+
+def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
+    """Loud diagnostics for skills that are compatible with a target (their own
+    `targets:` frontmatter says so) but don't end up deployed there for this machine —
+    either filtered out by this machine's curation, or landing on a scope-ignoring
+    target while marked `scope: project` (its confinement guarantee doesn't hold
+    there). Warn-only: nothing here changes what deploys, it only surfaces filters
+    that were previously silent."""
+    machine = reg.machines.get(machine_name) or {}
+    machine_targets = set(machine.get("targets", []))
+    warnings: list[str] = []
+    for tname, tspec in reg.targets.items():
+        if tname not in machine_targets:
+            continue
+        sk_spec = tspec.get("skills")
+        if not sk_spec:
+            continue
+        candidates = {s.name for s in reg.skills.values()
+                      if tname in s.targets and not s.frontmatter.get("extends_skill")}
+        selected = _selected_skills(reg, sk_spec, machine)
+        selected_names = {s.name for s in selected}
+        for name in sorted(candidates - selected_names):
+            warnings.append(
+                f"skill '{name}' targets '{tname}' but is excluded by this machine's "
+                f"curation (skills.{tname} in machines/{machine_name}.yaml)")
+        if tname in SCOPE_IGNORING_SKILL_TARGETS:
+            for skill in selected:
+                if skill.scope == "project":
+                    warnings.append(
+                        f"skill '{skill.name}' is scope: project but targets "
+                        f"'{tname}', which ignores scope and deploys it globally "
+                        f"(account-wide/machine-wide, not confined to bound projects)")
+    return warnings
 
 
 def _skill_resource_outputs(skill, resources: dict, target: str, base_dir: str,
@@ -814,7 +857,7 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     # so listing them would be a claim the machine can't back up.
     hermes_sk_spec = (reg.targets.get("hermes") or {}).get("skills") or {}
     hermes_selected_skills = (
-        _selected_skills(reg, hermes_sk_spec)
+        _selected_skills(reg, hermes_sk_spec, machine)
         if "hermes" in machine.get("targets", []) and hermes_sk_spec else [])
     # tree: assistant — the machine mount (root_key resolves in this machine's paths).
     # Project mounts (agentic_tree: on a project manifest) are a SEPARATE, unconditional
@@ -928,7 +971,7 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
     # skills
     sk = spec["skills"]
     if home:
-        for skill in _selected_skills(reg, sk):
+        for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
             sub = sk["subdir"].format(category=skill.category, name=skill.name)
             base_dir = f"{home.rstrip('/')}/{sub}"
             policy = sk.get("drift_policy", "harvest")
@@ -1078,7 +1121,7 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     sk = spec.get("skills") or {}
     global_skills_dir = paths.get(sk.get("deploy_to_key", "claude_code_skills"))
     if global_skills_dir and sk:
-        for skill in _selected_skills(reg, sk):
+        for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
             if skill.scope == "project":
                 continue
             base_dir = f"{global_skills_dir.rstrip('/')}/{skill.name}"
@@ -1189,7 +1232,7 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
     skills_dir = paths.get(sk.get("deploy_to_key", "antigravity_skills"))
     if skills_dir and sk:
         policy = sk.get("drift_policy", "harvest")
-        for skill in _selected_skills(reg, sk):
+        for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
             if skill.scope == "project":
                 continue
             base_dir = f"{skills_dir.rstrip('/')}/{sk['subdir'].format(name=skill.name)}"

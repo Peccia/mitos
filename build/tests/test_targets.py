@@ -360,7 +360,9 @@ def test_claude_app_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-app via its frontmatter; the target spec's include curates.
+    # gws opts into claude-app via its frontmatter; it's the only CORE skill that does
+    # (registry/local/ skills are excluded here — ignore_local=True), so no machine-side
+    # curation is needed to get exactly one output.
     # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
     # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
@@ -388,31 +390,57 @@ def test_claude_app_target_stages_uploadable_zip():
     assert classify_output(reg2, "example-windows", o2, lock, root=root).state == "pending"
 
 def test_skill_selection_layers():
+    # Curation (pull layer) now lives on the machine profile, not the target spec —
+    # a personal choice belongs on the (overlayable) machine, never on core targets/*.yaml.
     from agentic.planner import _selected_skills
     base = {"include_target": "hermes"}
     all_hermes = {s.name for s in _selected_skills(reg, base)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, {**base, "include": ["new-session", "gws"]})
+    only = _selected_skills(reg, base, {"skills": {"hermes": {"include": ["new-session", "gws"]}}})
     assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
-    rest = _selected_skills(reg, {**base, "exclude": ["gws"]})
+    rest = _selected_skills(reg, base, {"skills": {"hermes": {"exclude": ["gws"]}}})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
-    assert not _selected_skills(reg, {"include_target": "claude-code",
-                                      "include": ["graph-bootstrap"]})
+    assert not _selected_skills(
+        reg, {"include_target": "claude-code"},
+        {"skills": {"claude-code": {"include": ["graph-bootstrap"]}}})
 
-def test_skill_selection_validation():
+def test_target_side_skill_curation_rejected():
+    """include:/exclude: under a targets/*.yaml skills: block is core, shared by every
+    user, and not overlayable — curation belongs on the machine profile instead."""
     import copy
 
     from agentic.loader import RegistryError, _validate
-    for bad_skills in ({"include": ["no-such-skill"]},
-                       {"include": ["gws"], "exclude": ["gws"]}):
+    for bad_skills in ({"include": ["gws"]}, {"exclude": ["gws"]}):
         reg2 = copy.deepcopy(reg)
         reg2.targets["hermes"]["skills"].update(bad_skills)
         try:
             _validate(reg2)
             raise AssertionError(f"expected RegistryError for {bad_skills}")
+        except RegistryError as e:
+            assert "not allowed in targets" in str(e)
+
+def test_machine_side_skill_curation_validation():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    bad_cases = (
+        {"hermes": {"include": ["no-such-skill"]}},
+        {"hermes": {"include": ["gws"], "exclude": ["gws"]}},
+        {"not-a-target": {"include": ["gws"]}},
+    )
+    for bad in bad_cases:
+        reg2 = copy.deepcopy(reg)
+        reg2.machines["example-linux"]["skills"] = bad
+        try:
+            _validate(reg2)
+            raise AssertionError(f"expected RegistryError for {bad}")
         except RegistryError:
             pass
+    # a valid machine-side curation block passes
+    reg2 = copy.deepcopy(reg)
+    reg2.machines["example-linux"]["skills"] = {"hermes": {"include": ["gws"]}}
+    _validate(reg2)
 
 def test_deselect_then_prune():
     import copy
@@ -427,8 +455,8 @@ def test_deselect_then_prune():
     dest = root / safe_rel(gws_path)
     assert dest.exists()
 
-    # deselect via target-side exclude: deploy reports an orphan but keeps the file
-    reg2.targets["hermes"]["skills"]["exclude"] = ["gws"]
+    # deselect via machine-side exclude: deploy reports an orphan but keeps the file
+    reg2.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
     assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
     assert dest.exists(), "without --prune the deployed copy must remain"
     import json as _json
@@ -1685,6 +1713,34 @@ def test_claude_code_global_scope_skill_unbound_to_any_project_still_deploys():
     # no project manifest lists "unbound-global" in skills:
     outputs = planner.plan_machine(r, "example-windows")
     assert any("unbound-global" in o.deploy_path for o in outputs)
+
+
+def test_skill_deploy_warnings_flags_machine_curated_exclusion():
+    """A skill compatible with a target (its own frontmatter says so) but filtered out
+    by this machine's curation is reported as a warning — the filter is never silent."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
+    warnings = planner.skill_deploy_warnings(r, "example-linux")
+    assert any("'gws'" in w and "'hermes'" in w and "curation" in w for w in warnings)
+
+def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
+    """A scope: project skill that also targets claude-app (a scope-ignoring target)
+    still deploys globally there — warn-only, so the leaked confinement is visible."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["skills"] = {}
+    r.skills["proj-and-claude-app"] = loader.Skill(
+        name="proj-and-claude-app", rel="local/skills/proj-and-claude-app/SKILL.md",
+        frontmatter={"name": "proj-and-claude-app", "targets": ["claude-app"],
+                    "scope": "project"}, body="body")
+    warnings = planner.skill_deploy_warnings(r, "example-windows")
+    assert any("'proj-and-claude-app'" in w and "'claude-app'" in w
+              and "ignores scope" in w for w in warnings)
+
+def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
+    warnings = planner.skill_deploy_warnings(reg, "example-linux")
+    assert warnings == []
 
 
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────

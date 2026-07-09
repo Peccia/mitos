@@ -25,7 +25,7 @@ from . import loader, lockfile, render
 from .io import (dump_json, expand, safe_rel, sha256, write_bytes, write_text,
                  zip_bytes, zip_bytes_multiple)
 from .loader import Registry
-from .planner import Output, plan_clones, plan_machine
+from .planner import Output, plan_clones, plan_machine, skill_deploy_warnings
 
 _ruamel = YAML()
 _ruamel.preserve_quotes = True
@@ -405,6 +405,15 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         print(f"  {len(orphans)} orphan(s) — previously deployed, no longer planned ({note}):")
         for p in orphans:
             print(f"  [orphan   ] {p}")
+    # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
+    # targets (hermes/claude-app) receiving a scope: project skill. Warn-only — nothing
+    # here changes what deploys, it just makes a previously silent filter visible.
+    if target is None and lane in ("all", "content"):
+        skill_warnings = skill_deploy_warnings(reg, machine)
+        if skill_warnings:
+            print(f"  {len(skill_warnings)} skill warning(s):")
+            for w in skill_warnings:
+                print(f"  [warn     ] {w}")
     # repo clones into the Agentic Context tree (claude-code env only; full deploys only).
     clones = (plan_clones(reg, machine)
               if target is None and lane in ("all", "content") else [])

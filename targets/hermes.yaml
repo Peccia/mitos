@@ -19,11 +19,14 @@ context_file:
 skills:
   include_target: hermes            # ship skills whose `targets:` contains "hermes"
   # Optional curation (pull side) — limit this tool's skill set in ONE place instead
-  # of editing each skill's `targets:` frontmatter (push side). Names are validated
-  # against registry/skills/ at compile. After deselecting, run
+  # of editing each skill's `targets:` frontmatter (push side). This is a PERSONAL
+  # choice, not compiler spec, so it lives on the machine profile (overlayable), not
+  # here (core, not overlayable). In machines/<name>.yaml (or registry/local/machines/):
+  #   skills:
+  #     hermes: {include: [plan, gws]}       # ONLY these (of the compatible ones)
+  #     # hermes: {exclude: [example-ops-logs]}  # all compatible ones EXCEPT these
+  # Names are validated against registry/skills/ at compile. After deselecting, run
   # `deploy --machine <m> --prune` to remove the already-deployed copies.
-  # include: [plan, gws]            # ONLY these (of the compatible ones)
-  # exclude: [example-ops-logs]      # all compatible ones EXCEPT these
   mode: copy
   deploy_to_key: hermes_home
   subdir: skills/{category}/{name}  # preserves the devops/productivity grouping

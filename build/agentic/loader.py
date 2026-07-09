@@ -836,23 +836,58 @@ def _validate(reg: Registry) -> None:
             if "fallback_model" in hs and not isinstance(hs["fallback_model"], dict):
                 raise RegistryError(
                     f"machine {name}: hermes_settings.fallback_model must be a mapping")
-    # target-side skill curation references real skills, without contradictions
+        # 6. skills (optional): per-target curation of the compatible skill set —
+        #    `{<target>: {include: [...] | exclude: [...]}}`. The overlayable home for
+        #    what target-side skills.include/exclude used to do (rejected above); this
+        #    machine's box, this machine's file. include/exclude follow the same rules
+        #    the old target-side keys did: names must exist, no skill in both.
+        msk = m.get("skills")
+        if msk is not None:
+            if not isinstance(msk, dict):
+                raise RegistryError(f"machine {name}: 'skills' must be a mapping of "
+                                    f"target -> {{include/exclude}}")
+            bad_targets = set(msk) - KNOWN_TARGETS
+            if bad_targets:
+                raise RegistryError(f"machine {name}: skills references unknown "
+                                    f"target(s) {sorted(bad_targets)}")
+            for tname, curation in msk.items():
+                if not isinstance(curation, dict):
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} must be a mapping "
+                        f"({{include: [...]}} or {{exclude: [...]}})")
+                inc, exc = curation.get("include"), curation.get("exclude")
+                for label, lst in (("include", inc), ("exclude", exc)):
+                    if lst is None:
+                        continue
+                    if not isinstance(lst, list):
+                        raise RegistryError(
+                            f"machine {name}: skills.{tname}.{label} must be a list")
+                    bad = set(lst) - set(reg.skills)
+                    if bad:
+                        raise RegistryError(
+                            f"machine {name}: skills.{tname}.{label} references "
+                            f"unknown skill(s) {sorted(bad)}")
+                both = set(inc or []) & set(exc or [])
+                if both:
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} lists skill(s) in BOTH "
+                        f"include and exclude: {sorted(both)}")
+    # Skill curation (include:/exclude:) is a PERSONAL choice — which of the compatible
+    # skills a given box actually wants — not compiler spec. targets/*.yaml is core and
+    # NOT overlayable (see AGENTS.md), so a curation list living there is a fork tax on
+    # every community user who wants a different set. It belongs on the machine profile
+    # instead (registry/local/machines/<name>.yaml is overlayable). Reject it loudly here
+    # rather than silently ignoring it, so a stale core edit or a misplaced local edit
+    # fails fast instead of quietly doing nothing.
     for tname, tspec in reg.targets.items():
         sk = tspec.get("skills") or {}
-        inc, exc = sk.get("include"), sk.get("exclude")
-        for label, lst in (("include", inc), ("exclude", exc)):
-            if lst is None:
-                continue
-            if not isinstance(lst, list):
-                raise RegistryError(f"target {tname}: skills.{label} must be a list")
-            bad = set(lst) - set(reg.skills)
-            if bad:
-                raise RegistryError(f"target {tname}: skills.{label} references "
-                                    f"unknown skill(s) {sorted(bad)}")
-        both = set(inc or []) & set(exc or [])
-        if both:
-            raise RegistryError(f"target {tname}: skill(s) listed in BOTH "
-                                f"skills.include and skills.exclude: {sorted(both)}")
+        if "include" in sk or "exclude" in sk:
+            raise RegistryError(
+                f"target {tname}: skills.include/exclude is not allowed in targets/*.yaml "
+                f"(core, not overlayable) — set it on the machine profile instead: "
+                f"machines/<name>.yaml's `skills: {{{tname}: {{include: [...]}}}}`")
+    # machine-side skill curation (the overlayable equivalent): validated below,
+    # alongside the rest of machine profile validation.
     # servers.yaml shape; per-machine URL overrides reference known machines
     if "servers" not in reg.servers:
         raise RegistryError("connections/servers.yaml: missing top-level 'servers'")

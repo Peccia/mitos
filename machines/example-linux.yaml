@@ -17,6 +17,16 @@ paths:
 #   memory_enabled: true
 #   disabled_toolsets: [image_gen, video, tts]
 
+# Per-target skill curation (optional) — narrow a target's compatible skill set to just
+# what THIS machine wants, without editing the skill's own `targets:` frontmatter (which
+# would affect every machine). Names must exist in the registry; a skill in both include
+# and exclude for the same target is an error. This is the overlayable home for what used
+# to be a targets/<tool>.yaml `include:`/`exclude:` field — that field is core and shared
+# by everyone, so a personal curation choice never belongs there.
+# skills:
+#   hermes: {include: [plan, gws]}       # ONLY these (of the ones targeting hermes)
+#   # hermes: {exclude: [example-ops-logs]}  # all compatible ones EXCEPT these
+
 # How `mitos sync --machine example-linux` reaches this box. Uncomment and set your own hub.
 # Sync is git-only: the overlay (registry/local/) is a git repo synced to `hub` — any git URL
 # (a server you host or a private GitHub repo). Secrets never go here. See docs/lan-sync.md.
