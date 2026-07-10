@@ -2,7 +2,7 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Gemini/Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
 
 The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -160,11 +160,14 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |
 | **connections/** | MCP server definitions + env templates. Wiring, not content — it deploys on its own `--lane connections`. |
 | **target** | An adapter (`targets/<tool>.yaml`): how one tool consumes the registry — what to emit and where. |
-| **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. |
+| **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. Roles are exclusive: `hermes` (the agentic harness) cannot share a machine with a coding harness (`antigravity`/`claude-app`/`claude-code`) — an agentic machine is dedicated to that purpose. Rejected at compile time. `agents-md` itself is not a harness (it's the context format below), so it's never part of this exclusion. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy refuses), `harvest` (captured as a proposal), or `generated` (regenerated each deploy). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The intake queue. Everything a tool proposes lands here as a candidate; **only you** merge it — usually via the operator console. |
-| **assistant_root** | The folder (default `~/MitosAgent`) where your assistant's compiled context lives. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. |
-| **Dynamic branch** | A custom folder under `assistant_root` (e.g. `family/`) that you extend without forking `targets/agents-md.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<assistant_root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. |
+| **Operating mount vs. reference mount** | Two agents-md/agentic-graph lanes with opposite edit semantics, easy to conflate because both render a `Projects/<name>/` doc tree. An **operating mount** (`assistant_root`, or a project's `agentic_tree:` below) is the full prose tree — Navigation/Workflows/Skills, roster, dynamic branches — `drift_policy: protect`: edit it, and the edit becomes drift that reconciles back into the registry via `adopt`. A **reference mount** (`agentic_context_root` below) is a roster + per-project doc index generated purely from `registry/graph/`, `drift_policy: generated`: edits are silently overwritten on the next deploy — never an editing surface. Rule of thumb: never hand-edit a reference mount. |
+| **assistant_root** | *(operating mount, machine-wide)* The folder (default `~/MitosAgent`) where your assistant's compiled context lives — the proven Hermes combo. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. Only valid on an agentic (`hermes`) machine. |
+| **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts the SAME operating tree `assistant_root` renders (identical shape: Navigation/Workflows/Skills, full roster, dynamic branches), but rooted at `<local_path>/<subdir>/` inside that one project's own checkout instead of a whole machine. The workstation-side counterpart to `assistant_root`: lets a coding harness like Antigravity operate against a single project the way Hermes operates against a dedicated machine. Workstation-only — a no-op on an agentic machine, which already has the tree at its machine root. |
+| **Dynamic branch** | A custom folder under an operating mount's root (e.g. `family/`) that you extend without forking `targets/agents-md.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. Applies identically to a machine mount or a project's `agentic_tree` mount. |
+| **agentic_context_root** | *(reference mount, machine-wide)* A workstation path key (`machines/<name>.yaml`) that materializes a lightweight, read-only doc map — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. No prose, no Workflows/Skills. Independent of `agents-md`/`hermes` — a plain coding workstation can use it. |
 | **project checkouts** | Deployed files at each project's `local_path` directory. On **workstation machines** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` (inline doc index from the knowledge graph + project prose) plus a thin `CLAUDE.md` stub → `@AGENTS.md`. On **Hermes machines** (agents-md also in targets), `CLAUDE.md` carries identity + repo context and the graph materializes separately in the Agentic Context tree. |
 
 ## How skills reach a tool
@@ -175,19 +178,22 @@ the thing most worth understanding up front:
 | Axis | Question it answers | Where you set it |
 |---|---|---|
 | **Compatibility** | *Can* this skill run on tool X? | the skill's own `targets:` frontmatter |
-| **Binding** | *Should* this project's checkout receive it? | the project manifest's `skills:` list — **Claude Code only** |
+| **Scope** | Does it deploy everywhere, or only to specific projects? | the skill's own `scope: global \| project` frontmatter (default `global`) |
 
-**Why only Claude Code needs the second axis:** Hermes, Gemini, and claude.ai each have one
-*global* skills location, so a skill targeting that tool is simply available everywhere on it —
-one axis (compatibility) is enough. Claude Code installs skills **per-project**
-(`<checkout>/.claude/skills/`), so it needs a second axis to say *which* projects get a given
-skill, keeping each checkout lean instead of holding every skill.
+**Why only Claude Code and Antigravity need the second axis:** Hermes and claude.ai each have one
+*global* skills location only — a skill targeting either is simply available everywhere on it, no
+scoping possible, so one axis (compatibility) is enough there; they ignore `scope` entirely. Claude
+Code and Antigravity each offer **two** surfaces — a personal/global directory
+(`~/.claude/skills/`, `~/.gemini/config/skills/`) and a per-project one
+(`<checkout>/.claude/skills/`, `<checkout>/.agents/skills/`) — so a skill's `scope` picks which one
+it lands in on those two tools.
 
-That asymmetry is the one rule to internalize: **a skill named in a project's `skills:` list must
-also list `claude-code` in its own `targets:`.** The manifest decides *which projects*; the skill
-decides *which tools*. A Hermes-only skill (one calling an MCP server that isn't in a Claude Code
-checkout) lives globally on Hermes and never appears in a project manifest — binding it there is a
-category error the compiler rejects.
+`scope: project` skills reach a project's checkout via that project manifest's `skills:` list —
+**the skill must also list `claude-code` or `antigravity`** (whichever has the project-scoped
+surface you want) in its own `targets:`. The manifest decides *which projects*; the skill decides
+*which tools*. A Hermes-only skill (one calling an MCP server that isn't in a Claude Code checkout)
+lives globally on Hermes and never appears in a project manifest — binding it there is a category
+error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
 Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
 `skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
@@ -337,7 +343,10 @@ expands into its role tree, Agent-MD folder view, and a `+ Extend department` bu
 plus `+ ORG` domain creation), and **Prompt Library** (browse, copy, and
 compose your registry prose for one-shot use in any chat app — plus a Ctrl/⌘K command
 palette that searches all of it). It edits the working tree and never commits
-— `git status` shows you exactly what changed. Full guide: [docs/operator-console.md](docs/operator-console.md).
+— `git status` shows you exactly what changed. A status bar can also trigger **Compile**
+and **Deploy** directly from the sidebar, with a pre-deploy plan preview and a live log
+drawer — `--force`/`--prune`/scoped `--lane`/`--target` deploys remain CLI-only. Full
+guide: [docs/operator-console.md](docs/operator-console.md).
 
 ## Commands
 
@@ -363,7 +372,7 @@ Explore our comprehensive guides to mastering Mitos:
 - 🧵 **[Documentation Map](docs/README.md)** — The central hub for all deep-dive guides.
 - 🔄 **[Managing State & Drift](docs/managing-state.md)** — Understanding deploy, adopt, harvest, and conflict resolution.
 - 💻 **[Operator Console](docs/operator-console.md)** — How to use the local `review` web UI to manage your registry.
-- 🛠️ **[Target Setup Guides](docs/README.md#tool--target-setup)** — Detailed configuration and support for Claude Code, Gemini CLI, Claude Desktop, and Antigravity.
+- 🛠️ **[Target Setup Guides](docs/README.md#tool--target-setup)** — Detailed configuration and support for Claude Code, Claude Desktop, and Antigravity.
 - 🔌 **[Workspace Connectors](docs/connectors/README.md)** — Connecting Google Workspace and custom MCP servers.
 - 🤝 **[Overlay Synchronization](docs/lan-sync.md)** — How `mitos sync` keeps your fleet in step using Git.
 
@@ -372,7 +381,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # the moat — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, hermes, gemini, agents-md, claude-app)
+targets/         # one adapter per tool (claude-code, hermes, antigravity, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

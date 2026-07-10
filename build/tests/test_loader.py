@@ -185,21 +185,83 @@ def test_path_validation_workspace_overlap():
     except RegistryError as e:
         assert "must not overlap with project 'example-project' workspace path" in str(e)
 
+def test_machine_role_exclusivity_hermes_vs_coding():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md", "claude-code"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError due to hermes + coding target on one machine")
+    except RegistryError as e:
+        assert "cannot share a machine with coding harness target(s)" in str(e)
+        assert "claude-code" in str(e)
+
+def test_machine_role_agents_md_alone_is_not_a_coding_harness():
+    """agents-md is the context format, not a harness — it may coexist with hermes
+    (the agentic machine-mount combo) with no exclusivity violation."""
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md"]
+    _validate(rig)  # must not raise
+
+def test_agentic_tree_valid():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    _validate(rig)  # must not raise
+
+def test_agentic_tree_rejects_path_separators():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "sub/dir"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for path-like agentic_tree")
+    except RegistryError as e:
+        assert "must be a single directory name" in str(e)
+
+def test_agentic_tree_rejects_empty():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agentic_tree"] = "   "
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty agentic_tree")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_agentic_tree_collides_with_repo_checkout_dir():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "git@github.com:example/MitosAgent.git"
+    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for agentic_tree/repo checkout collision")
+    except RegistryError as e:
+        assert "collides with the checkout dir of repo" in str(e)
+
 def test_planner_output_path_collision():
     import copy
     from agentic import planner
     from agentic.loader import RegistryError, Skill
     rig = copy.deepcopy(reg)
-    # inject a second skill targeting gemini to force a collision
-    rig.skills["mock-skill"] = Skill(name="mock-skill", rel="skills/mock-skill/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
-    rig.machines["example-windows"]["paths"]["antigravity_skills"] = "C:/GeminiPrompts"
-    rig.targets["gemini"]["skills"]["subdir"] = "AGENTS.md"
+    # inject a second skill targeting antigravity to force a collision
+    rig.skills["mock-skill"] = Skill(name="mock-skill", rel="skills/mock-skill/SKILL.md", frontmatter={"targets": ["antigravity"]}, body="")
+    rig.machines["example-windows"]["paths"]["antigravity_skills"] = "C:/AntigravityPrompts"
+    rig.targets["antigravity"]["skills"]["subdir"] = "AGENTS.md"
     try:
         planner.plan_machine(rig, "example-windows")
         raise AssertionError("expected RegistryError due to duplicate output path")
     except RegistryError as e:
         assert "output path collision on" in str(e)
-        assert "Target 'gemini'" in str(e)
+        assert "Target 'antigravity'" in str(e)
 
 def test_filter_prior_by_machine_paths():
     from agentic.commands import _filter_prior_by_machine_paths
@@ -208,7 +270,7 @@ def test_filter_prior_by_machine_paths():
 
     # Configure path keys
     rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"]["gemini_config"] = "~/.gemini/config"
+    rig.machines["example-windows"]["paths"]["antigravity_config"] = "~/.gemini/config"
 
     prior = {
         "C:/Projects/mitos/CLAUDE.md": {"deployed_hash": "h1"},
@@ -743,6 +805,81 @@ def test_project_cannot_bind_extension_skill_to_claude_code():
         assert "extends_skill" in str(e) and "bind its parent skill instead" in str(e)
 
 
+# ── skill scope: global (default) | project ─────────────────────────────────────
+def test_skill_scope_defaults_global():
+    from agentic.loader import Skill
+    s = Skill(name="x", rel="skills/x/SKILL.md", frontmatter={"targets": ["hermes"]}, body="")
+    assert s.scope == "global"
+
+def test_skill_scope_reads_frontmatter():
+    from agentic.loader import Skill
+    s = Skill(name="x", rel="skills/x/SKILL.md",
+              frontmatter={"targets": ["antigravity"], "scope": "project"}, body="")
+    assert s.scope == "project"
+
+def test_validate_skill_scope_rejects_unknown_value():
+    from agentic.loader import validate_skill_scope
+    err = validate_skill_scope("x", {"targets": ["antigravity"], "scope": "workspace"})
+    assert err and "invalid scope" in err
+
+def test_validate_skill_scope_accepts_global_and_project_on_capable_targets():
+    from agentic.loader import validate_skill_scope
+    assert validate_skill_scope("x", {"targets": ["claude-code"]}) is None
+    assert validate_skill_scope("x", {"targets": ["antigravity"], "scope": "project"}) is None
+    assert validate_skill_scope(
+        "x", {"targets": ["claude-code", "antigravity"], "scope": "project"}) is None
+
+def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairing():
+    """A skill may target hermes/claude-app alongside a project-scope-capable target —
+    neither has a project-scoped surface, so both just ignore `scope` (always ship
+    globally) rather than being flagged incompatible."""
+    from agentic.loader import validate_skill_scope
+    assert validate_skill_scope(
+        "x", {"targets": ["hermes", "antigravity"], "scope": "project"}) is None
+    assert validate_skill_scope(
+        "x", {"targets": ["claude-app", "claude-code"], "scope": "project"}) is None
+    assert validate_skill_scope("x", {"targets": ["claude-app"], "scope": "project"}) is None
+
+def test_registry_load_rejects_bad_skill_scope():
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["bad-scope"] = Skill(
+        name="bad-scope", rel="local/skills/bad-scope/SKILL.md",
+        frontmatter={"targets": ["claude-code"], "scope": "workspace"}, body="body")
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "invalid scope" in str(e)
+
+def test_project_can_bind_skill_that_only_targets_antigravity():
+    """The project skills: binding check accepts any project-scope-capable target
+    (claude-code OR antigravity), not just claude-code."""
+    import copy
+    from agentic.loader import Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["antigravity-only"] = Skill(
+        name="antigravity-only", rel="local/skills/antigravity-only/SKILL.md",
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="body")
+    rig.projects["example-project"]["skills"] = ["antigravity-only"]
+    _validate(rig)  # must not raise
+
+def test_project_cannot_bind_skill_with_no_project_scope_capable_target():
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["hermes-only"] = Skill(
+        name="hermes-only", rel="local/skills/hermes-only/SKILL.md",
+        frontmatter={"targets": ["hermes"]}, body="body")
+    rig.projects["example-project"]["skills"] = ["hermes-only"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "project-scoped skill surface" in str(e)
+
+
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
 def test_skill_resources_loaded_from_examples_and_scripts():
     treg, tmp = _temp_registry()
@@ -760,6 +897,25 @@ def test_skill_resources_loaded_from_examples_and_scripts():
     assert skill.resources["examples/sample.md"].text == "expected output\n"
     assert skill.resources["examples/sample.md"].rel == "skills/res-skill/examples/sample.md"
     assert skill.resources["scripts/validate.sh"].rel == "skills/res-skill/scripts/validate.sh"
+
+def test_skill_resources_loaded_from_all_harness_convention_dirs():
+    """_SKILL_RESOURCE_DIRS is the union of the harnesses' documented conventions:
+    examples/scripts (Claude Code, Antigravity), references/templates (Hermes),
+    resources (Antigravity). A file under any of them loads; anything else is ignored."""
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "conv-skill"
+    for sub in ("references", "templates", "resources", "unrelated"):
+        (skill_dir / sub).mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: conv-skill\ndescription: d\ntargets: [hermes]\ncategory: general\n---\n"
+        "body\n", encoding="utf-8")
+    (skill_dir / "references" / "api.md").write_text("api\n", encoding="utf-8")
+    (skill_dir / "templates" / "config.yaml").write_text("k: v\n", encoding="utf-8")
+    (skill_dir / "resources" / "notes.md").write_text("notes\n", encoding="utf-8")
+    (skill_dir / "unrelated" / "junk.md").write_text("junk\n", encoding="utf-8")
+    reg2 = loader.load(tmp)
+    assert set(reg2.skills["conv-skill"].resources) == {
+        "references/api.md", "templates/config.yaml", "resources/notes.md"}
 
 def test_skill_resource_binary_file_rejected():
     from agentic.loader import RegistryError

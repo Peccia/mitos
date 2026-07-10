@@ -8,6 +8,14 @@ not a style preference. It is enforced at plan time by `lint_node_markdown`
 (`build/agentic/planner.py`); a violation fails `compile`/`deploy` with the offending
 file and problem named.
 
+This taxonomy is identical regardless of where the tree is *mounted*: a machine-wide
+operating mount at `assistant_root` (the Hermes combo) and a project-wide operating mount
+at a project's `agentic_tree:` render through the same `_emit_tree` and are linted the
+same way — only the deploy root differs. It does not apply to a reference mount
+(`agentic_context_root`/agentic-graph): that lane's files are `drift_policy: generated`
+and carry no prose to structure — see the root [`README.md`](../README.md)'s Core
+Concepts table for the operating-mount-vs-reference-mount distinction.
+
 ## The rules
 
 1. **One H1 = the node's identity.** The project name, `Operating Root`, `Projects`,

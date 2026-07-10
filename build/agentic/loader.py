@@ -11,8 +11,16 @@ from pathlib import Path
 
 import yaml
 
-KNOWN_TARGETS = {"hermes", "claude-code", "gemini", "agents-md", "claude-app"}
+KNOWN_TARGETS = {"hermes", "claude-code", "antigravity", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
+VALID_SKILL_SCOPES = {"global", "project"}
+# Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
+# antigravity: <local_path>/.agents/skills/) — the only targets a project's `skills:` list
+# binds a skill for, and the only targets where `scope: project` changes anything. hermes and
+# claude-app have no project-scoped surface at all (account-wide/global only) and simply
+# IGNORE `scope` — always global, on any skill, regardless of value — the same way hermes
+# always did before this feature existed. See validate_skill_scope / Skill.scope.
+PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
 # The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
 # the single source of truth for the personalization placeholders render.py expands
@@ -29,10 +37,13 @@ _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
 # role heading, so a role rename never orphans an extension (the R2 design decision).
 EXTENSION_ANCHOR = "## Extended C-suite Roles"
 
-# Supporting-file subdirectories a skill folder may carry alongside SKILL.md
-# (registry/skills/<name>/examples/, .../scripts/) — auto-deployed next to the
-# rendered SKILL.md and bundled into claude-app zips.
-_SKILL_RESOURCE_DIRS = ("examples", "scripts")
+# Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
+# auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
+# The set is the union of the harnesses' documented conventions: examples/ + scripts/
+# (Claude Code, Antigravity), references/ + templates/ (Hermes), resources/
+# (Antigravity). A whitelist rather than "any file" — it keeps the console's
+# Supporting Files panel and adopt routing over a known, enumerable surface.
+_SKILL_RESOURCE_DIRS = ("examples", "scripts", "references", "templates", "resources")
 
 # Mitos overlay (the Mitos overlay design): registry/local/ is the gitignored personal
 # overlay — the public core ships neutral defaults, a user's identity/projects/graph/skills
@@ -95,7 +106,7 @@ class Partial:
 
 @dataclass
 class SkillResource:
-    """One supporting file under a skill's examples/ or scripts/ subdirectory.
+    """One supporting file under a skill's resource subdirectories (_SKILL_RESOURCE_DIRS).
     `rel` is its OWN registry-relative path (not SKILL.md's) — so adopt/harvest routes
     an edited script back to the file that authored it (see planner._skill_resource_outputs)."""
     text: str
@@ -119,6 +130,15 @@ class Skill:
     @property
     def category(self) -> str:
         return self.frontmatter.get("category", "general")
+
+    @property
+    def scope(self) -> str:
+        """`global` (default): deploys to every global surface a target offers
+        (hermes, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
+        into the project checkouts that bind it via that project's `skills:` list —
+        never a global directory. Hermes deliberately ignores this field (it has no
+        project-scoped skill surface); see validate_skill_scope."""
+        return self.frontmatter.get("scope", "global")
 
 
 @dataclass
@@ -313,7 +333,7 @@ def _load_partials(base: Path, *, prefix: str = "") -> dict[str, Partial]:
 
 def _load_skill_resources(skill_dir: Path, base: Path, prefix: str,
                           rel: str) -> dict[str, SkillResource]:
-    """Supporting files under a skill's examples/ and scripts/ subdirectories, keyed by
+    """Supporting files under a skill's resource subdirectories (_SKILL_RESOURCE_DIRS), keyed by
     path relative to the skill folder. v1 is text-only — a binary asset fails loudly
     (no silent truncation/corruption) rather than being supported half-way."""
     resources: dict[str, SkillResource] = {}
@@ -502,6 +522,19 @@ def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict
     return None
 
 
+def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
+    """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
+    when valid. No per-target incompatibility to check: a target with no project-scoped
+    surface (hermes, claude-app) simply ignores `scope` and always deploys globally, so
+    `scope: project` is always a legal value regardless of which targets a skill declares
+    — see PROJECT_SCOPE_CAPABLE_TARGETS."""
+    scope = frontmatter.get("scope", "global")
+    if scope not in VALID_SKILL_SCOPES:
+        return (f"skill {skill_name!r}: invalid scope {scope!r}; must be one of "
+                f"{sorted(VALID_SKILL_SCOPES)}")
+    return None
+
+
 def _validate(reg: Registry) -> None:
     # audiences reference known targets
     for p in reg.partials.values():
@@ -520,6 +553,11 @@ def _validate(reg: Registry) -> None:
     # chained extensions, and a real anchor section to splice into
     for s in reg.skills.values():
         err = validate_skill_extension(reg, s.name, s.frontmatter)
+        if err:
+            raise RegistryError(err)
+    # scope: global (default) | project — see validate_skill_scope / Skill.scope
+    for s in reg.skills.values():
+        err = validate_skill_scope(s.name, s.frontmatter)
         if err:
             raise RegistryError(err)
     # prompts may omit targets (console-only is valid); when targets are set they must be known
@@ -595,6 +633,32 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: local_path references unknown machine {mname!r}")
             resolve_local_path(mname, reg.machines[mname], raw)  # fails loudly if a
             # relative entry has no projects_root to resolve against
+        # agentic_tree (optional): mounts the full agents-md operating tree (the same
+        # Navigation/Workflows/Skills/roster shape a Hermes machine gets at its
+        # assistant_root) inside this project's own checkout, at
+        # <local_path>/<agentic_tree>/ — the workstation-side counterpart to a machine
+        # mount, e.g. so Antigravity can operate against a project like an agentic
+        # harness. A single relative subdirectory name, not a path — must not collide
+        # with a repo checkout basename landing in the same local_path (both mounts
+        # share that directory).
+        at = proj.get("agentic_tree")
+        if at is not None:
+            if not isinstance(at, str) or not at.strip():
+                raise RegistryError(
+                    f"project {slug}: 'agentic_tree' must be a non-empty string "
+                    f"(a subdirectory name under local_path, e.g. 'MitosAgent')")
+            at = at.strip()
+            if at in (".", "..") or "/" in at or "\\" in at:
+                raise RegistryError(
+                    f"project {slug}: 'agentic_tree' must be a single directory name, "
+                    f"not a path — got {at!r}")
+            for url in repo_raw if isinstance(repo_raw, list) else (
+                    [repo_raw] if isinstance(repo_raw, str) and repo_raw.strip() else []):
+                if _repo_basename(url.strip()) == at:
+                    raise RegistryError(
+                        f"project {slug}: 'agentic_tree' subdirectory {at!r} collides "
+                        f"with the checkout dir of repo {url.strip()!r} — choose a "
+                        f"different subdirectory name")
         for label, rel in (proj.get("context") or {}).items():
             rel_in_reg = rel.split("registry/", 1)[-1]
             if rel_in_reg not in reg.partials:
@@ -612,10 +676,11 @@ def _validate(reg: Registry) -> None:
             if sname not in reg.skills:
                 raise RegistryError(
                     f"project {slug}: skills binds unknown skill {sname!r}")
-            if "claude-code" not in reg.skills[sname].targets:
+            if not set(reg.skills[sname].targets) & PROJECT_SCOPE_CAPABLE_TARGETS:
                 raise RegistryError(
                     f"project {slug}: bound skill {sname!r} does not target "
-                    f"'claude-code' — add it to the skill's targets: to bind it")
+                    f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
+                    f"takes effect on a target with a project-scoped skill surface")
             if reg.skills[sname].frontmatter.get("extends_skill"):
                 raise RegistryError(
                     f"project {slug}: skills binds {sname!r}, which is an extension "
@@ -663,9 +728,26 @@ def _validate(reg: Registry) -> None:
                 f"(registry/projects/)")
     # machines reference known targets
     for name, m in reg.machines.items():
-        bad = set(m.get("targets", [])) - KNOWN_TARGETS
+        targets = set(m.get("targets", []))
+        bad = targets - KNOWN_TARGETS
         if bad:
             raise RegistryError(f"machine {name}: unknown target(s) {sorted(bad)}")
+        # Machine roles are exclusive: an agentic-harness machine (hermes) is dedicated
+        # to that purpose — it does not also run coding harnesses. This keeps every
+        # machine's operating-mount tree (assistant_root) unambiguous and lets the
+        # planner's role checks key off "hermes in targets" alone. agents-md itself is
+        # NOT a harness (it's the context format both roles can consume — a reference
+        # mount via agentic_context_root, or an operating mount via assistant_root or a
+        # project's agentic_tree:), so it is never part of this exclusion.
+        _CODING_TARGETS = {"antigravity", "claude-app", "claude-code"}
+        if "hermes" in targets:
+            coding_present = targets & _CODING_TARGETS
+            if coding_present:
+                raise RegistryError(
+                    f"machine {name}: 'hermes' (the agentic harness) cannot share a "
+                    f"machine with coding harness target(s) {sorted(coding_present)}. "
+                    f"An agentic machine is dedicated to that purpose — put coding "
+                    f"harnesses on a separate machine profile.")
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
         # shape/validation as a project's document_store.
@@ -754,23 +836,58 @@ def _validate(reg: Registry) -> None:
             if "fallback_model" in hs and not isinstance(hs["fallback_model"], dict):
                 raise RegistryError(
                     f"machine {name}: hermes_settings.fallback_model must be a mapping")
-    # target-side skill curation references real skills, without contradictions
+        # 6. skills (optional): per-target curation of the compatible skill set —
+        #    `{<target>: {include: [...] | exclude: [...]}}`. The overlayable home for
+        #    what target-side skills.include/exclude used to do (rejected above); this
+        #    machine's box, this machine's file. include/exclude follow the same rules
+        #    the old target-side keys did: names must exist, no skill in both.
+        msk = m.get("skills")
+        if msk is not None:
+            if not isinstance(msk, dict):
+                raise RegistryError(f"machine {name}: 'skills' must be a mapping of "
+                                    f"target -> {{include/exclude}}")
+            bad_targets = set(msk) - KNOWN_TARGETS
+            if bad_targets:
+                raise RegistryError(f"machine {name}: skills references unknown "
+                                    f"target(s) {sorted(bad_targets)}")
+            for tname, curation in msk.items():
+                if not isinstance(curation, dict):
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} must be a mapping "
+                        f"({{include: [...]}} or {{exclude: [...]}})")
+                inc, exc = curation.get("include"), curation.get("exclude")
+                for label, lst in (("include", inc), ("exclude", exc)):
+                    if lst is None:
+                        continue
+                    if not isinstance(lst, list):
+                        raise RegistryError(
+                            f"machine {name}: skills.{tname}.{label} must be a list")
+                    bad = set(lst) - set(reg.skills)
+                    if bad:
+                        raise RegistryError(
+                            f"machine {name}: skills.{tname}.{label} references "
+                            f"unknown skill(s) {sorted(bad)}")
+                both = set(inc or []) & set(exc or [])
+                if both:
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} lists skill(s) in BOTH "
+                        f"include and exclude: {sorted(both)}")
+    # Skill curation (include:/exclude:) is a PERSONAL choice — which of the compatible
+    # skills a given box actually wants — not compiler spec. targets/*.yaml is core and
+    # NOT overlayable (see AGENTS.md), so a curation list living there is a fork tax on
+    # every community user who wants a different set. It belongs on the machine profile
+    # instead (registry/local/machines/<name>.yaml is overlayable). Reject it loudly here
+    # rather than silently ignoring it, so a stale core edit or a misplaced local edit
+    # fails fast instead of quietly doing nothing.
     for tname, tspec in reg.targets.items():
         sk = tspec.get("skills") or {}
-        inc, exc = sk.get("include"), sk.get("exclude")
-        for label, lst in (("include", inc), ("exclude", exc)):
-            if lst is None:
-                continue
-            if not isinstance(lst, list):
-                raise RegistryError(f"target {tname}: skills.{label} must be a list")
-            bad = set(lst) - set(reg.skills)
-            if bad:
-                raise RegistryError(f"target {tname}: skills.{label} references "
-                                    f"unknown skill(s) {sorted(bad)}")
-        both = set(inc or []) & set(exc or [])
-        if both:
-            raise RegistryError(f"target {tname}: skill(s) listed in BOTH "
-                                f"skills.include and skills.exclude: {sorted(both)}")
+        if "include" in sk or "exclude" in sk:
+            raise RegistryError(
+                f"target {tname}: skills.include/exclude is not allowed in targets/*.yaml "
+                f"(core, not overlayable) — set it on the machine profile instead: "
+                f"machines/<name>.yaml's `skills: {{{tname}: {{include: [...]}}}}`")
+    # machine-side skill curation (the overlayable equivalent): validated below,
+    # alongside the rest of machine profile validation.
     # servers.yaml shape; per-machine URL overrides reference known machines
     if "servers" not in reg.servers:
         raise RegistryError("connections/servers.yaml: missing top-level 'servers'")

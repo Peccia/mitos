@@ -13,12 +13,14 @@ decision appends to inbox/decisions.jsonl (tracked — V3's procedural-memory si
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import difflib
 import json
 import re
 import shutil
 import socket
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +28,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from . import loader, render
+from . import commands, loader, render
 from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
@@ -443,18 +445,35 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
 
 def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[list[str], str | None]:
     """Accept a graph candidate: upsert the fragment into registry/graph/<slug>.jsonld,
-    written canonically. Returns (changed_paths, error)."""
+    written canonically. Returns (changed_paths, error).
+
+    A doc dropped by `removals` is also auto-dismissed (moved to the Recovery list) so
+    it stops resurfacing in Discovery just because it's no longer mapped — the staged
+    snapshot that surfaced it originally is never pruned. Snapshotted from the graph
+    BEFORE the merge (the fragment carries no metadata for a pure removal), and only
+    once the write has actually succeeded."""
     from . import graph as graphmod
     from .io import write_text
     slug = meta.get("project") or ""
     if slug not in reg.projects:
         return [], f"unknown project {slug!r} for graph candidate"
+    removals = [str(r) for r in (meta.get("removals") or [])]
+    removed_docs = []
+    if removals:
+        existing = reg.graphs.get(slug)
+        by_id = {d.drive_id: d for d in existing.documents} if existing else {}
+        removed_docs = [
+            {"id": rid, "name": by_id[rid].name, "dateModified": by_id[rid].date_modified,
+             "webUrl": by_id[rid].drive_url}
+            for rid in removals if rid in by_id]
     try:
         merged = _merged_graph(reg, slug, payload, meta.get("removals"),
                                meta.get("effort_removals"))
         write_text(_graph_file(reg, slug), graphmod.canonical_jsonld(merged))
     except graphmod.GraphError as e:
         return [], f"invalid graph fragment: {e}"
+    if removed_docs:
+        dismiss_docs(reg, slug, removed_docs, source="removal")
     return [_graph_rel(reg, slug)], None
 
 
@@ -473,26 +492,30 @@ def _graph_note(n_docs: int, n_removals: int,
     return (" + ".join(parts) or "no changes") + " proposed in the operator console"
 
 
-_RESOURCE_PATH_RE = re.compile(r"^(examples|scripts)/[^/].*[^/]$")
+# Built from the loader's whitelist so the console accepts exactly the set the
+# compiler deploys — one source of truth, never a second hand-kept list.
+_RESOURCE_PATH_RE = re.compile(
+    r"^(" + "|".join(loader._SKILL_RESOURCE_DIRS) + r")/[^/].*[^/]$")
 
 
 def _write_resource_file(folder: Path, relpath: str, text: str) -> None:
-    """Write one skill supporting file into a candidate folder, under examples/ or
-    scripts/ only — the same two subdirectories the loader scans (loader._SKILL_RESOURCE_DIRS)."""
+    """Write one skill supporting file into a candidate folder, under one of the
+    resource subdirectories the loader scans (loader._SKILL_RESOURCE_DIRS)."""
     relpath = str(relpath).replace("\\", "/").strip()
     if not _RESOURCE_PATH_RE.match(relpath) or ".." in PurePosixPath(relpath).parts:
-        raise ValueError(f"invalid resource path {relpath!r} — must be under "
-                         f"examples/ or scripts/ (no '..')")
+        raise ValueError(f"invalid resource path {relpath!r} — must be under one of "
+                         f"{'/, '.join(loader._SKILL_RESOURCE_DIRS)}/ (no '..')")
     dest = folder / relpath
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(str(text), encoding="utf-8", newline="\n")
 
 
 def _candidate_resources(folder: Path) -> dict[str, str]:
-    """examples/*, scripts/* files staged alongside a skill candidate's payload, for the
-    console's Supporting Files panel. Empty if the candidate carries none."""
+    """Supporting files (loader._SKILL_RESOURCE_DIRS subdirectories) staged alongside a
+    skill candidate's payload, for the console's Supporting Files panel. Empty if the
+    candidate carries none."""
     out: dict[str, str] = {}
-    for sub in ("examples", "scripts"):
+    for sub in loader._SKILL_RESOURCE_DIRS:
         subdir = folder / sub
         if not subdir.is_dir():
             continue
@@ -504,12 +527,13 @@ def _candidate_resources(folder: Path) -> dict[str, str]:
 
 
 def _sync_skill_resources(dest_skill_md: Path, candidate_folder: Path) -> None:
-    """Replace a skill's examples/ and scripts/ directories with what the candidate
-    carries. Only ever called when the candidate's meta marked `resources_provided`
-    (R4: an absent resources block must never touch existing files) — an explicit empty
-    set deletes both directories, a populated one replaces them wholesale."""
+    """Replace a skill's resource directories (loader._SKILL_RESOURCE_DIRS) with what
+    the candidate carries. Only ever called when the candidate's meta marked
+    `resources_provided` (R4: an absent resources block must never touch existing files)
+    — an explicit empty set deletes the directories, a populated one replaces them
+    wholesale."""
     dest_dir = dest_skill_md.parent
-    for sub in ("examples", "scripts"):
+    for sub in loader._SKILL_RESOURCE_DIRS:
         existing = dest_dir / sub
         if existing.is_dir():
             shutil.rmtree(existing)
@@ -527,12 +551,20 @@ def _write_candidate(reg: Registry, slug: str, meta: dict, payload_filename: str
     inbox = loader.inbox_dir(reg)
     inbox.mkdir(parents=True, exist_ok=True)
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+    # mkdir() itself is the existence check — two concurrent requests (e.g. a
+    # double-clicked Propose button) racing a separate exists()-then-mkdir() would
+    # otherwise both pass the check and one loses with an uncaught FileExistsError,
+    # which the server has no handler for: it drops the connection with no HTTP
+    # response, surfacing to the browser as a bare "Failed to fetch".
     folder = inbox / f"{ts}--console--{slug}"
     n = 2
-    while folder.exists():
-        folder = inbox / f"{ts}--console--{slug}-{n}"
-        n += 1
-    folder.mkdir()
+    while True:
+        try:
+            folder.mkdir()
+            break
+        except FileExistsError:
+            folder = inbox / f"{ts}--console--{slug}-{n}"
+            n += 1
     (folder / "meta.yaml").write_text(
         yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
     (folder / payload_filename).write_text(payload_text, encoding="utf-8")
@@ -726,7 +758,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role"}
+                         "targets", "category", "extends_skill", "extends_role", "scope"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
 
@@ -822,6 +854,9 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         ext_err = loader.validate_skill_extension(reg, ident, new_fm)
         if ext_err:
             return {"ok": False, "error": ext_err}
+        scope_err = loader.validate_skill_scope(ident, new_fm)
+        if scope_err:
+            return {"ok": False, "error": scope_err}
 
     payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
               + "---\n\n" + str(body).rstrip("\n") + "\n")
@@ -890,6 +925,9 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         ext_err = loader.validate_skill_extension(reg, skill.name, fm)
         if ext_err:
             return ext_err
+        scope_err = loader.validate_skill_scope(skill.name, fm)
+        if scope_err:
+            return scope_err
     else:
         prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
         if prompt is not None:
@@ -1113,6 +1151,12 @@ def prompt_index(reg: Registry) -> dict:
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
         "extends_skill": s.frontmatter.get("extends_skill", ""),
         "extends_role": s.frontmatter.get("extends_role", ""),
+        # projects whose manifest `skills:` list names this skill — the read-only
+        # "where does scope: project actually apply" view (renderSkillScopeSection).
+        # Editing this list happens in the project manifest YAML directly; the console
+        # doesn't write project manifests (see docs/managing-state.md, invariant #3).
+        "bound_projects": sorted(slug for slug, proj in reg.projects.items()
+                                 if s.name in (proj.get("skills") or [])),
     } for s in sorted(reg.skills.values(), key=lambda s: (s.category, s.name))]
     partials = [{
         "rel": p.rel,
@@ -1136,6 +1180,89 @@ def _read_staging(path: Path, slug: str, is_unassigned: bool) -> dict:
     return {"ok": True, "slug": slug, "documents": docs,
             "staged_at": data.get("staged_at", ""), "connector": data.get("connector", ""),
             "scope": data.get("scope", {}), "is_unassigned": is_unassigned}
+
+
+def _dismiss_file(reg: Registry, slug: str, pool: str = "") -> tuple[Path, bool]:
+    """Resolve which dismissed-list file backs `slug` for the given pool — mirrors
+    load_staged's own fallback so a dismissal always lands beside whichever staging
+    file Discovery is actually showing: pool=="unassigned" forces the shared file;
+    otherwise the per-project file is used when the per-project staging file exists,
+    else the shared unassigned file. Returns (path, is_unassigned)."""
+    staging = loader.inbox_dir(reg) / "staging"
+    unassigned = staging / "unassigned.dismissed.json"
+    if pool == "unassigned":
+        return unassigned, True
+    if (staging / f"{slug}.json").is_file():
+        return staging / f"{slug}.dismissed.json", False
+    return unassigned, True
+
+
+def _read_dismissed(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    docs = data.get("documents") if isinstance(data, dict) else None
+    return docs if isinstance(docs, list) else []
+
+
+def _write_dismissed(path: Path, docs: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"documents": docs}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def load_dismissed(reg: Registry, slug: str, pool: str = "") -> dict:
+    """Read the Recovery list backing `slug` — the console's Recovery tab."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    path, is_unassigned = _dismiss_file(reg, slug, pool)
+    return {"ok": True, "slug": slug, "documents": _read_dismissed(path),
+            "is_unassigned": is_unassigned}
+
+
+def dismiss_docs(reg: Registry, slug: str, docs: list[dict], pool: str = "",
+                 source: str = "manual") -> dict:
+    """Move one or more documents from Discovery into the Recovery list backing
+    `slug`/`pool` (see _dismiss_file). Idempotent — dismissing an already-dismissed id
+    updates its entry in place rather than duplicating it. `source` is "manual" (the
+    Discovery Dismiss action) or "removal" (auto-dismissed when accept drops the doc
+    from the graph)."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not docs:
+        return {"ok": False, "error": "no documents to dismiss"}
+    path, _ = _dismiss_file(reg, slug, pool)
+    existing = {d["id"]: d for d in _read_dismissed(path) if d.get("id")}
+    now = _now()
+    src = source if source in ("manual", "removal") else "manual"
+    for d in docs:
+        did = str(d.get("id") or "").strip()
+        if not did:
+            continue
+        existing[did] = {
+            "id": did, "name": d.get("name", ""), "dateModified": d.get("dateModified", ""),
+            "webUrl": d.get("webUrl", ""), "dismissed_at": now, "source": src,
+        }
+    _write_dismissed(path, list(existing.values()))
+    return {"ok": True}
+
+
+def restore_docs(reg: Registry, slug: str, ids: list[str], pool: str = "") -> dict:
+    """Remove one or more ids from the Recovery list backing `slug`/`pool` — the
+    document reappears in Discovery on its next fetch."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not ids:
+        return {"ok": False, "error": "no documents to restore"}
+    path, _ = _dismiss_file(reg, slug, pool)
+    id_set = {str(i) for i in ids}
+    remaining = [d for d in _read_dismissed(path) if d.get("id") not in id_set]
+    _write_dismissed(path, remaining)
+    return {"ok": True}
 
 
 def load_staged(reg: Registry, slug: str, pool: str = "") -> dict:
@@ -1384,7 +1511,119 @@ def state(reg: Registry) -> dict:
         # only machines with an Agent-MD folder tree — the Org tab's folder-view picker
         "agents_md_machines": sorted(
             m for m, cfg in reg.machines.items() if "agents-md" in cfg.get("targets", [])),
+        # the status bar's machine selector — same convention as cmd_compile: example
+        # templates step aside once the overlay defines a real machine; on a fresh clone
+        # (no real machines yet) they show so the quick-start deploy rehearsal works
+        "machines": sorted(commands.real_machines(reg)),
+        "ops": {"compile": commands.compile_status(reg, reg.root / "dist")},
     }
+
+
+# ── ops: compile/deploy from the console ─────────────────────────────────────
+# Single-flight: at most one compile or deploy runs at a time, guarded by _OPS_LOCK.
+# cmd_compile/cmd_deploy only ever communicate via print(), so a _TeeWriter installed
+# as sys.stdout for the call's duration is the only way to surface their progress —
+# it both appends to the shared _OPS_STATE (for a concurrent GET /api/ops/status poll)
+# and forwards to the real stdout, so the operator's own terminal still sees it.
+_OPS_LOCK = threading.Lock()
+_OPS_STATE_LOCK = threading.Lock()
+_OPS_STATE: dict = {
+    "running": False, "kind": None, "machine": None,
+    "log": "", "rc": None, "started_at": None, "finished_at": None,
+}
+
+
+class _TeeWriter:
+    def write(self, s: str) -> int:
+        if s:
+            with _OPS_STATE_LOCK:
+                _OPS_STATE["log"] += s
+            sys.__stdout__.write(s)
+        return len(s)
+
+    def flush(self) -> None:
+        sys.__stdout__.flush()
+
+
+def ops_status() -> dict:
+    with _OPS_STATE_LOCK:
+        return dict(_OPS_STATE)
+
+
+def _run_op(kind: str, machine: str | None, fn) -> None:
+    """Runs fn() with stdout captured into _OPS_STATE; always releases _OPS_LOCK, even if
+    fn() raises — an unhandled exception must not wedge the console into "always running"."""
+    with _OPS_STATE_LOCK:
+        _OPS_STATE.update(running=True, kind=kind, machine=machine, log="",
+                          rc=None, started_at=_now(), finished_at=None)
+    try:
+        with contextlib.redirect_stdout(_TeeWriter()):
+            rc = fn()
+    except Exception as e:
+        with _OPS_STATE_LOCK:
+            _OPS_STATE["log"] += f"\ninternal error: {e}\n"
+        rc = 1
+    with _OPS_STATE_LOCK:
+        _OPS_STATE.update(running=False, rc=rc, finished_at=_now())
+    _OPS_LOCK.release()
+
+
+def run_compile(reg: Registry, target: str | None = None) -> dict:
+    """Compile has no network I/O and finishes in well under a second, so this runs
+    synchronously in the request thread — but still goes through the same lock/state
+    bookkeeping as deploy, so the frontend can poll either operation identically."""
+    if not _OPS_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "an operation is already running"}
+    _run_op("compile", None, lambda: commands.cmd_compile(reg, reg.root / "dist", target))
+    snap = ops_status()
+    return {"ok": True, "rc": snap["rc"], "log": snap["log"]}
+
+
+def run_deploy_plan(reg: Registry, machine: str) -> dict:
+    """Read-only preview for the deploy confirm modal — safe to call anytime, including
+    while another op is mid-flight (no lock needed)."""
+    if machine not in reg.machines:
+        return {"ok": False, "error": f"unknown machine {machine!r}"}
+    plan = commands.compute_deploy_plan(reg, machine)
+    blocked_ids = {id(s) for s in plan.blocked}
+    return {
+        "ok": True,
+        "machine": machine,
+        # set when a real apply would refuse outright before any plan is even computed
+        # (example-template machine, or an OS mismatch on this host) — unlike blocked_count
+        # below (recoverable, safe to preview through), this is unconditional and unfixable
+        # by resolving drift, so the frontend disables Confirm & Deploy when it's set.
+        "refusal": commands.deploy_apply_refusal(reg, machine),
+        "statuses": [
+            {"path": s.output.deploy_path, "state": s.state, "detail": s.detail,
+             "drift_policy": s.output.drift_policy, "blocked": id(s) in blocked_ids}
+            for s in plan.statuses
+        ],
+        "orphans": list(plan.orphans),
+        "blocked_count": len(plan.blocked),
+        "skill_warnings": list(plan.skill_warnings),
+        "clones": [{"dest": c.dest,
+                    "present": commands._checkout_present(commands._dest(c.dest, None))}
+                   for c in plan.clones],
+    }
+
+
+def run_deploy_apply(reg: Registry, machine: str) -> dict:
+    """Starts a real deploy (dry_run=False) in a background daemon thread — deploy can shell
+    out to git clone (up to 600s/repo), so this must not block the request. Deliberately never
+    passes force=True/prune=True: those stay CLI-only (see docs/operator-console.md) — the
+    existing protect-drift refusal inside cmd_deploy is the real safety net for a blocked
+    deploy, not a client-side gate."""
+    if machine not in reg.machines:
+        return {"ok": False, "error": f"unknown machine {machine!r}"}
+    if not _OPS_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "an operation is already running"}
+    threading.Thread(
+        target=_run_op, args=("deploy", machine,
+                              lambda: commands.cmd_deploy(reg, machine, dry_run=False,
+                                                          force=False)),
+        daemon=True).start()
+    return {"ok": True, "started": True}
 
 
 # ── HTTP server (localhost only) ─────────────────────────────────────────────
@@ -1396,12 +1635,20 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
         def do_GET(self):
             if self.path == "/api/state":
                 return self._json(200, state(holder["reg"]))
+            if self.path == "/api/ops/status":
+                return self._json(200, ops_status())
             if self.path.startswith("/api/graph/staged"):
                 from urllib.parse import parse_qs, urlsplit
                 q = parse_qs(urlsplit(self.path).query)
                 slug = (q.get("slug") or [""])[0]
                 pool = (q.get("pool") or [""])[0]
                 return self._json(200, load_staged(holder["reg"], slug, pool))
+            if self.path.startswith("/api/graph/dismissed"):
+                from urllib.parse import parse_qs, urlsplit
+                q = parse_qs(urlsplit(self.path).query)
+                slug = (q.get("slug") or [""])[0]
+                pool = (q.get("pool") or [""])[0]
+                return self._json(200, load_dismissed(holder["reg"], slug, pool))
             if self.path == "/api/org":
                 return self._json(200, org_index(holder["reg"]))
             if self.path.startswith("/api/org/tree"):
@@ -1425,14 +1672,38 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
 
         def do_POST(self):
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
+                                  "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/prompts/favorite", "/api/skills/new",
-                                  "/api/org/new-domain"):
+                                  "/api/org/new-domain", "/api/ops/compile",
+                                  "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
                 return self._json(404, {"ok": False, "error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"ok": False, "error": "bad request body"})
+            try:
+                return self._dispatch_post(body)
+            except Exception as e:
+                # BaseHTTPRequestHandler has no handler of its own for an exception
+                # raised inside do_POST: it propagates out, the connection is dropped
+                # with zero bytes written, and the browser reports a bare "Failed to
+                # fetch" with no indication of what went wrong. Always answer instead.
+                import traceback
+                traceback.print_exc()
+                return self._json(500, {"ok": False, "error": f"internal error: {e}"})
+
+        def _dispatch_post(self, body):
+            if self.path == "/api/ops/compile":
+                target = body.get("target") or None
+                result = run_compile(holder["reg"], str(target) if target else None)
+                return self._json(200 if result.get("ok") else 409, result)
+            if self.path == "/api/ops/deploy/plan":
+                result = run_deploy_plan(holder["reg"], str(body.get("machine", "")))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/ops/deploy/apply":
+                result = run_deploy_apply(holder["reg"], str(body.get("machine", "")))
+                return self._json(200 if result.get("ok") else 409, result)
             if self.path == "/api/prompts/favorite":
                 # toggle a prompt/skill name in the user's favorites list
                 name = str(body.get("name", ""))
@@ -1488,6 +1759,22 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     str(body.get("reason", "") or ""),
                     effs if isinstance(effs, list) else [],
                     eff_rem if isinstance(eff_rem, list) else [])
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/dismiss":
+                # Discovery's manual Dismiss action — moves doc(s) to Recovery
+                docs = body.get("documents")
+                result = dismiss_docs(
+                    holder["reg"], str(body.get("slug", "")),
+                    docs if isinstance(docs, list) else [],
+                    str(body.get("pool", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/restore":
+                # Recovery tab's Restore action — the doc reappears in Discovery
+                ids = body.get("ids")
+                result = restore_docs(
+                    holder["reg"], str(body.get("slug", "")),
+                    ids if isinstance(ids, list) else [],
+                    str(body.get("pool", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             result = decide(holder["reg"], str(body.get("id", "")),
                             str(body.get("decision", "")),

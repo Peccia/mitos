@@ -311,6 +311,22 @@ def dynamic_branches_block(branches: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def agentic_tree_note_block(subdir: str) -> str:
+    """The `<generated>` cross-reference appended to a project's own root AGENTS.md when
+    that project ALSO has an agentic_tree: mount — the "project within a project" note:
+    two AGENTS.md-shaped files legitimately coexist (this one is the project's own
+    document/repo index; the mount is a full operating tree), so name the split
+    explicitly rather than leaving a reader to wonder which one is authoritative."""
+    subdir = subdir.rstrip("/")
+    return (
+        f"## Operating Tree\n\n"
+        f"This project also has a full agentic operating tree mounted at `{subdir}/` — "
+        f"the same Navigation/Workflows/Skills shape a dedicated agentic machine gets. "
+        f"See [`{subdir}/AGENTS.md`]({subdir}/AGENTS.md) for that context; this file is "
+        f"this project's own document/repo index, generated separately.\n"
+    )
+
+
 def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:
     """The `(heading, detail)` for a connection: `heading` is the STABLE section title
     `<Name> (`key`)` that SOUL and skills reference by name (never the raw description
@@ -364,7 +380,7 @@ def skills_block(skills: list) -> str:
         return ""
     lines = ["## Skills", "",
              "Local instruction files at `{{skills_root}}/<category>/<name>/SKILL.md` — "
-             "read one with the `read` file tool and follow it; a skill is never a "
+             "read one with the `read_file` file tool and follow it; a skill is never a "
              "callable tool.", ""]
     for s in general:
         desc = (s.frontmatter.get("description") or "").strip()
@@ -421,13 +437,12 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
         if hermes_meta:
             meta["metadata"] = {"hermes": hermes_meta}
         return _frontmatter_doc(meta, b)
-    if target in ("claude-code", "claude-app"):
-        # Agent Skills standard frontmatter: name + description
-        meta = {"name": fm["name"], "description": fm.get("description", "")}
+    if target in ("claude-code", "claude-app", "antigravity"):
+        # Agent Skills standard frontmatter: name + description. Antigravity follows
+        # the same open standard — one shared branch, deliberately not a fourth flavor.
+        meta = {"name": fm.get("name", skill.name),
+                "description": fm.get("description", "")}
         return _frontmatter_doc(meta, b)
-    if target == "gemini":
-        # plain prompt: drop frontmatter entirely
-        return b.rstrip("\n") + "\n"
     raise ValueError(f"skill rendering not defined for target {target!r}")
 
 
@@ -541,7 +556,7 @@ def hermes_settings_block(paths: dict, hermes_settings: dict) -> dict:
     return block
 
 
-def gemini_mcp_config(server: dict, alias: str) -> dict:
+def antigravity_mcp_config(server: dict, alias: str) -> dict:
     url = server["url"]
     return {"mcpServers": {alias: {"url": url, "serverUrl": url}}}
 
@@ -582,7 +597,7 @@ def claude_desktop_mcp_config(server: dict, alias: str, *, os_name: str) -> dict
     return {"mcpServers": {alias: entry}}
 
 
-def gemini_permission_grants(server: dict, alias: str) -> dict:
+def antigravity_permission_grants(server: dict, alias: str) -> dict:
     allow = [f"mcp({alias}/{tool})" for tool in flat_tools(server)]
     return {"sidecars": {}, "userSettings": {"globalPermissionGrants": {"allow": allow}}}
 

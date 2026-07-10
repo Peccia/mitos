@@ -47,7 +47,9 @@ skills:
   deploy_to_key: claude_skills_staging  # resolved per machine
   frontmatter: claude-app           # Agent Skills standard: name + description
   drift_policy: protect
-  include: [gws]
+  # No include:/exclude: here — curating which compatible skills actually stage is a
+  # personal choice, and this file is core (not overlayable). Set it per machine in
+  # machines/<name>.yaml's `skills: {claude-app: {include: [...] | exclude: [...]}}`.
 
 server_alias: gws-mcp-local
 

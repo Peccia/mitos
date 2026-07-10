@@ -9,6 +9,7 @@ const LS = {
   favorites: "oc.favorites", recents: "oc.recents", drafts: "oc.drafts",
   draftBase: "oc.draftBase", collapsed: "oc.collapsed", compose: "oc.compose",
   graphDrafts: "oc.graphDrafts", editorOrigin: "oc.editorOrigin",
+  opsMachine: "oc.opsMachine",
 };
 const store = {
   get(key, fallback) {
@@ -53,6 +54,9 @@ let stagedSel = { project: new Set(), unassigned: new Set() };
 function curStagedSel() { return stagedSel[stagedPool]; }
 let stagedFilter = "";     // client-side search text for the staged list
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
+let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
+let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
+let recoverFilter = "";    // client-side search text for the recovery list
 let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified,keywords}, lockId }
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
@@ -67,6 +71,10 @@ let skillFilterText = "";       // client-side search text
 let skillFilterTarget = "";     // filter by target slug, "" = all
 let skillFilterOrg = false;     // filter to only org-domain skills
 let orgSkillViewMode = {};      // skill name -> "role" | "agentsmd" per-skill
+
+// ── Ops (compile/deploy from the console) state ─────────────────────────────
+let opsMachine = store.get(LS.opsMachine, null);  // last-selected deploy target, persisted
+let opsPollTimer = null;                          // setInterval id while an op is running
 
 
 const $ = (id) => document.getElementById(id);
@@ -123,11 +131,16 @@ async function refresh() {
   if (rootEl) { rootEl.textContent = STATE.root; rootEl.title = STATE.root; }
   const countEl = $("inbox-count");
   if (countEl) countEl.textContent = STATE.candidates.length || "";
+  // An accepted graph candidate may have auto-dismissed a removed doc (see
+  // _apply_graph_candidate) — refetch Recovery so it doesn't linger stale and let a
+  // now-unmapped-but-still-dismissed doc reappear in Discovery until a full reload.
+  if (graphSlug && dismissedData) loadDismissed(graphSlug);
   // render the panes independently — a fault in one must not blank the others
   safeRender($("view-inbox"), renderInbox);
   safeRender($("view-graph"), renderGraph);
   safeRender($("view-skills"), renderSkills);
   safeRender($("prompt-list"), renderPrompts);
+  safeRender($("ops-bar"), renderOpsBar);
 }
 
 
@@ -456,6 +469,19 @@ async function loadStaged(slug) {
   }
 }
 
+// Recovery list mirrors the same Staged/Unassigned pool the Discovery toggle shows —
+// a dismissal always lands beside whichever staging file surfaced the document.
+async function loadDismissed(slug) {
+  try {
+    const r = await fetch("/api/graph/dismissed?slug=" + encodeURIComponent(slug)
+      + (stagedPool === "unassigned" ? "&pool=unassigned" : ""));
+    dismissedData = await r.json();
+    renderGraph();
+  } catch (e) {
+    // fail silently — recovery pane shows an empty state
+  }
+}
+
 // Document IDs already spoken for in the Inbox: a doc with an in-flight kind:graph candidate
 // for this project (upsert OR removal) can't be drafted again until it's accepted/rejected.
 function pendingDocIds(slug) {
@@ -533,12 +559,14 @@ function selectProject(slug) {
   graphSlug = slug;
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
+  dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   renderGraph();
   loadStaged(slug);
+  loadDismissed(slug);
 }
 
-// ── right: workspace = Discovery pane | Registry pane ─────────────────────────
+// ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
 function buildGraphWorkspace(g) {
   const ws = el("section"); ws.id = "graph-workspace";
   const head = el("div", "graph-ws-head");
@@ -555,13 +583,33 @@ function buildGraphWorkspace(g) {
   const registry = el("div", "graph-pane");
   panes.append(discovery, registry);
   ws.append(panes);
-  buildDiscoveryPane(discovery, g);
+  buildLeftPane(discovery, g);
   buildRegistryPane(registry, g);
   return ws;
 }
 
-// Documents in the staged pool that aren't already mapped into the project graph, plus the
-// subset matching the current filter. Recomputed cheaply on each targeted update.
+// Left column is tabbed: Discovery (staged docs not yet mapped) and Recovery (docs
+// dismissed from Discovery, or auto-dismissed when removed from the registry).
+function buildLeftPane(container, g) {
+  const tabs = el("div", "left-pane-tabs");
+  for (const [val, label] of [["discovery", "Discovery"], ["recovery", "Recovery"]]) {
+    const b = el("button", "left-tab" + (leftTab === val ? " active" : ""), label);
+    b.onclick = () => {
+      if (leftTab === val) return;
+      leftTab = val;
+      renderGraph();
+      if (val === "recovery" && (!dismissedData || dismissedData.slug !== g.slug)) loadDismissed(g.slug);
+    };
+    tabs.append(b);
+  }
+  container.append(tabs);
+  if (leftTab === "recovery") buildRecoveryPane(container, g);
+  else buildDiscoveryPane(container, g);
+}
+
+// Documents in the staged pool that aren't already mapped into the project graph or
+// dismissed into Recovery, plus the subset matching the current filter. Recomputed
+// cheaply on each targeted update.
 function stagedVisible(g) {
   const mappedIds = new Set((g.documents || []).map((d) => d.id));
   // The shared unassigned pool is drawn from across all projects, so a document already
@@ -571,7 +619,11 @@ function stagedVisible(g) {
     ((STATE && STATE.graphs) || []).forEach((gr) =>
       (gr.documents || []).forEach((d) => mappedIds.add(d.id)));
   }
-  const all = (stagedData.documents || []).filter((d) => !mappedIds.has(d.id));
+  const dismissedIds = new Set(
+    ((dismissedData && dismissedData.slug === g.slug && dismissedData.documents) || [])
+      .map((d) => d.id));
+  const all = (stagedData.documents || [])
+    .filter((d) => !mappedIds.has(d.id) && !dismissedIds.has(d.id));
   const q = stagedFilter.trim().toLowerCase();
   const filtered = q
     ? all.filter((d) => (d.name + " " + (d.description || "")).toLowerCase().includes(q))
@@ -581,15 +633,15 @@ function stagedVisible(g) {
 
 function buildDiscoveryPane(container, g) {
   const head = el("div", "pane-head");
-  head.append(el("strong", "", "Discovery"));
   const toggle = el("div", "pool-toggle");
   for (const [val, label] of [["project", "Staged"], ["unassigned", "Unassigned"]]) {
     const b = el("button", "pool-opt" + (stagedPool === val ? " active" : ""), label);
     b.onclick = () => {
       if (stagedPool === val) return;
       // selection is per-pool (stagedSel[val]) — switching pools must not touch it
-      stagedPool = val; stagedData = null; stagedFilter = "";
+      stagedPool = val; stagedData = null; stagedFilter = ""; dismissedData = null;
       loadStaged(g.slug);
+      loadDismissed(g.slug);
     };
     toggle.append(b);
   }
@@ -623,7 +675,14 @@ function buildDiscoveryPane(container, g) {
   clr.onclick = () => { curStagedSel().clear(); renderStagedRows(g); };
   const add = el("button", "accept tiny staged-add");
   add.onclick = () => addSelectedStaged(g);
-  sbar.append(search, info, selAll, clr, add);
+  const dismissSel = el("button", "ghost tiny danger", "Dismiss selected");
+  dismissSel.title = "Move the selected documents to Recovery so they stop showing up here";
+  dismissSel.onclick = () => {
+    const picked = (stagedData && stagedData.documents || []).filter((d) => curStagedSel().has(d.id));
+    if (!picked.length) { toast("Tick at least one document."); return; }
+    dismissStaged(g, picked);
+  };
+  sbar.append(search, info, selAll, clr, add, dismissSel);
   container.append(sbar);
   container.append(el("div", "staged-rows"));
   // Defer until the workspace is in the DOM (querySelector needs #graph-workspace present)
@@ -687,7 +746,10 @@ function renderStagedRows(g) {
         const tweak = el("button", "ghost tiny", "Tweak & map");
         tweak.title = "Edit the title/description before adding to the draft";
         tweak.onclick = () => openTweak(g, d);
-        actions.append(map, tweak);
+        const dismiss = el("button", "ghost tiny danger", "Dismiss");
+        dismiss.title = "Move to Recovery — won't reappear here until restored";
+        dismiss.onclick = () => dismissStaged(g, [d]);
+        actions.append(map, tweak, dismiss);
         meta.append(actions);
       }
       if (d.webUrl) {
@@ -733,6 +795,109 @@ function addSelectedStaged(g) {
   curStagedSel().clear();
   toast(`Added ${picked.length} to the draft — review in the dock, then Propose.`);
   renderGraph();
+}
+
+// Moves one or more staged docs to Recovery — a manual dismissal (as opposed to the
+// server's auto-dismissal of docs dropped by an accepted removal).
+async function dismissStaged(g, docs) {
+  if (!docs.length) return;
+  try {
+    const r = await fetch("/api/graph/dismiss", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, documents: docs,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Dismiss failed."); return; }
+    for (const d of docs) curStagedSel().delete(d.id);
+    dismissedData = null;
+    toast(`Dismissed ${docs.length} — find ${docs.length === 1 ? "it" : "them"} in Recovery.`);
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Dismiss failed — server unreachable.");
+  }
+}
+
+// ── left pane (Recovery tab): docs dismissed from Discovery or dropped by a removal ──
+function buildRecoveryPane(container, g) {
+  const head = el("div", "pane-head");
+  const search = el("input", "staged-search");
+  search.type = "search"; search.placeholder = "Filter recovered…"; search.value = recoverFilter;
+  search.oninput = () => { recoverFilter = search.value; renderRecoveryRows(g); };
+  head.append(search);
+  container.append(head);
+  container.append(el("div", "recover-rows"));
+  setTimeout(() => renderRecoveryRows(g), 0);
+}
+
+function renderRecoveryRows(g) {
+  const rows = document.querySelector("#graph-workspace .recover-rows");
+  if (!rows) return;
+  rows.replaceChildren();
+  if (!dismissedData || !dismissedData.ok || dismissedData.slug !== g.slug) {
+    rows.append(el("div", "muted pane-hint", "Nothing recovered yet."));
+    return;
+  }
+  const all = dismissedData.documents || [];
+  const q = recoverFilter.trim().toLowerCase();
+  const visible = q ? all.filter((d) => (d.name || "").toLowerCase().includes(q)) : all;
+  if (all.length === 0) {
+    rows.append(el("div", "muted",
+      "Nothing dismissed, and nothing removed from this project yet."));
+    return;
+  }
+  if (visible.length === 0) {
+    rows.append(el("div", "muted", "No matches for current filter."));
+    return;
+  }
+  for (const d of visible) {
+    const row = el("div", "staged-row");
+    const body = el("div", "staged-body");
+    const nameLine = el("div", "staged-nameline");
+    nameLine.append(el("span", "staged-name", d.name || d.id));
+    const isRemoval = d.source === "removal";
+    nameLine.append(el("span", "badge " + (isRemoval ? "removed" : "dismissed"),
+      isRemoval ? "Removed" : "Dismissed"));
+    body.append(nameLine);
+    const meta = el("div", "staged-meta");
+    if (d.dismissed_at) meta.append(el("span", "muted staged-mod", d.dismissed_at));
+    const actions = el("span", "row-actions");
+    const restore = el("button", "ghost tiny", "Restore");
+    restore.title = "Move back to Discovery so it can be mapped again";
+    restore.onclick = () => restoreDoc(g, d.id);
+    actions.append(restore);
+    meta.append(actions);
+    if (d.webUrl) {
+      const a = el("a", "staged-link", "Open");
+      a.target = "_blank"; a.rel = "noopener";
+      a.href = d.webUrl;
+      meta.append(a);
+    }
+    body.append(meta);
+    row.append(body);
+    rows.append(row);
+  }
+}
+
+async function restoreDoc(g, id) {
+  try {
+    const r = await fetch("/api/graph/restore", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, ids: [id],
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Restore failed."); return; }
+    dismissedData = null;
+    toast("Restored — back in Discovery.");
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Restore failed — server unreachable.");
+  }
 }
 
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
@@ -1831,9 +1996,10 @@ function buildMetaPanel(p) {
   return wrap;
 }
 
-// ── skill supporting files (examples/, scripts/) — a shared inline editor ───────
+// ── skill supporting files — a shared inline editor ─────────────────────────────
 // used by both the skill detail pane (Prompt Library) and the New Skill form.
-const RESOURCE_PATH_RE = /^(examples|scripts)\/[^/].*[^/]$/;
+// Mirrors loader._SKILL_RESOURCE_DIRS (the union of the harnesses' conventions).
+const RESOURCE_PATH_RE = /^(examples|scripts|references|templates|resources)\/[^/].*[^/]$/;
 const RESOURCE_SCRIPT_EXTENSIONS = new Set(["py", "js", "sh", "ps1"]);
 
 function routeForFilename(filename) {
@@ -1919,7 +2085,7 @@ function buildResourceEditor(getResources, setResources) {
   addBtn.onclick = () => {
     const p = pathInput.value.trim();
     if (!RESOURCE_PATH_RE.test(p)) {
-      toast("Path must be under examples/ or scripts/, e.g. examples/sample.md", 4000);
+      toast("Path must be under examples/, scripts/, references/, templates/ or resources/ — e.g. examples/sample.md", 4000);
       return;
     }
     pathInput.value = "";
@@ -2201,6 +2367,12 @@ function skillRow(s, domain) {
   catBadge.dataset.category = s.category || "general";
   header.append(catBadge);
   if (domain) header.append(el("span", "skill-org-badge", "org: " + domain));
+  // scope: project is the noteworthy state (global is the silent default) — surface it
+  // in the collapsed header so it's visible without expanding the row.
+  const draftScope = (metaDrafts[`skill:${s.name}`] || {}).scope;
+  if ((draftScope || s.frontmatter.scope) === "project") {
+    header.append(el("span", "skill-org-badge", "scope: project"));
+  }
   if (s.description) header.append(el("span", "muted skill-row-desc", s.description));
 
   // target chips pinned to the right of the header
@@ -2250,6 +2422,7 @@ function skillRow(s, domain) {
 
     body.append(renderSkillFilesSection(s));
     body.append(renderSkillExtensionSection(s));
+    body.append(renderSkillScopeSection(s));
 
     // Org structure panel — only for org-domain skills
     if (domain && orgData && orgData[domain]) {
@@ -2381,6 +2554,96 @@ function renderSkillExtensionSection(s) {
   };
   actions.append(reason, save, revert);
   section.append(actions);
+  return section;
+}
+
+// ── skill-row scope assignment: global (default, deploys to every shared/global
+// directory a target offers — the antigravity_skills dir, the personal
+// claude_code_skills dir, hermes, claude-app) vs project (deploys ONLY to the
+// projects that name this skill in their manifest's `skills:` list, on whichever of
+// claude-code/antigravity it targets). Mirrors renderSkillExtensionSection's pattern —
+// same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
+// projects itself is read-only here: the console doesn't write project manifests
+// (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
+// editing that project's registry/projects/<slug>.yaml `skills:` list directly. ──
+function renderSkillScopeSection(s) {
+  const key = `skill:${s.name}`;
+  const section = el("div", "skill-extension-section");
+
+  const header = el("div", "resources-panel-header");
+  header.append(el("h4", "", "Scope"));
+  const badge = el("span", "meta-modified-badge hidden", "● scope modified");
+  header.append(badge);
+  section.append(header);
+  section.append(el("div", "muted resources-hint",
+    "Global (default): deploys to every shared directory this skill's targets offer. "
+    + "Project: deploys only to the projects below, on claude-code/antigravity — hermes and "
+    + "claude-app ignore this and always stay global."));
+
+  function refreshActionState() {
+    const d = metaDrafts[key];
+    const hasDraft = !!d && ("scope" in d);
+    save.disabled = !hasDraft;
+    revert.disabled = !hasDraft;
+    badge.classList.toggle("hidden", !hasDraft);
+  }
+
+  const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
+  const scopeRow = el("div", "meta-grid");
+  const scopeSelect = el("select");
+  for (const [val, label] of [["global", "Global"], ["project", "Project"]]) {
+    const opt = el("option", "", label);
+    opt.value = val;
+    if ((current.scope || "global") === val) opt.selected = true;
+    scopeSelect.append(opt);
+  }
+  scopeSelect.onchange = () => {
+    metaDrafts[key] = metaDrafts[key] || {};
+    metaDrafts[key].scope = scopeSelect.value;
+    refreshActionState();
+    renderSkills();
+  };
+  scopeRow.append(fieldWrap("Scope", scopeSelect));
+  section.append(scopeRow);
+
+  if ((current.scope || "global") === "project") {
+    const boundWrap = el("div", "graph-field");
+    boundWrap.append(el("label", "", "Bound projects (edit their manifest to change)"));
+    if (s.bound_projects && s.bound_projects.length) {
+      const chips = el("div", "doc-tags");
+      for (const slug of s.bound_projects) chips.append(el("span", "tag-chip", slug));
+      boundWrap.append(chips);
+    } else {
+      boundWrap.append(el("div", "muted",
+        "No project currently lists this skill — it will deploy nowhere until a "
+        + "project's registry/projects/<slug>.yaml adds it to `skills:`."));
+    }
+    section.append(boundWrap);
+  }
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+  const save = el("button", "accept tiny", "Save scope to inbox");
+  save.title = "Propose this skill's scope as an inbox candidate";
+  const revert = el("button", "reject tiny", "Revert scope");
+  revert.title = "Discard the local scope edit for this skill";
+  save.onclick = () => {
+    const body = drafts[key] != null ? drafts[key] : s.body;
+    saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
+  };
+  revert.onclick = () => {
+    const d = metaDrafts[key];
+    if (d) {
+      delete d.scope;
+      if (!Object.keys(d).length) delete metaDrafts[key];
+    }
+    renderSkills();
+  };
+  actions.append(reason, save, revert);
+  section.append(actions);
+  refreshActionState();
   return section;
 }
 
@@ -3038,6 +3301,11 @@ document.addEventListener("keydown", (e) => {
     openPalette();
     return;
   }
+  if (e.key === "Escape" && !$("deploy-confirm").hidden) {
+    e.preventDefault();
+    closeDeployConfirm();
+    return;
+  }
   // Prompt-library shortcuts only apply when that view is active
   if ($("view-prompts").hidden) return;
   const t = e.target;
@@ -3053,9 +3321,191 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ── Ops: compile/deploy from the console ────────────────────────────────────
+function renderOpsBar() {
+  const badge = $("ops-compile-badge");
+  const sel = $("ops-machine");
+  if (!badge || !sel || !STATE) return;
+  const c = STATE.ops && STATE.ops.compile;
+  if (c) {
+    badge.className = "badge " + (c.stale ? "stale" : "compiled");
+    badge.textContent = c.stale ? `Compile needed (${c.stale_machines.length})` : "Compiled";
+    badge.title = c.stale
+      ? `Stale for: ${c.stale_machines.join(", ")}`
+      : "dist/ matches the current registry";
+  }
+  const machines = STATE.machines || [];
+  const prevValue = sel.value;
+  sel.replaceChildren(...machines.map((m) => {
+    const opt = el("option", null, m);
+    opt.value = m;
+    return opt;
+  }));
+  if (opsMachine && machines.includes(opsMachine)) sel.value = opsMachine;
+  else if (machines.includes(prevValue)) sel.value = prevValue;
+  else if (machines.length) sel.value = machines[0];
+  opsMachine = sel.value || null;
+}
+
+function openOpsDrawer() {
+  $("ops-drawer").hidden = false;
+  $("ops-drawer-body").hidden = false;
+  $("ops-drawer-toggle").textContent = "▾";
+}
+
+function renderOpsSnapshot(snap) {
+  const status = $("ops-drawer-status");
+  const log = $("ops-drawer-log");
+  log.textContent = snap.log || "";
+  log.scrollTop = log.scrollHeight;
+  const verb = snap.kind === "deploy" ? "Deploy" : "Compile";
+  if (snap.running) {
+    status.replaceChildren(el("span", "spinner"),
+      document.createTextNode(`${verb}ing${snap.machine ? " " + snap.machine : ""}…`));
+  } else {
+    status.textContent = snap.rc === 0 ? `${verb} succeeded` : `${verb} failed (rc ${snap.rc})`;
+  }
+}
+
+// No existing setInterval-based polling exists elsewhere in this file — deploy is the one
+// op that can run long enough (repo clones, up to 600s each) to need it; compile always
+// finishes synchronously in the request that starts it.
+function startOpsPolling() {
+  if (opsPollTimer) return;
+  opsPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/ops/status");
+      const snap = await res.json();
+      renderOpsSnapshot(snap);
+      if (!snap.running) {
+        clearInterval(opsPollTimer);
+        opsPollTimer = null;
+        await refresh();
+      }
+    } catch (err) {
+      console.error(err);
+      clearInterval(opsPollTimer);
+      opsPollTimer = null;
+    }
+  }, 700);
+}
+
+async function runCompile() {
+  try {
+    const res = await fetch("/api/ops/compile", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const out = await res.json();
+    if (!out.ok) { toast(`Error: ${out.error}`, 5000); return; }
+    openOpsDrawer();
+    renderOpsSnapshot({ running: false, kind: "compile", log: out.log, rc: out.rc });
+    toast(out.rc === 0 ? "Compiled." : `Compile failed (rc ${out.rc}).`, 4000);
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to compile: ${err.message || err}`, 6000);
+  }
+}
+
+function renderDeployPlan(plan) {
+  const body = $("deploy-confirm-body");
+  const goBtn = $("deploy-confirm-go");
+  body.replaceChildren();
+  if (plan.refusal) {
+    // a hard, machine-level guard (example template / OS mismatch) — this deploy will be
+    // refused outright, before any file is even considered. Disable Confirm rather than
+    // let the operator find out only after clicking it and reading the log drawer.
+    body.append(el("div", "accept-note warning-callout", plan.refusal));
+    goBtn.disabled = true;
+    goBtn.title = "This deploy will be refused — see the message above.";
+  } else {
+    goBtn.disabled = false;
+    goBtn.title = "";
+  }
+  if (!plan.statuses.length) {
+    body.append(el("div", "empty-state", "Nothing planned for this machine."));
+  }
+  for (const s of plan.statuses) {
+    const row = el("div", "deploy-plan-row" + (s.blocked ? " is-blocked" : ""));
+    row.append(el("span", "plan-state", s.state));
+    row.append(el("span", "plan-path", s.path));
+    if (s.detail) row.append(el("span", "plan-detail", `— ${s.detail}`));
+    if (s.blocked) row.append(el("span", "badge blocked", "blocked"));
+    body.append(row);
+  }
+  if (plan.blocked_count) {
+    body.append(el("div", "accept-note warning-callout",
+      `${plan.blocked_count} protected file(s) are drifted — deploy will refuse and change `
+      + `nothing until resolved via adopt/harvest.`));
+  }
+  const section = (label, items, render) => {
+    if (!items.length) return;
+    const sec = el("div", "deploy-plan-section");
+    sec.append(el("h4", null, `${items.length} ${label}`));
+    for (const item of items) sec.append(el("div", "deploy-plan-row", render(item)));
+    body.append(sec);
+  };
+  section("orphan(s) — kept on disk (--prune is CLI-only)", plan.orphans, (p) => p);
+  section("skill warning(s)", plan.skill_warnings, (w) => w);
+  section("repo clone(s)", plan.clones,
+    (c) => `${c.dest} — ${c.present ? "present, untouched" : "absent -> will clone"}`);
+}
+
+async function openDeployConfirm() {
+  const machine = opsMachine || ($("ops-machine") && $("ops-machine").value);
+  if (!machine) { toast("No machine selected."); return; }
+  $("deploy-confirm-machine").textContent = machine;
+  const body = $("deploy-confirm-body");
+  const goBtn = $("deploy-confirm-go");
+  body.replaceChildren(el("div", "empty-state", "Loading plan…"));
+  goBtn.disabled = true;
+  goBtn.title = "";
+  $("deploy-confirm").hidden = false;
+  try {
+    const res = await fetch("/api/ops/deploy/plan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine }),
+    });
+    const out = await res.json();
+    if (!out.ok) {
+      body.replaceChildren(el("div", "empty-state", `Error: ${out.error}`));
+      return;
+    }
+    renderDeployPlan(out);
+  } catch (err) {
+    console.error(err);
+    body.replaceChildren(el("div", "empty-state", `Failed to load plan: ${err.message || err}`));
+  }
+}
+
+function closeDeployConfirm() { $("deploy-confirm").hidden = true; }
+
+async function confirmDeploy() {
+  const machine = $("deploy-confirm-machine").textContent;
+  closeDeployConfirm();
+  try {
+    const res = await fetch("/api/ops/deploy/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine }),
+    });
+    const out = await res.json();
+    if (!out.ok) { toast(`Error: ${out.error}`, 5000); return; }
+    openOpsDrawer();
+    renderOpsSnapshot({ running: true, kind: "deploy", machine, log: "" });
+    startOpsPolling();
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to start deploy: ${err.message || err}`, 6000);
+  }
+}
+
 // sidebar navigation
 $("nav-inbox").onclick = () => showTab("inbox");
-$("nav-graph").onclick = () => { showTab("graph"); if (graphSlug && !stagedData) loadStaged(graphSlug); };
+$("nav-graph").onclick = () => {
+  showTab("graph");
+  if (graphSlug && !stagedData) loadStaged(graphSlug);
+  if (graphSlug && !dismissedData) loadDismissed(graphSlug);
+};
 $("nav-skills").onclick = () => showTab("skills");
 $("nav-prompts").onclick = () => { filterChip = "all"; showTab("prompts"); renderChips(); renderList(); };
 
@@ -3069,6 +3519,21 @@ $("graph-dock-reason").addEventListener("keydown", (e) => {
 $("graph-dock-propose-accept").onclick = () => proposeGraphDraft(graphSlug, null, true);
 $("graph-dock-discard").onclick = () => discardGraphDraft();
 $("refresh").onclick = () => refresh().then(() => toast("Reloaded from disk."));
+$("nav-compile").onclick = () => runCompile();
+$("nav-deploy").onclick = () => openDeployConfirm();
+$("ops-machine").onchange = () => {
+  opsMachine = $("ops-machine").value || null;
+  store.set(LS.opsMachine, opsMachine);
+};
+$("ops-drawer-toggle").onclick = () => {
+  const body = $("ops-drawer-body");
+  body.hidden = !body.hidden;
+  $("ops-drawer-toggle").textContent = body.hidden ? "▸" : "▾";
+};
+$("ops-drawer-dismiss").onclick = () => { $("ops-drawer").hidden = true; };
+$("deploy-confirm-cancel").onclick = () => closeDeployConfirm();
+$("deploy-confirm-go").onclick = () => confirmDeploy();
+$("deploy-confirm").onclick = (e) => { if (e.target.id === "deploy-confirm") closeDeployConfirm(); };
 $("search").oninput = () => renderList();
 $("compose-copy").onclick = () => copyText(composeOutput(), "composed prompt");
 $("compose-clear").onclick = () => {

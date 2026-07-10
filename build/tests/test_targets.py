@@ -1,4 +1,4 @@
-"""Claude-code, Gemini, Hermes, skill, prompt, and git-sync tests."""
+"""Claude-code, Antigravity, Hermes, skill, prompt, and git-sync tests."""
 from __future__ import annotations
 
 import sys
@@ -56,11 +56,11 @@ def test_lint_node_markdown_ignores_headings_in_code_fences():
     assert _lint("x/AGENTS.md", body) == []
 
 
-def test_gemini_grants_normalized():
-    grants = render.gemini_permission_grants(reg.servers["servers"]["gws"], "gws-mcp-local")
+def test_antigravity_grants_normalized():
+    grants = render.antigravity_permission_grants(reg.servers["servers"]["gws"], "gws-mcp-local")
     allow = grants["userSettings"]["globalPermissionGrants"]["allow"]
     assert "mcp(gws-mcp-local/search_drive_files)" in allow
-    # normalization dropped the extended-tier tools Gemini used to grant
+    # normalization dropped the extended-tier tools Antigravity used to grant
     assert not any("draft_gmail_message" in a for a in allow)
     assert len(allow) == 31
 
@@ -224,6 +224,102 @@ def test_project_agents_md_drops_identity_on_hermes_machines():
     assert "About Me" in out2.content
     assert any(s.startswith("identity/") for s in out2.sources)
 
+def test_agentic_tree_project_mount_emits_full_tree():
+    """A workstation project with agentic_tree: gets the full operating tree (the same
+    Navigation/Workflows/Skills/roster shape a Hermes machine gets at its assistant_root)
+    at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.machines["example-windows"]["paths"].pop("assistant_root", None)
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)  # don't let the shipped-sample guard suppress it
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+
+    outs = planner.plan_machine(rig, "example-windows")
+    mount_root = "C:/Projects/example-project/MitosAgent"
+    by_path = {o.deploy_path: o for o in outs}
+
+    root_agents = by_path.get(f"{mount_root}/AGENTS.md")
+    assert root_agents is not None, "project mount must emit its own root AGENTS.md"
+    assert root_agents.target == "agents-md"
+    assert root_agents.drift_policy == "protect"
+
+    projects_agents = by_path.get(f"{mount_root}/Projects/AGENTS.md")
+    assert projects_agents is not None
+    assert "example-project" in projects_agents.content, "roster must list the mounting project"
+
+    per_project = by_path.get(f"{mount_root}/Projects/Example Project/AGENTS.md")
+    assert per_project is not None, "the ctx_key dynamic entry must also render at the mount root"
+
+def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
+    """A workstation project with BOTH a knowledge graph and agentic_tree: gets a
+    generated cross-reference note in its normal doc-index AGENTS.md pointing at the
+    separate operating-tree mount — two AGENTS.md-shaped files legitimately coexist, so
+    the split is named rather than left for a reader to guess at."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+    rig.graphs["example-project"] = graphmod.ProjectGraph(
+        slug="example-project", name="Example Project", description="",
+        documents=[_doc("EX_DOC_1", "Notes", "notes", "2026-06-27")],
+        efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path.get("C:/Projects/example-project/AGENTS.md")
+    assert out is not None
+    assert "Operating Tree" in out.content
+    assert "MitosAgent/AGENTS.md" in out.content
+
+def test_agentic_tree_cross_reference_note_on_project_agents_lane():
+    """The Hermes-style project_agents lane (context.builder projects) gets the same
+    cross-reference note when agentic_tree: is set — consistent with the claude-code
+    graph lane above."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.projects["mitos"]["document_store"] = "gws"
+    rig.projects["mitos"]["agentic_tree"] = "MitosAgent"
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
+        efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path["C:/Projects/Mitos/AGENTS.md"]
+    assert "Operating Tree" in out.content
+    assert "MitosAgent/AGENTS.md" in out.content
+
+def test_agentic_tree_no_effect_on_agentic_machine():
+    """agentic_tree is a workstation-only concept — an agentic (hermes) machine already
+    hosts the tree at its assistant_root, so a project's agentic_tree must not produce a
+    second, redundant mount there."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["hermes", "agents-md"]
+    rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/MitosAgent"
+    rig.machines["example-windows"]["paths"]["hermes_home"] = "C:/hermes"
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)
+    proj["agentic_tree"] = "MitosAgent"
+    proj["local_path"]["example-windows"] = "example-project"
+
+    outs = planner.plan_machine(rig, "example-windows")
+    mount_root = "C:/Projects/example-project/MitosAgent"
+    paths = {o.deploy_path for o in outs}
+    assert f"{mount_root}/AGENTS.md" not in paths, \
+        "agentic_tree must be a no-op on an agentic machine"
+
 def test_non_hermes_clone_uses_local_path():
     """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
     absent-only — never nesting into the Mitos repo root."""
@@ -264,7 +360,9 @@ def test_claude_app_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-app via its frontmatter; the target spec's include curates.
+    # gws opts into claude-app via its frontmatter; it's the only CORE skill that does
+    # (registry/local/ skills are excluded here — ignore_local=True), so no machine-side
+    # curation is needed to get exactly one output.
     # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
     # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
@@ -292,31 +390,57 @@ def test_claude_app_target_stages_uploadable_zip():
     assert classify_output(reg2, "example-windows", o2, lock, root=root).state == "pending"
 
 def test_skill_selection_layers():
+    # Curation (pull layer) now lives on the machine profile, not the target spec —
+    # a personal choice belongs on the (overlayable) machine, never on core targets/*.yaml.
     from agentic.planner import _selected_skills
     base = {"include_target": "hermes"}
     all_hermes = {s.name for s in _selected_skills(reg, base)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, {**base, "include": ["new-session", "gws"]})
+    only = _selected_skills(reg, base, {"skills": {"hermes": {"include": ["new-session", "gws"]}}})
     assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
-    rest = _selected_skills(reg, {**base, "exclude": ["gws"]})
+    rest = _selected_skills(reg, base, {"skills": {"hermes": {"exclude": ["gws"]}}})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
-    assert not _selected_skills(reg, {"include_target": "claude-code",
-                                      "include": ["graph-bootstrap"]})
+    assert not _selected_skills(
+        reg, {"include_target": "claude-code"},
+        {"skills": {"claude-code": {"include": ["graph-bootstrap"]}}})
 
-def test_skill_selection_validation():
+def test_target_side_skill_curation_rejected():
+    """include:/exclude: under a targets/*.yaml skills: block is core, shared by every
+    user, and not overlayable — curation belongs on the machine profile instead."""
     import copy
 
     from agentic.loader import RegistryError, _validate
-    for bad_skills in ({"include": ["no-such-skill"]},
-                       {"include": ["gws"], "exclude": ["gws"]}):
+    for bad_skills in ({"include": ["gws"]}, {"exclude": ["gws"]}):
         reg2 = copy.deepcopy(reg)
         reg2.targets["hermes"]["skills"].update(bad_skills)
         try:
             _validate(reg2)
             raise AssertionError(f"expected RegistryError for {bad_skills}")
+        except RegistryError as e:
+            assert "not allowed in targets" in str(e)
+
+def test_machine_side_skill_curation_validation():
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    bad_cases = (
+        {"hermes": {"include": ["no-such-skill"]}},
+        {"hermes": {"include": ["gws"], "exclude": ["gws"]}},
+        {"not-a-target": {"include": ["gws"]}},
+    )
+    for bad in bad_cases:
+        reg2 = copy.deepcopy(reg)
+        reg2.machines["example-linux"]["skills"] = bad
+        try:
+            _validate(reg2)
+            raise AssertionError(f"expected RegistryError for {bad}")
         except RegistryError:
             pass
+    # a valid machine-side curation block passes
+    reg2 = copy.deepcopy(reg)
+    reg2.machines["example-linux"]["skills"] = {"hermes": {"include": ["gws"]}}
+    _validate(reg2)
 
 def test_deselect_then_prune():
     import copy
@@ -331,8 +455,8 @@ def test_deselect_then_prune():
     dest = root / safe_rel(gws_path)
     assert dest.exists()
 
-    # deselect via target-side exclude: deploy reports an orphan but keeps the file
-    reg2.targets["hermes"]["skills"]["exclude"] = ["gws"]
+    # deselect via machine-side exclude: deploy reports an orphan but keeps the file
+    reg2.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
     assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
     assert dest.exists(), "without --prune the deployed copy must remain"
     import json as _json
@@ -1023,28 +1147,28 @@ def test_prompt_overlay_replaces_by_name():
     assert p.category == "overridden"
     assert p.rel.startswith("local/")
 
-def test_gemini_deploys_targeted_prompt():
-    """A prompt with targets:[gemini] produces a text output in the gemini prompts dir."""
+def test_antigravity_deploys_no_prompts():
+    """The antigravity prompt lane is retired: Antigravity's skill discovery only reads
+    <folder>/SKILL.md, so the old flat prompt-<name>.md files were invisible to it. A
+    prompt still declaring targets:[antigravity] deploys nowhere (console-only)."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.prompts["test-prompt"] = loader.Prompt(
         name="test-prompt", rel="prompts/test-prompt.md",
-        frontmatter={"name": "test-prompt", "targets": ["gemini"]},
+        frontmatter={"name": "test-prompt", "targets": ["antigravity"]},
         body="My reusable prompt body.",
     )
     outputs = planner.plan_machine(r, "example-windows")
-    prompt_outputs = [o for o in outputs
-                      if o.target == "gemini" and "prompt-test-prompt" in o.deploy_path]
-    assert prompt_outputs, "no gemini output for targeted prompt"
-    assert prompt_outputs[0].content == "My reusable prompt body.\n"
+    assert not any(o.target == "antigravity" and "test-prompt" in o.deploy_path
+                   for o in outputs)
 
 def test_console_only_prompt_not_deployed():
     """A prompt with no targets produces no file outputs."""
     import copy
     r = copy.deepcopy(reg)
-    r.machines["example-windows"]["targets"] = ["gemini"]
+    r.machines["example-windows"]["targets"] = ["antigravity"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     r.prompts["private-prompt"] = loader.Prompt(
         name="private-prompt", rel="prompts/private-prompt.md",
@@ -1134,15 +1258,15 @@ def test_claude_code_prompt_render_adds_description_frontmatter():
     assert "description: My test prompt" in rendered
     assert "Do the thing." in rendered
 
-def test_gemini_prompt_render_is_plain_body():
+def test_antigravity_prompt_render_is_plain_body():
     """render_prompt for non-claude-code targets returns plain body (no frontmatter)."""
     from agentic.render import render_prompt
     p = loader.Prompt(
         name="my-prompt", rel="prompts/my-prompt.md",
-        frontmatter={"name": "my-prompt", "description": "desc", "targets": ["gemini"]},
+        frontmatter={"name": "my-prompt", "description": "desc", "targets": ["antigravity"]},
         body="Plain content.",
     )
-    rendered = render_prompt(p, "gemini")
+    rendered = render_prompt(p, "antigravity")
     assert not rendered.startswith("---")
     assert rendered.strip() == "Plain content."
 
@@ -1453,6 +1577,172 @@ def test_selected_skills_excludes_extension_skills():
     assert "org-software" in names
 
 
+# ── skill scope: global (default) | project ─────────────────────────────────────
+def test_antigravity_deploys_global_scope_skill_to_shared_dir():
+    """Default scope (global): an antigravity-targeted skill deploys to the shared
+    antigravity_skills directory, whether or not any project binds it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["global-skill"] = loader.Skill(
+        name="global-skill", rel="local/skills/global-skill/SKILL.md",
+        frontmatter={"targets": ["antigravity"]}, body="global body")
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "global-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert matches[0].target == "antigravity"
+    # Agent Skills standard shape: a folder per skill, SKILL.md inside, with
+    # name/description frontmatter (description drives Antigravity's discovery).
+    assert matches[0].deploy_path.replace("\\", "/").endswith("global-skill/SKILL.md")
+    assert matches[0].content.startswith("---\n")
+    assert "name: global-skill" in matches[0].content
+
+def test_antigravity_excludes_unbound_project_scoped_skill_from_shared_dir_and_everywhere():
+    """scope: project skill targeting antigravity, not bound to any project, deploys
+    nowhere — NOT the shared antigravity_skills dir (that's the point of scoping it), and
+    no project picks it up because none binds it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
+    outputs = planner.plan_machine(r, "example-windows")
+    assert not any("proj-skill" in o.deploy_path for o in outputs)
+
+def test_antigravity_deploys_project_scoped_skill_only_to_bound_project_local_path():
+    """scope: project skill bound via a project's skills: list deploys to that project's
+    own <local_path>/.agents/skills/ — never the shared antigravity_skills directory."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-skill"]
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-skill" in o.deploy_path]
+    assert len(matches) == 1, "must deploy exactly once — project path only, no shared copy"
+    o = matches[0]
+    assert o.target == "antigravity"
+    assert ("example-project/.agents/skills/proj-skill/SKILL.md"
+            in o.deploy_path.replace("\\", "/"))
+
+def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
+    """A project-scoped skill bound to one project does not leak into a sibling project
+    that doesn't bind it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["antigravity"], "scope": "project"}, body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-skill"]
+    r.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    # mitos does NOT bind proj-skill
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert "example-project" in matches[0].deploy_path.replace("\\", "/")
+    assert "Mitos" not in matches[0].deploy_path
+
+def test_hermes_ignores_scope_and_still_deploys_project_scoped_skill_globally():
+    """Hermes deliberately does not participate in scoping — a scope: project skill
+    that also targets hermes still ships to the global hermes skills dir."""
+    treg, tmp = _temp_registry()
+    treg.skills["proj-and-hermes"] = loader.Skill(
+        name="proj-and-hermes", rel="local/skills/proj-and-hermes/SKILL.md",
+        frontmatter={"name": "proj-and-hermes", "targets": ["hermes", "antigravity"],
+                    "scope": "project"}, body="body")
+    outputs = planner.plan_machine(treg, "rig")
+    matches = [o for o in outputs if o.target == "hermes" and "proj-and-hermes" in o.deploy_path]
+    assert len(matches) == 1, "hermes must still deploy a scope:project skill globally"
+
+def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
+    """Default scope (global): a claude-code-targeted skill deploys once to the personal
+    claude_code_skills directory (~/.claude/skills/) — no project binding needed. This is
+    the new capability that closes the historical claude-code/antigravity asymmetry."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["personal-skill"] = loader.Skill(
+        name="personal-skill", rel="local/skills/personal-skill/SKILL.md",
+        frontmatter={"name": "personal-skill", "targets": ["claude-code"]}, body="global body")
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "personal-skill" in o.deploy_path]
+    assert len(matches) == 1
+    assert matches[0].target == "claude-code"
+    assert matches[0].deploy_path.replace("\\", "/").endswith("personal-skill/SKILL.md")
+
+def test_claude_code_project_scoped_skill_deploys_only_to_bound_project():
+    """scope: project skill bound via a project's skills: list deploys only to that
+    project's .claude/skills/ — never the personal claude_code_skills directory."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-cc-skill"] = loader.Skill(
+        name="proj-cc-skill", rel="local/skills/proj-cc-skill/SKILL.md",
+        frontmatter={"name": "proj-cc-skill", "targets": ["claude-code"], "scope": "project"},
+        body="proj body")
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["skills"] = ["proj-cc-skill"]
+    outputs = planner.plan_machine(r, "example-windows")
+    matches = [o for o in outputs if "proj-cc-skill" in o.deploy_path]
+    assert len(matches) == 1, "must deploy exactly once — project path only, no personal-dir copy"
+    assert ("example-project/.claude/skills/proj-cc-skill/SKILL.md"
+            in matches[0].deploy_path.replace("\\", "/"))
+
+def test_claude_code_global_scope_skill_unbound_to_any_project_still_deploys():
+    """Unlike scope: project (which requires a project binding to deploy anywhere),
+    scope: global needs no project manifest entry at all."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["unbound-global"] = loader.Skill(
+        name="unbound-global", rel="local/skills/unbound-global/SKILL.md",
+        frontmatter={"name": "unbound-global", "targets": ["claude-code"]}, body="body")
+    # no project manifest lists "unbound-global" in skills:
+    outputs = planner.plan_machine(r, "example-windows")
+    assert any("unbound-global" in o.deploy_path for o in outputs)
+
+
+def test_skill_deploy_warnings_flags_machine_curated_exclusion():
+    """A skill compatible with a target (its own frontmatter says so) but filtered out
+    by this machine's curation is reported as a warning — the filter is never silent."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
+    warnings = planner.skill_deploy_warnings(r, "example-linux")
+    assert any("'gws'" in w and "'hermes'" in w and "curation" in w for w in warnings)
+
+def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
+    """A scope: project skill that also targets claude-app (a scope-ignoring target)
+    still deploys globally there — warn-only, so the leaked confinement is visible."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["skills"] = {}
+    r.skills["proj-and-claude-app"] = loader.Skill(
+        name="proj-and-claude-app", rel="local/skills/proj-and-claude-app/SKILL.md",
+        frontmatter={"name": "proj-and-claude-app", "targets": ["claude-app"],
+                    "scope": "project"}, body="body")
+    warnings = planner.skill_deploy_warnings(r, "example-windows")
+    assert any("'proj-and-claude-app'" in w and "'claude-app'" in w
+              and "ignores scope" in w for w in warnings)
+
+def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
+    warnings = planner.skill_deploy_warnings(reg, "example-linux")
+    assert warnings == []
+
+
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
 def test_plan_hermes_emits_skill_resource_outputs():
     from agentic.loader import SkillResource
@@ -1474,6 +1764,37 @@ def test_plan_hermes_emits_skill_resource_outputs():
     assert example_out.drift_policy == skill_md.drift_policy
     assert script_out.executable is True
     assert example_out.executable is False
+
+def test_plan_antigravity_emits_skill_resources_and_composed_body():
+    """Antigravity mirrors claude-code: supporting files deploy alongside SKILL.md and
+    an extension's body is spliced in — the historical antigravity path dropped both."""
+    import copy
+    from agentic.loader import Skill, SkillResource
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["antigravity"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["ag-skill"] = Skill(
+        name="ag-skill", rel="local/skills/ag-skill/SKILL.md",
+        frontmatter={"name": "ag-skill", "targets": ["antigravity"]},
+        body="## Extended C-suite Roles\n\nbase body",
+        resources={"scripts/check.sh": SkillResource(
+            text="#!/bin/sh\necho ok\n", rel="local/skills/ag-skill/scripts/check.sh")})
+    r.skills["ag-ext"] = Skill(
+        name="ag-ext", rel="local/skills/ag-ext/SKILL.md",
+        frontmatter={"name": "ag-ext", "targets": ["antigravity"],
+                     "extends_skill": "ag-skill", "extends_role": "CTO"},
+        body="extension body")
+    outs = planner.plan_machine(r, "example-windows")
+    skill_md = next(o for o in outs if o.target == "antigravity"
+                    and o.deploy_path.replace("\\", "/").endswith("ag-skill/SKILL.md"))
+    assert "extension body" in skill_md.content          # extension spliced at render
+    base_dir = skill_md.deploy_path.rsplit("/", 1)[0]
+    script_out = next(o for o in outs if o.deploy_path == f"{base_dir}/scripts/check.sh")
+    assert script_out.executable is True
+    assert script_out.sources == ["local/skills/ag-skill/scripts/check.sh"]
+    # the extension itself never deploys standalone
+    assert not any(o.deploy_path.replace("\\", "/").endswith("ag-ext/SKILL.md")
+                   for o in outs)
 
 def test_plan_claude_app_zip_bundles_resources_deterministically():
     import dataclasses

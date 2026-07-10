@@ -111,4 +111,4 @@ Once your custom server is registered in `registry/local/connections/servers.yam
    ```bash
    python build/compile.py deploy --machine <machine-name> --lane connections
    ```
-   This will surgically merge the new server's configuration and allowlist permissions into your AI tool configs (like Claude Desktop or Gemini's `config.json`).
+   This will surgically merge the new server's configuration and allowlist permissions into your AI tool configs (like Claude Desktop or Antigravity's `config.json`).

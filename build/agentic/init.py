@@ -107,7 +107,7 @@ def _who_md(given_name: str, family_name: str, address: str) -> str:
     who = full or addr or "the owner"
     # Match the core who-i-am.md audience so the name/address reach every tool, not just
     # Hermes — this overlay partial replaces the neutral core one by last-layer-wins.
-    return (f"---\naudience: [hermes, claude-code, gemini, agents-md]\n---\n## About Me\n\n"
+    return (f"---\naudience: [hermes, claude-code, antigravity, agents-md]\n---\n## About Me\n\n"
             f"You are {who}'s personal assistant, focused on truth, clarity, and usefulness "
             f"over politeness. Address me as \"{addr}\".\n")
 

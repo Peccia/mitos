@@ -1,13 +1,16 @@
-# Example: Windows workstation with Gemini, Claude, and agents-md.
+# Example: Windows workstation with Antigravity, Claude, and agents-md.
 # Copy to registry/local/machines/ and customize for your setup.
 name: example-windows
 example: true   # template — copy into registry/local/machines/ and rename; not a live machine
 os: windows
-targets: [gemini, claude-app, claude-code, agents-md]
+targets: [antigravity, claude-app, claude-code, agents-md]
 paths:
   projects_root: "C:/Projects"
-  gemini_config: "~/.gemini/config"
-  antigravity_skills: "~/.gemini/skills"
+  antigravity_config: "~/.gemini/config"
+  # Antigravity's GLOBAL skills dir (all workspaces — official Antigravity 2.0 docs);
+  # project-scoped skills deploy to <project>/.agents/skills/ instead.
+  antigravity_skills: "~/.gemini/config/skills"
+  claude_code_skills: "~/.claude/skills"
   claude_skills_staging: "~/ClaudeSkills"
   agentic_context_root: "C:/MitosAgent"
   # Classic .exe install:

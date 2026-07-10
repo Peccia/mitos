@@ -15,11 +15,11 @@ def test_idea_revision_targeting():
     import copy
     from agentic.loader import Skill
     rig = copy.deepcopy(reg)
-    rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["gemini"]}, body="")
+    rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["antigravity"]}, body="")
     linux = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")]
-    assert not any("idea-revision" in p for p in linux)        # gemini-only, not hermes
-    win = [o.deploy_path for o in planner.plan_machine(rig, "example-windows")]
-    assert any("idea-revision.md" in p for p in win)           # emitted as gemini prompt
+    assert not any("idea-revision" in p for p in linux)        # antigravity-only, not hermes
+    win = [o.deploy_path.replace("\\", "/") for o in planner.plan_machine(rig, "example-windows")]
+    assert any("idea-revision/SKILL.md" in p for p in win)     # antigravity skill folder
 
 def test_classify_create_for_absent_path():
     o = planner.plan_machine(reg, "example-linux")[0]
@@ -810,4 +810,60 @@ def test_cli_compile_and_mitos_entrypoints():
         assert rc == 0 and conn_called
     finally:
         mitos_mod._cmd_connectors = orig_conn
+
+def test_compile_status_stale_then_fresh_then_stale_again():
+    """compile_status() is read-only and must track dist/'s manifest.json hashes exactly:
+    never compiled -> stale; right after cmd_compile -> fresh; registry edited afterward
+    -> stale again (console status pill relies on this three-beat cycle)."""
+    from agentic.commands import cmd_compile, compile_status
+
+    r, tmp = _temp_registry()
+    dist_dir = tmp / "dist"
+
+    status = compile_status(r, dist_dir)
+    assert status["stale"] is True
+    assert "rig" in status["stale_machines"]
+
+    assert cmd_compile(r, dist_dir) == 0
+    status = compile_status(r, dist_dir)
+    assert status["stale"] is False
+    assert status["stale_machines"] == []
+
+    # mutate a partial the "rig" machine's SOUL.md renders from, then reload the registry
+    # (compile_status takes a Registry, not a filesystem path — it must see the new content)
+    identity_dir = tmp / "registry" / "identity"
+    who = next(iter(identity_dir.glob("*.md")))
+    who.write_text(who.read_text(encoding="utf-8") + "\nedited.\n", encoding="utf-8")
+    r2 = loader.load(tmp)
+    status = compile_status(r2, dist_dir)
+    assert status["stale"] is True
+    assert "rig" in status["stale_machines"]
+
+def test_compute_deploy_plan_matches_cmd_deploy_dry_run_output():
+    """Regression guard for the cmd_deploy refactor: compute_deploy_plan() must produce the
+    exact same classification cmd_deploy's dry-run printout is built from — same states, same
+    order, same orphan/blocked/clone/skill-warning sets. Sandboxed via --root so this doesn't
+    depend on the host OS matching example-linux's profile, and never touches the real lockfile."""
+    import contextlib
+    import io
+    import tempfile
+
+    from agentic.commands import cmd_deploy, compute_deploy_plan
+
+    root = Path(tempfile.mkdtemp(prefix="ae-planmatch-"))
+    plan = compute_deploy_plan(reg, "example-linux", root=root)
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = cmd_deploy(reg, "example-linux", dry_run=True, force=False, root=root)
+    assert rc == 0
+    printed = out.getvalue()
+
+    for s in plan.statuses:
+        assert f"[{s.state:9}] {s.output.deploy_path}" in printed
+    for p in plan.orphans:
+        assert f"[orphan   ] {p}" in printed
+    for w in plan.skill_warnings:
+        assert f"[warn     ] {w}" in printed
+    assert len(plan.blocked) == printed.count("<-- protected, blocked")
 

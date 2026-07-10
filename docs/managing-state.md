@@ -80,7 +80,7 @@ Each line of a `deploy`/`diff` plan is `[state]  <path> — <detail>  <flag>`. T
 | `drift` | File was edited in place; registry unchanged. | Depends on **policy** (below): capture+overwrite, or block. |
 | `conflict` | Either edited-in-place **and** registry-changed, **or** an untracked existing file that differs. | Depends on **policy**: capture+overwrite, or block. |
 | `resolved` | Live already matches the registry but the lock was stale (e.g. right after `adopt`). | Re-locks; **never** needs `--force`. |
-| `merge` | A tool-owned config file (Gemini `config.json`, Hermes `config.yaml`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
+| `merge` | A tool-owned config file (Antigravity `config.json`, Hermes `config.yaml`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
 | `orphan` | Previously deployed by Mitos, no longer in the plan (a deselected skill, a retired project). | Kept on disk until you `--prune`. |
 | `clone` | A project repo to clone into the Agentic Context tree. | Clones if absent; never touches an existing checkout. |
 
@@ -95,7 +95,7 @@ The two flags you'll see on `drift`/`conflict` lines:
 Every emitted file carries a **drift policy** (set in its target spec) that decides what happens
 when its deployed copy drifts:
 
-- **`protect`** — the safe default for authored prose (SOUL.md, AGENTS.md, the Gemini prompt files,
+- **`protect`** — the safe default for authored prose (SOUL.md, AGENTS.md, the Antigravity prompt files,
   staged skill zips). If it drifts, **deploy refuses the whole run** (exit 1) and tells you to
   resolve it. Nothing is overwritten until you decide. Override for one run with `--force` (which
   still captures the drift to `inbox/` first, unless the file is exempt — see below).
@@ -127,7 +127,7 @@ bit on files under `scripts/` when the target machine isn't Windows.
 
 ## Worked example: a first deploy onto a populated machine
 
-This is the exact plan from a first real deploy where the machine already had Gemini/Hermes files:
+This is the exact plan from a first real deploy where the machine already had Antigravity/Hermes files:
 
 ```
 deploy plan for windows-laptop (apply):
@@ -150,7 +150,7 @@ Line by line:
   Mitos would write, and its policy is `protect`. This single file (and `gws.zip`) is why the whole
   run is **refused** — nothing was written.
 - **`config.json` — merge.** Tool-owned; Mitos will splice only its MCP entries in and leave the
-  rest of your Gemini config alone. (A merge never blocks.)
+  rest of your Antigravity config alone. (A merge never blocks.)
 - **`dept-*.md` — unchanged (untracked).** Those files already match what Mitos would deploy, so
   there's nothing to do; they'll just be recorded in the lock.
 - **`idea-revision.md` — conflict, will capture+overwrite.** Differs, but its policy is `harvest`,
@@ -194,7 +194,7 @@ deployed files become orphans — **kept** on every deploy (and reported) until 
 `deploy --prune`, which deletes them (capturing any drifted ones to `inbox/` first). Deletion is
 never a silent side effect.
 
-**7. Tool-owned configs (`merge`).** Gemini `config.json` and Hermes `config.yaml` are never
+**7. Tool-owned configs (`merge`).** Antigravity `config.json` and Hermes `config.yaml` are never
 overwritten — Mitos owns only specific keys and splices them in, preserving everything else you have
 in those files. Ownership can be a whole top-level key (the MCP server entries) or, for a handful of
 Hermes runtime knobs (`terminal.cwd`, `memory.memory_enabled`), a single dotted LEAF path inside an
@@ -212,7 +212,7 @@ otherwise Hermes/user-owned block — so sibling settings in that same block (`t
 | `deploy --machine M` | Apply. Blocks on `protect` drift; captures `harvest` drift; converges everything else. |
 | `adopt <path>` | Pull an in-place edit on a live file **back into the registry** (overlay-aware routing). The "keep the disk version" verb. |
 | `harvest --machine M [--adopt-all]` | List `harvest`-policy drift across a machine; `--adopt-all` pulls every one into the registry. |
-| `review` | The operator console (localhost): accept/reject every `inbox/` candidate against a live diff, edit the knowledge graph, browse prompts. A skill candidate's Supporting Files panel proposes the **full replacement set** for `examples/`/`scripts/` — omitted (untouched candidate) leaves existing files alone, an explicit empty set deletes them all on accept. Edits the working tree, never commits. |
+| `review` | The operator console (localhost): accept/reject every `inbox/` candidate against a live diff, edit the knowledge graph, browse prompts. A skill candidate's Supporting Files panel proposes the **full replacement set** for `examples/`/`scripts/` — omitted (untouched candidate) leaves existing files alone, an explicit empty set deletes them all on accept. Edits the working tree, never commits. The Knowledge Graph tab's left column is tabbed **Discovery** (staged docs not yet mapped) / **Recovery** (docs dismissed from Discovery, or auto-dismissed when an accepted removal drops them from the graph — otherwise they'd resurface in Discovery from the untouched staging snapshot). Dismissed/removed docs live in `inbox/staging/<slug>.dismissed.json` (or `unassigned.dismissed.json`, mirroring the staging pool fallback); Restore in Recovery deletes the entry so the doc reappears in Discovery. |
 | `deploy --machine M --force` | Let the registry win over `protect` drift (captures non-exempt drift first). |
 | `deploy --machine M --prune` | Delete orphans (capturing drifted ones first). |
 

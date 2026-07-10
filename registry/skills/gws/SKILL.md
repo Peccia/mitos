@@ -5,7 +5,7 @@ version: 2.1.1
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [hermes, claude-code, claude-app, gemini]
+targets: [hermes, claude-code, claude-app, antigravity]
 category: productivity
 hermes:
   tags: [gws, google-workspace, mcp, drive, docs, sheets, gmail, calendar, tasks, contacts]

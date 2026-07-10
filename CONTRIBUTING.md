@@ -77,7 +77,7 @@ connector, the Google client libraries for `gws` (see `pyproject.toml` `[connect
   to a broad audience. Follow the existing frontmatter schema.
 - **Bug fixes**: Compiler, loader, planner, or deploy bugs.
 - **Documentation**: README improvements, setup guides, examples.
-- **Target adapters**: New tools beyond Hermes/Claude/Gemini.
+- **Target adapters**: New tools beyond Hermes/Claude/Antigravity.
 
 ## What NOT to Contribute
 

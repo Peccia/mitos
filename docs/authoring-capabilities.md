@@ -15,8 +15,14 @@ registry/local/skills/<name>/
 ├── SKILL.md                 ← Required: metadata + markdown instructions
 ├── scripts/                 ← Optional: helper scripts (Python, Bash, etc.)
 ├── examples/                ← Optional: reference inputs/outputs
-└── references/              ← Optional: additional documentation
+├── references/              ← Optional: additional documentation (Hermes convention)
+├── templates/               ← Optional: fill-in templates (Hermes convention)
+└── resources/               ← Optional: other supporting assets (Antigravity convention)
 ```
+
+All five supporting subdirectories are deployed alongside `SKILL.md` (and bundled into
+claude-app zips); anything outside them is ignored. UTF-8 text only — a binary file
+fails the load loudly.
 
 ### `SKILL.md` Schema
 The `SKILL.md` file must start with a YAML frontmatter block containing metadata:
@@ -29,20 +35,41 @@ targets:                     # List of compatible tools
   - claude-code
   - hermes
 category: development        # Optional: organizational category (default: general)
+scope: global                # Optional: global (default) | project — see below
 ---
 
 # Instructions
 To draft a changelog, follow these steps...
 ```
 
-### Binding to Projects (Claude Code only)
-For Claude Code, skills deploy *per-project* into `<project-root>/.claude/skills/`. To bind a skill:
+### Skill scope: global vs. project
+
+`claude-code` and `antigravity` both offer two deploy surfaces per skill — a shared/personal
+directory available everywhere, and a per-project directory bound through the project
+manifest. The `scope:` frontmatter key picks which one:
+
+- **`scope: global`** (default, or omitted): deploys to every shared directory the skill's
+  `targets:` declare — `hermes`'s skills dir, `claude-app`'s account-wide zip staging,
+  antigravity's `antigravity_skills` (`~/.gemini/config/skills/`), and claude-code's personal
+  `claude_code_skills` (`~/.claude/skills/`). No project binding needed.
+- **`scope: project`**: deploys ONLY to the projects that list this skill under their
+  manifest's `skills:` key, never the shared directory. `hermes` and `claude-app` have no
+  project-scoped surface at all, so they ignore `scope` and stay global regardless.
+
+### Binding to Projects (claude-code and antigravity)
+A `scope: project` skill (or any skill you want a specific project's checkout to carry,
+regardless of scope) is bound the same way for both targets:
 1. List the skill under the `skills` key in your project manifest (`registry/local/projects/<project-slug>.yaml`):
    ```yaml
    skills:
      - changelog
    ```
-2. The skill's `SKILL.md` **must** list `claude-code` in its `targets:` frontmatter list. If a project manifest binds a skill that is incompatible, the compiler will fail loudly.
+   This deploys to `<project-root>/.claude/skills/changelog/SKILL.md` (if the skill targets
+   `claude-code`) and/or `<project-root>/.agents/skills/changelog/SKILL.md` (if it targets
+   `antigravity` — the same Agent Skills folder shape on both).
+2. The skill's `SKILL.md` **must** list `claude-code` or `antigravity` in its `targets:` frontmatter
+   list — one of the two targets with a project-scoped surface. If a project manifest binds a
+   skill with neither, the compiler will fail loudly.
 
 ---
 

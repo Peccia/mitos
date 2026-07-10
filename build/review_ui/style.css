@@ -510,6 +510,10 @@ select:focus, textarea:focus {
 .badge.new    { background: var(--ok-bg); color: var(--ok); }
 .badge.draft  { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
 .badge.pending { background: var(--warn-bg); color: var(--warn); }
+.badge.removed { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
+.badge.dismissed { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
+.badge.compiled { background: var(--ok-bg); color: var(--ok); text-transform: none; letter-spacing: 0; }
+.badge.blocked { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
 
 /* ── Diff table ──────────────────────────────────────────────────────────── */
 .diff {
@@ -1044,6 +1048,124 @@ details.payload pre {
   box-shadow: 0 4px 14px rgba(0,0,0,.18);
 }
 
+/* ── Ops bar (compile status + deploy machine selector) ─────────────────── */
+#ops-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .4rem .9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+#ops-machine { font-size: .82rem; padding: .2rem .5rem; margin-left: auto; }
+
+/* ── Ops drawer (compile/deploy log) ─────────────────────────────────────── */
+#ops-drawer {
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-width);
+  right: 0;
+  z-index: 9;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 10px rgba(0,0,0,.08);
+}
+#ops-drawer-bar { display: flex; align-items: center; gap: .8rem; padding: .5rem 1.2rem; }
+#ops-drawer-toggle { padding: .1rem .55rem; }
+#ops-drawer-status { font-size: .88rem; }
+#ops-drawer-status .spinner {
+  display: inline-block;
+  width: .7rem; height: .7rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  margin-right: .4rem;
+  animation: ops-spin .7s linear infinite;
+}
+@keyframes ops-spin { to { transform: rotate(360deg); } }
+.ops-drawer-actions { margin-left: auto; }
+#ops-drawer-body {
+  border-top: 1px solid var(--line);
+  padding: .6rem 1.2rem .9rem;
+  max-height: 40vh;
+  overflow: auto;
+}
+#ops-drawer-log {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Deploy confirm modal ─────────────────────────────────────────────────── */
+#deploy-confirm {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8vh;
+  z-index: 100;
+}
+#deploy-confirm-panel {
+  width: min(680px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.28);
+  overflow: hidden;
+}
+#deploy-confirm-header {
+  padding: .8rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+#deploy-confirm-header h3 { margin: 0; font-size: 1rem; }
+#deploy-confirm-body {
+  padding: .7rem 1.1rem;
+  overflow: auto;
+  font-size: .85rem;
+}
+#deploy-confirm-body .empty-state { margin: 0; }
+.deploy-plan-row {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .18rem 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: .78rem;
+}
+.deploy-plan-row:last-child { border-bottom: none; }
+.deploy-plan-row .plan-state { flex: none; width: 6.5rem; text-transform: uppercase; color: var(--muted); }
+.deploy-plan-row.is-blocked .plan-state { color: var(--bad); }
+.deploy-plan-row .plan-path { flex: 1; min-width: 0; word-break: break-all; }
+.deploy-plan-row .plan-detail { color: var(--muted); }
+.deploy-plan-section {
+  margin-top: .8rem;
+  padding-top: .6rem;
+  border-top: 1px solid var(--line);
+}
+.deploy-plan-section h4 {
+  margin: 0 0 .35rem;
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+#deploy-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: .5rem;
+  padding: .7rem 1.1rem;
+  border-top: 1px solid var(--line);
+}
 /* ── Knowledge Graph tab ─────────────────────────────────────────────────── */
 .graph-help { margin: .2rem 0 .9rem; }
 
@@ -1129,6 +1251,15 @@ details.payload pre {
 }
 .pane-head strong { flex: 1; }
 .pane-hint { padding: .4rem 0; }
+
+.left-pane-tabs { display: flex; gap: 1rem; margin-bottom: .55rem; border-bottom: 1px solid var(--line); }
+.left-tab {
+  padding: .35rem 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .15s ease, border-color .15s ease;
+}
+.left-tab:hover { color: var(--ink); }
+.left-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 
 .pool-toggle { display: inline-flex; gap: .3rem; }
 .pool-opt {
@@ -1339,12 +1470,12 @@ details.payload pre {
 .tag-chip[data-target="hermes"] { background: #e0e7ff; border-color: #a5b4fc; color: #4338ca; }
 .tag-chip[data-target="claude-code"] { background: #ffedd5; border-color: #fdba74; color: #c2410c; }
 .tag-chip[data-target="claude-app"] { background: #ffe4e6; border-color: #fda4af; color: #be123c; }
-.tag-chip[data-target="gemini"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
+.tag-chip[data-target="antigravity"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
 @media (prefers-color-scheme: dark) {
   .tag-chip[data-target="hermes"] { background: #1e1b4b; border-color: #3730a3; color: #a5b4fc; }
   .tag-chip[data-target="claude-code"] { background: #431407; border-color: #9a3412; color: #fdba74; }
   .tag-chip[data-target="claude-app"] { background: #4c0519; border-color: #9f1239; color: #fda4af; }
-  .tag-chip[data-target="gemini"] { background: #0c2a52; border-color: #1d4ed8; color: #93c5fd; }
+  .tag-chip[data-target="antigravity"] { background: #0c2a52; border-color: #1d4ed8; color: #93c5fd; }
 }
 
 .skill-actions-bar { display: flex; gap: .5rem; margin-bottom: .9rem; }
@@ -1569,7 +1700,7 @@ details.payload pre {
 
 @media (max-width: 480px) {
   #sidebar { display: none; }
-  #compose, #graph-dock { left: 0; }
+  #compose, #graph-dock, #ops-drawer { left: 0; }
   #toast { left: 50%; transform: translateX(-50%); }
   #graph-dock-bar { flex-wrap: wrap; }
   .graph-dock-actions { margin-left: 0; flex-wrap: wrap; }

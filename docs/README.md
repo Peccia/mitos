@@ -22,9 +22,8 @@ Understand how Mitos models your registry, handles tool configurations, and mana
 Guides for configuring Mitos to deploy custom context, skills, and prompts into specific AI tools:
 
 - **[Claude Code target](targets/claude-code.md)** — Integrating per-project `CLAUDE.md`, subagents, skills, and slash-command prompts.
-- **[Gemini CLI target](targets/gemini-cli.md)** — Configuring MCP server access, tool permissions, and global/project-level context.
+- **[Antigravity target](targets/antigravity.md)** — MCP server access, tool permissions, native `AGENTS.md` context, and global/project-scoped skill delivery (`antigravity` target — covers Antigravity IDE + CLI, and Gemini CLI until it retires 2026-06-18; see [the legacy Gemini CLI note](targets/gemini-cli.md)).
 - **[Claude app target](targets/claude-app.md)** — The claude.ai account surface (web + Desktop): staging skill zips for manual upload, and the `npx mcp-remote` bridge for LAN/HTTP MCP servers on Desktop.
-- **[Antigravity target](targets/antigravity.md)** — IDE-level integration, native `AGENTS.md` context, and skill delivery.
 
 ---
 

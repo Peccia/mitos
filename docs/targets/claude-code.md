@@ -5,10 +5,35 @@
 | Surface | Support | Mechanism |
 |---|---|---|
 | Context | ✅ | `CLAUDE.md` per project or at repo root |
-| Skills | ✅ | `.claude/skills/<name>/SKILL.md` — wired and deployed today |
+| Skills | ✅ | `.claude/skills/<name>/SKILL.md` (project) or `~/.claude/skills/<name>/SKILL.md` (personal/global) — see [Skill scope](#skill-scope-global-vs-project) below |
 | Agents (subagents) | ✅ | `.claude/agents/<name>.md` — wired and deployed today |
 | Prompts (slash-commands) | ✅ **confirmed** | `.claude/commands/<name>.md` — per-project; `~/.claude/commands/` — global (user-level) |
 | MCP config | project `.mcp.json` | Not currently wired in Mitos (no project opts in) |
+
+## Skill scope: global vs. project
+
+Claude Code reads skills from the same two levels it reads slash-commands from
+([confirmed](https://code.claude.com/docs/en/skills)):
+- **Personal (global):** `~/.claude/skills/<name>/SKILL.md` — available in every project
+- **Project:** `<project-root>/.claude/skills/<name>/SKILL.md` — available only there
+
+A skill's `scope:` frontmatter key picks which one Mitos deploys to (mirrors the identical
+`antigravity` target surface — `~/.gemini/config/skills/` global vs. `<project>/.agents/skills/`):
+
+- **`scope: global`** (default, or omitted): deploys once to the machine's
+  `claude_code_skills` path (`~/.claude/skills/`) — every project on that machine sees it,
+  no manifest binding needed.
+- **`scope: project`**: deploys ONLY to the projects that name this skill in their manifest's
+  `skills:` list (`registry/projects/<slug>.yaml`), at `<project-root>/.claude/skills/`. Never
+  appears in the personal directory.
+
+`hermes` and `claude-app` have no project-scoped skill surface at all — they ignore `scope`
+entirely and always deploy globally, regardless of the value set.
+
+Set/edit `scope` via the Operator Console's Skills & Orgs tab (each skill card's **Scope**
+section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
+`scope: project` skill is controlled by editing each project's manifest `skills:` list — the
+console shows the current bindings read-only but does not write project manifests.
 
 ## Slash-command prompts — `.claude/commands/`
 

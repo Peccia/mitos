@@ -1,5 +1,5 @@
 ---
-audience: [hermes, claude-code, gemini, agents-md]
+audience: [hermes, claude-code, antigravity, agents-md]
 ---
 ## Security & Privacy Philosophy
 

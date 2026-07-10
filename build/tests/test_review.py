@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 
-from conftest import loader, reg, _plant_candidate, _temp_registry
+from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
 def test_graph_index_lists_local_projects_regardless_of_drive_key():
@@ -108,6 +108,143 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     # the new skill is now loadable from disk
     reloaded = loadermod.load(tmp)
     assert "widget-helper" in reloaded.skills
+
+
+def test_dismiss_and_restore_roundtrip():
+    """dismiss_docs moves a doc into the Recovery list; load_dismissed surfaces it;
+    restore_docs removes it again."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "example-project.json").write_text(
+        '{"slug": "example-project", "documents": []}', encoding="utf-8")
+
+    doc = {"id": "D1", "name": "Doc One", "dateModified": "2026-01-01",
+           "webUrl": "https://example.com/1"}
+    out = review.dismiss_docs(treg, "example-project", [doc])
+    assert out["ok"], out
+
+    recovered = review.load_dismissed(treg, "example-project")
+    assert recovered["ok"] and len(recovered["documents"]) == 1
+    entry = recovered["documents"][0]
+    assert entry["id"] == "D1" and entry["name"] == "Doc One"
+    assert entry["source"] == "manual" and entry["dismissed_at"]
+
+    # dismissing the same id again updates in place rather than duplicating
+    review.dismiss_docs(treg, "example-project", [doc])
+    recovered2 = review.load_dismissed(treg, "example-project")
+    assert len(recovered2["documents"]) == 1
+
+    restored = review.restore_docs(treg, "example-project", ["D1"])
+    assert restored["ok"], restored
+    recovered3 = review.load_dismissed(treg, "example-project")
+    assert recovered3["documents"] == []
+
+
+def test_dismiss_docs_rejects_invalid_slug():
+    """dismiss_docs/restore_docs refuse a traversal or empty slug, same as load_staged."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    for bad in ("../etc", "", ".", ".."):
+        r = review.dismiss_docs(treg, bad, [{"id": "X", "name": "X"}])
+        assert r["ok"] is False, f"expected ok=False for slug {bad!r}"
+        r2 = review.restore_docs(treg, bad, ["X"])
+        assert r2["ok"] is False, f"expected ok=False for slug {bad!r}"
+
+
+def test_dismiss_pool_fallback_mirrors_load_staged():
+    """No per-project staging file yet → dismissal lands in the shared unassigned
+    dismissed file (is_unassigned True). Once a project-specific staging file exists,
+    a fresh dismissal for that project lands in its own dismissed file instead."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+
+    out = review.dismiss_docs(treg, "example-project", [{"id": "U1", "name": "Unassigned Doc"}])
+    assert out["ok"]
+    unassigned_file = _inbox(tmp) / "staging" / "unassigned.dismissed.json"
+    assert unassigned_file.is_file()
+    result = review.load_dismissed(treg, "example-project")
+    assert result["is_unassigned"] is True
+    assert result["documents"][0]["id"] == "U1"
+
+    staging_dir = _inbox(tmp) / "staging"
+    (staging_dir / "example-project.json").write_text(
+        '{"slug": "example-project", "documents": []}', encoding="utf-8")
+    out2 = review.dismiss_docs(treg, "example-project", [{"id": "P1", "name": "Project Doc"}])
+    assert out2["ok"]
+    project_file = staging_dir / "example-project.dismissed.json"
+    assert project_file.is_file()
+    result2 = review.load_dismissed(treg, "example-project")
+    assert result2["is_unassigned"] is False
+    assert result2["documents"][0]["id"] == "P1"
+    # the earlier unassigned-pool dismissal is untouched, just no longer the active pool
+    unassigned_result = review.load_dismissed(treg, "example-project", pool="unassigned")
+    assert unassigned_result["documents"][0]["id"] == "U1"
+
+
+def test_dismiss_file_unreadable_is_tolerated():
+    """A corrupt dismissed-list file degrades to empty rather than raising — dismissal
+    state is best-effort, unlike staging artifacts which surface ok=False."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "unassigned.dismissed.json").write_text("not json", encoding="utf-8")
+    result = review.load_dismissed(treg, "example-project")
+    assert result["ok"] and result["documents"] == []
+    # a subsequent dismiss still succeeds and overwrites the corrupt file cleanly
+    out = review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc"}])
+    assert out["ok"]
+    result2 = review.load_dismissed(treg, "example-project")
+    assert result2["documents"][0]["id"] == "D1"
+
+
+def test_accept_removal_auto_dismisses_doc():
+    """Accepting a kind:graph candidate that removes a mapped document auto-dismisses
+    it (source: "removal") so it stops resurfacing in Discovery from the untouched
+    staging snapshot. A rejected removal candidate must NOT dismiss anything."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+
+    # map a document first
+    mapped = [{"id": "A", "name": "Alpha", "description": "a", "dateModified": "2026-01-01"}]
+    out = review.propose_graph_change(treg, "example-project", mapped, reason="seed")
+    assert out["ok"]
+    reg1 = loader.load(tmp)
+    acc = review.decide(reg1, out["id"], "accept", "")
+    assert acc["ok"]
+
+    # it must not be dismissed yet — nothing has removed it
+    assert review.load_dismissed(loader.load(tmp), "example-project")["documents"] == []
+
+    # propose + REJECT a removal — rejection must not dismiss anything
+    reg2 = loader.load(tmp)
+    rem_reject = review.propose_graph_change(reg2, "example-project", [], removals=["A"],
+                                             reason="removal to reject")
+    assert rem_reject["ok"]
+    rej = review.decide(loader.load(tmp), rem_reject["id"], "reject", "")
+    assert rej["ok"]
+    assert review.load_dismissed(loader.load(tmp), "example-project")["documents"] == []
+    merged_after_reject = graph.load_project_graph(gdir / "example-project.jsonld")
+    assert "A" in {d.drive_id for d in merged_after_reject.documents}
+
+    # propose + ACCEPT a removal — now it must be auto-dismissed
+    reg3 = loader.load(tmp)
+    rem_accept = review.propose_graph_change(reg3, "example-project", [], removals=["A"],
+                                             reason="removal to accept")
+    assert rem_accept["ok"]
+    acc2 = review.decide(loader.load(tmp), rem_accept["id"], "accept", "")
+    assert acc2["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    assert "A" not in {d.drive_id for d in merged.documents}
+
+    dismissed = review.load_dismissed(loader.load(tmp), "example-project")
+    assert len(dismissed["documents"]) == 1
+    entry = dismissed["documents"][0]
+    assert entry["id"] == "A" and entry["name"] == "Alpha" and entry["source"] == "removal"
 
 
 def test_propose_new_skill_rejects_name_collision_and_bad_shape():
@@ -496,6 +633,56 @@ def test_propose_meta_edit_rejects_bad_extension_pair():
     assert "must be specified together" in out["error"]
 
 
+# ── skill scope: global (default) | project — the Skills & Orgs Scope control ───
+def test_propose_meta_edit_accepts_valid_scope_and_it_survives_accept():
+    from agentic.review import decide, propose_meta_edit
+
+    treg, tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "project"}, skill.body, "scope to specific projects")
+    assert out["ok"], out
+    acc = decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"], acc
+    written = (tmp / "registry" / skill.rel).read_text(encoding="utf-8")
+    assert "scope: project" in written
+
+def test_propose_meta_edit_rejects_invalid_scope_value():
+    from agentic.review import propose_meta_edit
+
+    treg, _tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "workspace"}, skill.body)
+    assert not out["ok"]
+    assert "invalid scope" in out["error"]
+
+def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
+    """Unlike the extends_skill/target-binding checks, scope: project has no per-target
+    incompatibility — hermes/claude-app targets simply ignore it (see loader.
+    validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
+    from agentic.review import propose_meta_edit
+
+    treg, _tmp = _temp_registry()
+    skill = next(iter(treg.skills.values()))
+    out = propose_meta_edit(treg, "skill", skill.name,
+                            {"scope": "project", "targets": ["claude-app"]}, skill.body)
+    assert out["ok"], out
+
+def test_prompt_index_exposes_bound_projects_per_skill():
+    """The console's Scope section reads bound_projects to show which projects a
+    scope: project skill actually reaches — computed from each project's skills: list."""
+    from agentic.review import prompt_index
+
+    treg, _tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    skill = next(iter(treg.skills.values()))
+    treg.projects[slug]["skills"] = [skill.name]
+    payload = prompt_index(treg)
+    entry = next(s for s in payload["skills"] if s["name"] == skill.name)
+    assert entry["bound_projects"] == [slug]
+
+
 # ── skill supporting files via the console (examples/, scripts/) — R4/R5 ───────
 def test_propose_new_skill_with_resources_writes_files_and_accepts():
     from agentic.review import decide, propose_new_skill
@@ -759,3 +946,149 @@ def test_graph_propose_carries_and_preserves_doc_type():
     assert "Budget (renamed)" in text
     assert '"additionalType": "spreadsheet"' in text, \
         "an upsert without `type` must not wipe the existing annotation"
+
+
+# ── ops: compile/deploy from the console ─────────────────────────────────────
+
+def _wait_until_idle(timeout=5.0):
+    """Poll ops_status() until running is False or timeout — the test analogue of the
+    frontend's poll loop. Bounded so a stuck job fails the test instead of hanging it."""
+    import time
+
+    from agentic.review import ops_status
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snap = ops_status()
+        if not snap["running"]:
+            return snap
+        time.sleep(0.02)
+    raise AssertionError("op did not finish before timeout")
+
+
+def test_ops_status_shape_when_idle():
+    from agentic.review import ops_status
+
+    snap = ops_status()
+    assert snap["running"] is False
+    assert set(snap) == {"running", "kind", "machine", "log", "rc", "started_at", "finished_at"}
+
+
+def test_run_compile_success_and_lock_contention():
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    treg.root = tmp  # dist/ lands in the temp registry, never the real repo's dist/
+
+    result = review.run_compile(treg)
+    assert result["ok"] is True
+    assert result["rc"] == 0
+    assert "compiled" in result["log"]
+    assert (tmp / "dist").is_dir()
+
+    snap = _wait_until_idle()
+    assert snap["kind"] == "compile"
+    assert snap["rc"] == 0
+
+    # a second op while one is (still, or again) mid-flight must be refused, never queued —
+    # simulate contention directly since compile finishes before the harness can race it
+    assert review._OPS_LOCK.acquire(blocking=False)
+    try:
+        assert review.run_compile(treg) == {"ok": False, "error": "an operation is already running"}
+        assert review.run_deploy_apply(treg, "rig") == \
+            {"ok": False, "error": "an operation is already running"}
+    finally:
+        review._OPS_LOCK.release()
+
+
+def test_state_machine_selector_hides_example_templates():
+    """The console's deploy selector follows cmd_compile's convention: example templates
+    step aside once a real machine exists (they'd only tempt a guaranteed-refused deploy);
+    with no real machine (fresh clone) they stand in so the quick-start works."""
+    import copy
+
+    from agentic.review import state
+
+    # _temp_registry copies machines/ (examples) and adds the real "rig" — examples hide
+    treg, _tmp = _temp_registry()
+    assert state(treg)["machines"] == ["rig"]
+
+    # fresh-clone shape: only example templates exist — they show
+    fresh = copy.deepcopy(treg)
+    fresh.machines = {n: m for n, m in fresh.machines.items() if m.get("example")}
+    assert fresh.machines, "expected example templates in the temp registry copy"
+    assert state(fresh)["machines"] == sorted(fresh.machines)
+
+
+def test_run_deploy_plan_reflects_compute_deploy_plan():
+    from agentic.commands import compute_deploy_plan
+    from agentic.review import run_deploy_plan
+
+    result = run_deploy_plan(reg, "example-linux")
+    assert result["ok"] is True
+    plan = compute_deploy_plan(reg, "example-linux")
+    assert len(result["statuses"]) == len(plan.statuses)
+    assert {s["path"] for s in result["statuses"]} == {s.output.deploy_path for s in plan.statuses}
+    assert result["blocked_count"] == len(plan.blocked)
+    assert sorted(result["orphans"]) == sorted(plan.orphans)
+
+    assert run_deploy_plan(reg, "no-such-machine") == \
+        {"ok": False, "error": "unknown machine 'no-such-machine'"}
+
+
+def test_run_deploy_plan_surfaces_hard_refusal_for_example_machine():
+    """Regression guard: the preview must warn about a guaranteed refusal (example-template
+    machine) up front — a plan that looks normal but whose Confirm & Deploy would always be
+    refused is worse than not previewing at all."""
+    from agentic.review import run_deploy_plan
+
+    result = run_deploy_plan(reg, "example-linux")
+    assert result["ok"] is True
+    assert result["refusal"] is not None
+    assert "example template" in result["refusal"]
+
+    # a non-example machine profile is not pre-emptively refused (may still have drift, but
+    # that's compute_deploy_plan's softer, recoverable signal — not this hard guard)
+    treg, tmp = _temp_registry()
+    assert run_deploy_plan(treg, "rig")["refusal"] is None
+
+
+def test_deploy_apply_refusal_matches_cmd_deploy_guard_messages():
+    from agentic.commands import cmd_deploy, deploy_apply_refusal
+
+    refusal = deploy_apply_refusal(reg, "example-windows")
+    assert refusal is not None
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=None)
+    assert rc == 2
+    assert refusal in out.getvalue()
+
+
+def test_run_deploy_apply_writes_files_and_updates_ops_state():
+    from agentic import commands, review
+
+    treg, tmp = _temp_registry()
+    root = tmp / "sandbox"
+    # run_deploy_apply always calls cmd_deploy without root=, so point it at a sandbox by
+    # wrapping cmd_deploy for the duration of this test — mirrors how the console never
+    # deploys to real paths from a temp registry rig.
+    orig = commands.cmd_deploy
+    commands.cmd_deploy = lambda r, m, dry_run, force: orig(r, m, dry_run, force, root=root)
+    try:
+        result = review.run_deploy_apply(treg, "rig")
+        assert result == {"ok": True, "started": True}
+        snap = _wait_until_idle()
+        assert snap["kind"] == "deploy"
+        assert snap["machine"] == "rig"
+        assert snap["rc"] == 0
+        assert "deployed" in snap["log"]
+        assert any(root.rglob("SOUL.md"))
+    finally:
+        commands.cmd_deploy = orig
+
+    # unknown machine is rejected before any lock is taken
+    assert review.run_deploy_apply(treg, "no-such-machine") == \
+        {"ok": False, "error": "unknown machine 'no-such-machine'"}
