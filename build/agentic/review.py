@@ -1511,8 +1511,10 @@ def state(reg: Registry) -> dict:
         # only machines with an Agent-MD folder tree — the Org tab's folder-view picker
         "agents_md_machines": sorted(
             m for m, cfg in reg.machines.items() if "agents-md" in cfg.get("targets", [])),
-        # every machine profile — the status bar's machine selector
-        "machines": sorted(reg.machines),
+        # the status bar's machine selector — same convention as cmd_compile: example
+        # templates step aside once the overlay defines a real machine; on a fresh clone
+        # (no real machines yet) they show so the quick-start deploy rehearsal works
+        "machines": sorted(commands.real_machines(reg)),
         "ops": {"compile": commands.compile_status(reg, reg.root / "dist")},
     }
 

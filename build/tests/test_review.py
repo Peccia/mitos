@@ -1001,6 +1001,25 @@ def test_run_compile_success_and_lock_contention():
         review._OPS_LOCK.release()
 
 
+def test_state_machine_selector_hides_example_templates():
+    """The console's deploy selector follows cmd_compile's convention: example templates
+    step aside once a real machine exists (they'd only tempt a guaranteed-refused deploy);
+    with no real machine (fresh clone) they stand in so the quick-start works."""
+    import copy
+
+    from agentic.review import state
+
+    # _temp_registry copies machines/ (examples) and adds the real "rig" — examples hide
+    treg, _tmp = _temp_registry()
+    assert state(treg)["machines"] == ["rig"]
+
+    # fresh-clone shape: only example templates exist — they show
+    fresh = copy.deepcopy(treg)
+    fresh.machines = {n: m for n, m in fresh.machines.items() if m.get("example")}
+    assert fresh.machines, "expected example templates in the temp registry copy"
+    assert state(fresh)["machines"] == sorted(fresh.machines)
+
+
 def test_run_deploy_plan_reflects_compute_deploy_plan():
     from agentic.commands import compute_deploy_plan
     from agentic.review import run_deploy_plan

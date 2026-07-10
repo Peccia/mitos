@@ -137,14 +137,20 @@ def _filter_prior_by_machine_paths(reg: Registry, machine_name: str, prior: dict
 
 
 # ── compile ──────────────────────────────────────────────────────────────────
+# Example machines are copy-templates, not a live fleet. Once your overlay defines a real
+# machine they step aside — otherwise they'd render to dist/, populate the console's deploy
+# selector, and tempt a deploy to real paths. With no real machine yet (a fresh clone), they
+# stand in so the quick-start works. One rule, shared by compile, compile_status, and the
+# console's machine selector (review.state).
+def real_machines(reg: Registry) -> list[str]:
+    real = [n for n, m in reg.machines.items() if not m.get("example")]
+    return real or list(reg.machines)
+
+
 def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -> int:
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
-    # Example machines are copy-templates, not a live fleet. Once your overlay defines a real
-    # machine they step aside — otherwise they'd render to dist/ and tempt a deploy to real
-    # paths. With no real machine yet (a fresh clone), compile them so the quick-start works.
-    real = [n for n, m in reg.machines.items() if not m.get("example")]
-    machine_names = real or list(reg.machines)
+    machine_names = real_machines(reg)
     skipped = [n for n in reg.machines if n not in machine_names]
     total = 0
     for machine_name in machine_names:
@@ -185,8 +191,7 @@ def compile_status(reg: Registry, dist_dir: Path) -> dict:
     """Read-only: does the registry's current render match what's already in dist_dir/?
     Compares a fresh plan_machine() hash per output against the hashes cmd_compile recorded
     in each machine's manifest.json — no writes, safe to call on every console refresh."""
-    real = [n for n, m in reg.machines.items() if not m.get("example")]
-    machine_names = real or list(reg.machines)
+    machine_names = real_machines(reg)
     stale_machines = []
     for machine_name in machine_names:
         manifest_path = dist_dir / machine_name / "manifest.json"
