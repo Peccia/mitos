@@ -14,10 +14,9 @@ agent organization across tools. Mitos manages itself — this file is authored 
 
 ## What this repo is
 - `registry/` is the **moat**: the single, canonical home for all content — personas
-  (`identity/`), domain/project context (`context/`), skills (`skills/`), agents
-  (`agents/`, Claude Code subagents), harness-agnostic prompts (`prompts/`), the knowledge
-  graph (`graph/`, schema.org JSON-LD), project manifests (`projects/`), and org seed
-  templates (`templates/`). `registry/local/`
+  (`identity/`), domain/project context (`context/`), skills (`skills/`), harness-agnostic
+  prompts (`prompts/`), the knowledge graph (`graph/`, schema.org JSON-LD), project
+  manifests (`projects/`), and org seed templates (`templates/`). `registry/local/`
   is the **Mitos overlay** (gitignored): a user's private identity/projects/graph/skills,
   loaded on top of the core by last-layer-wins so the same repo can go open source without
   leaking personal content.
@@ -111,8 +110,7 @@ agent organization across tools. Mitos manages itself — this file is authored 
 | A prompt (harness-agnostic) | `registry/prompts/<name>.md` — frontmatter: `name`, `description`, `version`, `category`, `targets` (optional; omit = console-only). Deployed as plain body text to any target whose `targets/<tool>.yaml` has a `prompts:` block. Always available in the console Prompt Library regardless of `targets:`. |
 | Which prompts a tool receives | the prompt's `targets:` frontmatter (omit = console-only); the target's `prompts:` block in `targets/<tool>.yaml` selects them. Today only `claude-code` deploys prompts (per-project manifest `prompts:` binding → `.claude/commands/<name>.md`). The former antigravity prompt lane is retired — Antigravity discovers only `<folder>/SKILL.md`, so discoverable content belongs in a skill. |
 | Favorites in the Prompt Library | `registry/local/prompt-favorites.yaml` — toggle via the console UI or via `POST /api/prompts/favorite {"name": "<name>"}` |
-| A Claude Code subagent | `registry/agents/<name>.md` (subagent frontmatter: `name`, `description`, optional `tools`/`model` + system-prompt body) — authored once, reused across projects |
-| Which skills/agents a project's Claude Code checkout gets | `skills:`/`agents:` lists in `registry/projects/<slug>.yaml`; a bound skill must target `claude-code` or `antigravity` (the two targets with a project-scoped skill surface — `PROJECT_SCOPE_CAPABLE_TARGETS`). Deployed to `<checkout>/.claude/skills/` and `.claude/agents/` (and `.agents/skills/` if the skill also targets `antigravity`) |
+| Which skills a project's Claude Code checkout gets | `skills:` list in `registry/projects/<slug>.yaml`; a bound skill must target `claude-code` or `antigravity` (the two targets with a project-scoped skill surface — `PROJECT_SCOPE_CAPABLE_TARGETS`). Deployed to `<checkout>/.claude/skills/` (and `.agents/skills/` if the skill also targets `antigravity`). The agents lane (`registry/agents/`, manifest `agents:`) was retired in 0.1.3 batch 1 — skills already cover the reusable-behavior story, and Claude Code ships a built-in code-reviewer agent |
 | Auto-clone a project's repo | set the project's `repo:` in `registry/projects/<slug>.yaml` — either a single git URL string or a list of git URL strings. Each URL is cloned (clone-if-absent, non-destructive) into its own `<basename>/` subdirectory. On **workstation machines** (`claude-code` without `agents-md`), each clone lands at `<local_path>/<basename>/`. On **Hermes machines** (`agents-md` also in targets), at `<agentic_context_root>/Projects/<slug>/<basename>/`. Basenames within a project must be unique — two repos with the same name fail compile |
 | Publish/refresh a skill in claude.ai (web/Desktop) | add `claude-app` to the skill's `targets:`; `deploy` stages `<name>.zip` at the machine's `claude_skills_staging` path; upload is MANUAL (Customize > Skills) — a `pending` zip means the account copy is stale |
 | Wire a LAN/HTTP MCP server into Claude Desktop | set `claude_desktop_config` in the machine profile; run `deploy --lane connections` — `claude-app` writes an `npx mcp-remote` stdio bridge directly into `claude_desktop_config.json`. **Do not use the Desktop "Add custom connector" UI** (it rejects non-https URLs and has no knowledge of `servers.yaml`). Restart Desktop and the connector appears automatically. Requires Node.js/npx; bridge version pinned in `build/agentic/render.py` (`MCP_REMOTE_SPEC`). See `docs/targets/claude-app.md` |

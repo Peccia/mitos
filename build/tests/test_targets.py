@@ -76,7 +76,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
@@ -107,7 +107,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_hermes = copy.deepcopy(reg)
     if "apoc" not in rig_hermes.projects:
-        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
@@ -326,7 +326,7 @@ def test_non_hermes_clone_uses_local_path():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -341,7 +341,7 @@ def test_non_hermes_clone_uses_local_path():
     # agentic_context_root lane still works when both are present on the same machine
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
-        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -499,40 +499,26 @@ def test_parse_fragment_rejects_wrong_project_and_bad_shape():
     name, desc, docs, efforts = graph.parse_fragment(good, "example-project")
     assert name is None and [d.drive_id for d in docs] == ["D2"]
 
-def test_agents_load_and_render_claude_code():
-    assert "code-reviewer" in reg.agents
-    agent = reg.agents["code-reviewer"]
-    assert agent.rel == "agents/code-reviewer.md"
-    out = render.render_agent(agent, "claude-code")
-    assert out.startswith("---\nname: code-reviewer\n")
-    head = out.split("---")[1]
-    assert "description:" in head and "tools:" in head and "model:" in head
-    assert "code reviewer" in out.lower() and not out.rstrip().endswith("---")
-
-def test_per_project_binding_deploys_skills_and_agents():
-    """Per-project skill/agent binding: a manifest-bound agent deploys to that project's
-    checkout; a skill not in the manifest does not. Uses an isolated rig so the test
-    is independent of overlay local_path config."""
+def test_per_project_binding_deploys_skills():
+    """Per-project skill binding: a manifest-bound scope:project skill deploys to that
+    project's checkout; a skill not in the manifest does not. Uses an isolated rig so
+    the test is independent of overlay local_path config."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["claude-code"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["claude-code"], "scope": "project"}, body="proj body")
     # give example-project a local_path so _local() resolves it (core registry has this)
-    # and pin a minimal binding — just the agent
     r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
-    r.projects["example-project"]["agents"] = ["code-reviewer"]
-    r.projects["example-project"]["skills"] = []  # no skills — agent only
+    r.projects["example-project"]["skills"] = ["proj-skill"]
     outs = planner.plan_machine(r, "example-windows")
     paths = [o.deploy_path for o in outs]
-    # agent deployed to this project
-    assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
+    # bound skill deployed to this project
+    assert any(p.endswith("example-project/.claude/skills/proj-skill/SKILL.md") for p in paths)
     # new-session skill not bound → not deployed
     assert not any(p.endswith("example-project/.claude/skills/new-session/SKILL.md") for p in paths)
-    # agent output points at the one shared registry source
-    agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
-    assert len(agent_outs) >= 1
-    assert all(o.sources == ["agents/code-reviewer.md"] for o in agent_outs)
-    assert all(o.drift_policy == "harvest" for o in agent_outs)
 
 def test_binding_validation_rejects_unknown_and_incompatible():
     import copy
@@ -540,7 +526,6 @@ def test_binding_validation_rejects_unknown_and_incompatible():
     from agentic.loader import RegistryError, _validate
     for mutate in (
         lambda p: p.update(skills=["no-such-skill"]),
-        lambda p: p.update(agents=["no-such-agent"]),
         lambda p: p.update(skills=["graph-bootstrap"]),  # exists but not claude-code-compatible
         lambda p: p.update(skills="plan"),           # not a list
     ):
@@ -551,6 +536,20 @@ def test_binding_validation_rejects_unknown_and_incompatible():
             raise AssertionError("expected RegistryError")
         except RegistryError:
             pass
+
+def test_agents_manifest_field_rejected_loudly():
+    """The agents lane was retired (0.1.3 batch 1) — any manifest `agents:` key, even
+    an empty list, is a loud RegistryError, mirroring the retired `org:` field."""
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    r = copy.deepcopy(reg)
+    r.projects["example-project"]["agents"] = []
+    try:
+        _validate(r)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "agents" in str(e)
 
 def test_repo_basename_forms():
     from agentic.planner import _repo_basename

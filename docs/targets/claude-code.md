@@ -6,7 +6,6 @@
 |---|---|---|
 | Context | ✅ | `CLAUDE.md` per project or at repo root |
 | Skills | ✅ | `.claude/skills/<name>/SKILL.md` (project) or `~/.claude/skills/<name>/SKILL.md` (personal/global) — see [Skill scope](#skill-scope-global-vs-project) below |
-| Agents (subagents) | ✅ | `.claude/agents/<name>.md` — wired and deployed today |
 | Prompts (slash-commands) | ✅ **confirmed** | `.claude/commands/<name>.md` — per-project; `~/.claude/commands/` — global (user-level) |
 | MCP config | project `.mcp.json` | Not currently wired in Mitos (no project opts in) |
 
@@ -58,7 +57,7 @@ Prompt body here. Use $ARGUMENTS where the user's input should go.
 
 ## Deployment path for Mitos
 
-Prompts targeting `claude-code` should deploy to **per-project `.claude/commands/`** (consistent with how skills and agents deploy per-project today) and/or optionally to a **user-level global** directory.
+Prompts targeting `claude-code` should deploy to **per-project `.claude/commands/`** (consistent with how skills deploy per-project today) and/or optionally to a **user-level global** directory.
 
 A project-scoped prompt would appear only in that project's Claude Code sessions. A user-scoped prompt appears everywhere — more like a skill than a project-specific tool.
 
@@ -71,7 +70,7 @@ A project-scoped prompt would appear only in that project's Claude Code sessions
 ## Research sources
 
 - Claude Code documentation (`.claude/` directory layout)
-- Confirmed by codebase inference from existing `.claude/skills/` and `.claude/agents/` patterns
+- Confirmed by codebase inference from the existing `.claude/skills/` pattern
 
 ## Verdict
 
@@ -81,7 +80,7 @@ A project-scoped prompt would appear only in that project's Claude Code sessions
 
 A `prompts:` block in `targets/claude-code.yaml` deploying to `.claude/commands/{name}.md` per project.
 
-**Binding model:** identical to `skills:` and `agents:` — the project manifest's `prompts:` list controls which prompts deploy to which project's checkout. A bound prompt must exist in `registry/prompts/` AND list `claude-code` in its `targets:`. Console-only prompts cannot be bound.
+**Binding model:** identical to `skills:` — the project manifest's `prompts:` list controls which prompts deploy to which project's checkout. A bound prompt must exist in `registry/prompts/` AND list `claude-code` in its `targets:`. Console-only prompts cannot be bound.
 
 **Rendered format:** `description:` frontmatter (for the slash-command picker) + prompt body. No `allowed-tools:` (not in the Mitos prompt schema yet — add to the prompt's `targets:` extension if needed in a later phase).
 

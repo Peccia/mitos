@@ -2,7 +2,7 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
 
 The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -153,8 +153,8 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 
 | Term | What it is |
 |---|---|
-| **registry/** | The moat. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), subagents (`agents/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
-| **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills and agents are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
+| **registry/** | The moat. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
+| **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
 | **Skill resources** | A skill's supporting files — `registry/skills/<name>/examples/` (expected-output samples) and `.../scripts/` (executables Claude can run) — auto-discovered, deployed alongside `SKILL.md`, and bundled into claude.ai zips. Each file adopts/harvests back to its own path, never `SKILL.md`. |
 | **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. The Skills & Orgs tab's `+ Extend department` button scaffolds one. |
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |

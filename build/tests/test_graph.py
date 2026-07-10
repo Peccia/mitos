@@ -522,7 +522,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     rig = copy.deepcopy(reg)
     rig.projects["apdict"] = {
         "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"}, "agents": [],
+        "local_path": {"example-windows": "apdict"},
         "context": {"assistant": "registry/context/projects/apdict.md"},
         "document_store": "gws",
     }
@@ -708,7 +708,7 @@ def test_graph_tree_deploys_only_on_claude_code_env():
     rig = copy.deepcopy(reg)
     rig.projects["apdict"] = {
         "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"}, "agents": [],
+        "local_path": {"example-windows": "apdict"},
         "context": {"assistant": "registry/context/projects/apdict.md"},
     }
     rig.partials["context/projects/apdict.md"] = Partial(
@@ -747,7 +747,7 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     if "apdict" not in reg2.projects:
         reg2.projects["apdict"] = {
             "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-            "local_path": {"example-windows": "apdict"}, "agents": [], "context": {},
+            "local_path": {"example-windows": "apdict"}, "context": {},
         }
     if "apdict" not in reg2.graphs:
         reg2.graphs["apdict"] = graph.ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)

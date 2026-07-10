@@ -702,6 +702,15 @@ details.payload pre {
 .row-tag + .row-tag { margin-left: .3rem; }
 .row-tag.edited { background: var(--warn-bg); color: var(--warn); }
 .row-tag.stale { background: var(--bad-bg, transparent); color: var(--bad); border: 1px solid var(--bad); }
+.row-copy {
+  flex: none;
+  align-self: center;
+  opacity: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.list-row:hover .row-copy, .row-copy:focus-visible { opacity: 1; }
 
 /* Favorites: drag-reorder + a "Manage" mode for batch-unpin */
 .fav-manage-btn { margin-left: auto; }

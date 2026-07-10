@@ -12,7 +12,7 @@ import re
 
 import yaml
 
-from .loader import EXTENSION_ANCHOR, Agent, Prompt, Registry, Skill, SkillResource
+from .loader import EXTENSION_ANCHOR, Prompt, Registry, Skill, SkillResource
 
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
@@ -457,22 +457,6 @@ def render_prompt(prompt: Prompt, target: str) -> str:
         meta = {"description": prompt.frontmatter.get("description", "")}
         return _frontmatter_doc(meta, prompt.body)
     return prompt.body.rstrip("\n") + "\n"
-
-
-# ── Agents (Claude Code subagents) ───────────────────────────────────────────
-def render_agent(agent: Agent, target: str) -> str:
-    """Render an agent in a harness's subagent format. Today only claude-code:
-    `.claude/agents/<name>.md` with name/description (+ optional tools/model) frontmatter
-    and the system-prompt body."""
-    if target != "claude-code":
-        raise ValueError(f"agent rendering not defined for target {target!r}")
-    fm = agent.frontmatter
-    meta = {"name": fm["name"], "description": fm.get("description", "")}
-    if fm.get("tools"):
-        meta["tools"] = fm["tools"]
-    if fm.get("model"):
-        meta["model"] = fm["model"]
-    return _frontmatter_doc(meta, agent.body)
 
 
 def _frontmatter_doc(meta: dict, body: str) -> str:

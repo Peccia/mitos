@@ -1137,15 +1137,13 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             ))
             outputs += _skill_resource_outputs(skill, resources, "claude-code",
                                                base_dir, policy)
-    # per-project skills, agents, and prompts (the per-project binding design): each
+    # per-project skills and prompts (the per-project binding design): each
     # project's manifest names the assets it uses; they deploy to that project's checkout.
-    # A skill/agent/prompt is reused across projects by naming it in each manifest, never
+    # A skill/prompt is reused across projects by naming it in each manifest, never
     # copied. Only scope: project skills are read here — a scope: global skill already
     # deploys everywhere above, so a stray manifest listing for it is simply inert.
-    ag = spec.get("agents") or {}
     pr = spec.get("prompts") or {}
     sk_subdir = sk.get("subdir", ".claude/skills/{name}")
-    ag_subdir = ag.get("subdir", ".claude/agents")
     pr_subdir = pr.get("subdir", ".claude/commands")
     for slug, proj in reg.projects.items():
         local = _local(reg, machine_name, proj)
@@ -1171,15 +1169,6 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             ))
             outputs += _skill_resource_outputs(skill, resources, "claude-code",
                                                base_dir, policy)
-        for aname in sorted(proj.get("agents") or []):
-            agent = reg.agents[aname]
-            deploy_path = f"{local}/{ag_subdir.rstrip('/')}/{agent.name}.md"
-            outputs.append(Output(
-                target="claude-code", kind="text", deploy_path=deploy_path,
-                dist_rel=f"claude-code/{safe_rel(deploy_path)}",
-                content=render.render_agent(agent, "claude-code"),
-                drift_policy=ag.get("drift_policy", "harvest"), sources=[agent.rel],
-            ))
         for pname in sorted(proj.get("prompts") or []):
             prompt = reg.prompts.get(pname)
             if prompt is None or "claude-code" not in prompt.targets:

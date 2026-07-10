@@ -1617,6 +1617,17 @@ function listRow(p, isFavSection = false) {
 
   row.append(col);
 
+  if (!manageActive) {
+    const rowCopy = el("button", "row-copy ghost tiny", "Copy");
+    rowCopy.title = "Copy prompt body";
+    rowCopy.onclick = (e) => {
+      e.stopPropagation();
+      copyText(currentBody(p), p.name);
+      pushRecent(p.key);
+    };
+    row.append(rowCopy);
+  }
+
   if (isFavSection && !favManageMode) {
     // Native HTML5 drag-and-drop reorders `favorites` in place — no library needed.
     row.draggable = true;
@@ -3293,6 +3304,13 @@ $("cmdk-input").oninput = (e) => renderPaletteResults(e.target.value);
 $("cmdk-input").addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown") { e.preventDefault(); movePaletteSelection(1); }
   else if (e.key === "ArrowUp") { e.preventDefault(); movePaletteSelection(-1); }
+  else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Ctrl/Cmd+Enter copies the highlighted result's body without opening it —
+    // the palette stays open so the user can keep browsing.
+    e.preventDefault();
+    const p = paletteResults[paletteIdx];
+    if (p) { copyText(currentBody(p), p.name); pushRecent(p.key); }
+  }
   else if (e.key === "Enter") { e.preventDefault(); selectPaletteResult(paletteIdx); }
   else if (e.key === "Escape") { e.preventDefault(); closePalette(); }
 });

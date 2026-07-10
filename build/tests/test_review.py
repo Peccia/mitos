@@ -17,20 +17,20 @@ def test_graph_index_lists_local_projects_regardless_of_drive_key():
     # project with no drive key at all — must appear
     rig.projects["proj-no-drive"] = {
         "name": "No Drive", "slug": "proj-no-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
     }
     # project with empty drive dict — the original bug trigger
     rig.projects["proj-empty-drive"] = {
         "name": "Empty Drive", "slug": "proj-empty-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
         "drive": {},
     }
     # project with a populated drive block — must continue to appear
     rig.projects["proj-full-drive"] = {
         "name": "Full Drive", "slug": "proj-full-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
         "drive": {"root_folder": "1abc"},
     }
@@ -52,7 +52,7 @@ def test_graph_index_core_projects_step_aside_when_local_overlay_present():
     # inject exactly one local project
     rig.projects["my-local"] = {
         "name": "My Local", "slug": "my-local", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
     }
 
     result = graph_index(rig)

@@ -16,7 +16,7 @@ import yaml
 from .loader import LOCAL_OVERLAY
 
 ORG_TEMPLATES_DIR = "registry/templates/org"
-OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills", "agents")
+OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 
 
 def org_templates(root: Path) -> list[str]:
