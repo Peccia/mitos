@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mitos"
-version = "0.1.0"
+version = "0.1.1"
 description = "A human-agentic registry and compiler that materializes identity, skills, and context across AI tools."
 readme = "README.md"
 license = "MIT"
