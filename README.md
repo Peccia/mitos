@@ -343,7 +343,10 @@ expands into its role tree, Agent-MD folder view, and a `+ Extend department` bu
 plus `+ ORG` domain creation), and **Prompt Library** (browse, copy, and
 compose your registry prose for one-shot use in any chat app — plus a Ctrl/⌘K command
 palette that searches all of it). It edits the working tree and never commits
-— `git status` shows you exactly what changed. Full guide: [docs/operator-console.md](docs/operator-console.md).
+— `git status` shows you exactly what changed. A status bar can also trigger **Compile**
+and **Deploy** directly from the sidebar, with a pre-deploy plan preview and a live log
+drawer — `--force`/`--prune`/scoped `--lane`/`--target` deploys remain CLI-only. Full
+guide: [docs/operator-console.md](docs/operator-console.md).
 
 ## Commands
 

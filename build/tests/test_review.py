@@ -946,3 +946,130 @@ def test_graph_propose_carries_and_preserves_doc_type():
     assert "Budget (renamed)" in text
     assert '"additionalType": "spreadsheet"' in text, \
         "an upsert without `type` must not wipe the existing annotation"
+
+
+# ── ops: compile/deploy from the console ─────────────────────────────────────
+
+def _wait_until_idle(timeout=5.0):
+    """Poll ops_status() until running is False or timeout — the test analogue of the
+    frontend's poll loop. Bounded so a stuck job fails the test instead of hanging it."""
+    import time
+
+    from agentic.review import ops_status
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snap = ops_status()
+        if not snap["running"]:
+            return snap
+        time.sleep(0.02)
+    raise AssertionError("op did not finish before timeout")
+
+
+def test_ops_status_shape_when_idle():
+    from agentic.review import ops_status
+
+    snap = ops_status()
+    assert snap["running"] is False
+    assert set(snap) == {"running", "kind", "machine", "log", "rc", "started_at", "finished_at"}
+
+
+def test_run_compile_success_and_lock_contention():
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    treg.root = tmp  # dist/ lands in the temp registry, never the real repo's dist/
+
+    result = review.run_compile(treg)
+    assert result["ok"] is True
+    assert result["rc"] == 0
+    assert "compiled" in result["log"]
+    assert (tmp / "dist").is_dir()
+
+    snap = _wait_until_idle()
+    assert snap["kind"] == "compile"
+    assert snap["rc"] == 0
+
+    # a second op while one is (still, or again) mid-flight must be refused, never queued —
+    # simulate contention directly since compile finishes before the harness can race it
+    assert review._OPS_LOCK.acquire(blocking=False)
+    try:
+        assert review.run_compile(treg) == {"ok": False, "error": "an operation is already running"}
+        assert review.run_deploy_apply(treg, "rig") == \
+            {"ok": False, "error": "an operation is already running"}
+    finally:
+        review._OPS_LOCK.release()
+
+
+def test_run_deploy_plan_reflects_compute_deploy_plan():
+    from agentic.commands import compute_deploy_plan
+    from agentic.review import run_deploy_plan
+
+    result = run_deploy_plan(reg, "example-linux")
+    assert result["ok"] is True
+    plan = compute_deploy_plan(reg, "example-linux")
+    assert len(result["statuses"]) == len(plan.statuses)
+    assert {s["path"] for s in result["statuses"]} == {s.output.deploy_path for s in plan.statuses}
+    assert result["blocked_count"] == len(plan.blocked)
+    assert sorted(result["orphans"]) == sorted(plan.orphans)
+
+    assert run_deploy_plan(reg, "no-such-machine") == \
+        {"ok": False, "error": "unknown machine 'no-such-machine'"}
+
+
+def test_run_deploy_plan_surfaces_hard_refusal_for_example_machine():
+    """Regression guard: the preview must warn about a guaranteed refusal (example-template
+    machine) up front — a plan that looks normal but whose Confirm & Deploy would always be
+    refused is worse than not previewing at all."""
+    from agentic.review import run_deploy_plan
+
+    result = run_deploy_plan(reg, "example-linux")
+    assert result["ok"] is True
+    assert result["refusal"] is not None
+    assert "example template" in result["refusal"]
+
+    # a non-example machine profile is not pre-emptively refused (may still have drift, but
+    # that's compute_deploy_plan's softer, recoverable signal — not this hard guard)
+    treg, tmp = _temp_registry()
+    assert run_deploy_plan(treg, "rig")["refusal"] is None
+
+
+def test_deploy_apply_refusal_matches_cmd_deploy_guard_messages():
+    from agentic.commands import cmd_deploy, deploy_apply_refusal
+
+    refusal = deploy_apply_refusal(reg, "example-windows")
+    assert refusal is not None
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=None)
+    assert rc == 2
+    assert refusal in out.getvalue()
+
+
+def test_run_deploy_apply_writes_files_and_updates_ops_state():
+    from agentic import commands, review
+
+    treg, tmp = _temp_registry()
+    root = tmp / "sandbox"
+    # run_deploy_apply always calls cmd_deploy without root=, so point it at a sandbox by
+    # wrapping cmd_deploy for the duration of this test — mirrors how the console never
+    # deploys to real paths from a temp registry rig.
+    orig = commands.cmd_deploy
+    commands.cmd_deploy = lambda r, m, dry_run, force: orig(r, m, dry_run, force, root=root)
+    try:
+        result = review.run_deploy_apply(treg, "rig")
+        assert result == {"ok": True, "started": True}
+        snap = _wait_until_idle()
+        assert snap["kind"] == "deploy"
+        assert snap["machine"] == "rig"
+        assert snap["rc"] == 0
+        assert "deployed" in snap["log"]
+        assert any(root.rglob("SOUL.md"))
+    finally:
+        commands.cmd_deploy = orig
+
+    # unknown machine is rejected before any lock is taken
+    assert review.run_deploy_apply(treg, "no-such-machine") == \
+        {"ok": False, "error": "unknown machine 'no-such-machine'"}

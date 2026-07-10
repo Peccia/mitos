@@ -9,6 +9,7 @@ const LS = {
   favorites: "oc.favorites", recents: "oc.recents", drafts: "oc.drafts",
   draftBase: "oc.draftBase", collapsed: "oc.collapsed", compose: "oc.compose",
   graphDrafts: "oc.graphDrafts", editorOrigin: "oc.editorOrigin",
+  opsMachine: "oc.opsMachine",
 };
 const store = {
   get(key, fallback) {
@@ -70,6 +71,10 @@ let skillFilterText = "";       // client-side search text
 let skillFilterTarget = "";     // filter by target slug, "" = all
 let skillFilterOrg = false;     // filter to only org-domain skills
 let orgSkillViewMode = {};      // skill name -> "role" | "agentsmd" per-skill
+
+// ── Ops (compile/deploy from the console) state ─────────────────────────────
+let opsMachine = store.get(LS.opsMachine, null);  // last-selected deploy target, persisted
+let opsPollTimer = null;                          // setInterval id while an op is running
 
 
 const $ = (id) => document.getElementById(id);
@@ -135,6 +140,7 @@ async function refresh() {
   safeRender($("view-graph"), renderGraph);
   safeRender($("view-skills"), renderSkills);
   safeRender($("prompt-list"), renderPrompts);
+  safeRender($("ops-bar"), renderOpsBar);
 }
 
 
@@ -3295,6 +3301,11 @@ document.addEventListener("keydown", (e) => {
     openPalette();
     return;
   }
+  if (e.key === "Escape" && !$("deploy-confirm").hidden) {
+    e.preventDefault();
+    closeDeployConfirm();
+    return;
+  }
   // Prompt-library shortcuts only apply when that view is active
   if ($("view-prompts").hidden) return;
   const t = e.target;
@@ -3309,6 +3320,184 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); $("search").focus();
   }
 });
+
+// ── Ops: compile/deploy from the console ────────────────────────────────────
+function renderOpsBar() {
+  const badge = $("ops-compile-badge");
+  const sel = $("ops-machine");
+  if (!badge || !sel || !STATE) return;
+  const c = STATE.ops && STATE.ops.compile;
+  if (c) {
+    badge.className = "badge " + (c.stale ? "stale" : "compiled");
+    badge.textContent = c.stale ? `Compile needed (${c.stale_machines.length})` : "Compiled";
+    badge.title = c.stale
+      ? `Stale for: ${c.stale_machines.join(", ")}`
+      : "dist/ matches the current registry";
+  }
+  const machines = STATE.machines || [];
+  const prevValue = sel.value;
+  sel.replaceChildren(...machines.map((m) => {
+    const opt = el("option", null, m);
+    opt.value = m;
+    return opt;
+  }));
+  if (opsMachine && machines.includes(opsMachine)) sel.value = opsMachine;
+  else if (machines.includes(prevValue)) sel.value = prevValue;
+  else if (machines.length) sel.value = machines[0];
+  opsMachine = sel.value || null;
+}
+
+function openOpsDrawer() {
+  $("ops-drawer").hidden = false;
+  $("ops-drawer-body").hidden = false;
+  $("ops-drawer-toggle").textContent = "▾";
+}
+
+function renderOpsSnapshot(snap) {
+  const status = $("ops-drawer-status");
+  const log = $("ops-drawer-log");
+  log.textContent = snap.log || "";
+  log.scrollTop = log.scrollHeight;
+  const verb = snap.kind === "deploy" ? "Deploy" : "Compile";
+  if (snap.running) {
+    status.replaceChildren(el("span", "spinner"),
+      document.createTextNode(`${verb}ing${snap.machine ? " " + snap.machine : ""}…`));
+  } else {
+    status.textContent = snap.rc === 0 ? `${verb} succeeded` : `${verb} failed (rc ${snap.rc})`;
+  }
+}
+
+// No existing setInterval-based polling exists elsewhere in this file — deploy is the one
+// op that can run long enough (repo clones, up to 600s each) to need it; compile always
+// finishes synchronously in the request that starts it.
+function startOpsPolling() {
+  if (opsPollTimer) return;
+  opsPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/ops/status");
+      const snap = await res.json();
+      renderOpsSnapshot(snap);
+      if (!snap.running) {
+        clearInterval(opsPollTimer);
+        opsPollTimer = null;
+        await refresh();
+      }
+    } catch (err) {
+      console.error(err);
+      clearInterval(opsPollTimer);
+      opsPollTimer = null;
+    }
+  }, 700);
+}
+
+async function runCompile() {
+  try {
+    const res = await fetch("/api/ops/compile", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const out = await res.json();
+    if (!out.ok) { toast(`Error: ${out.error}`, 5000); return; }
+    openOpsDrawer();
+    renderOpsSnapshot({ running: false, kind: "compile", log: out.log, rc: out.rc });
+    toast(out.rc === 0 ? "Compiled." : `Compile failed (rc ${out.rc}).`, 4000);
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to compile: ${err.message || err}`, 6000);
+  }
+}
+
+function renderDeployPlan(plan) {
+  const body = $("deploy-confirm-body");
+  const goBtn = $("deploy-confirm-go");
+  body.replaceChildren();
+  if (plan.refusal) {
+    // a hard, machine-level guard (example template / OS mismatch) — this deploy will be
+    // refused outright, before any file is even considered. Disable Confirm rather than
+    // let the operator find out only after clicking it and reading the log drawer.
+    body.append(el("div", "accept-note warning-callout", plan.refusal));
+    goBtn.disabled = true;
+    goBtn.title = "This deploy will be refused — see the message above.";
+  } else {
+    goBtn.disabled = false;
+    goBtn.title = "";
+  }
+  if (!plan.statuses.length) {
+    body.append(el("div", "empty-state", "Nothing planned for this machine."));
+  }
+  for (const s of plan.statuses) {
+    const row = el("div", "deploy-plan-row" + (s.blocked ? " is-blocked" : ""));
+    row.append(el("span", "plan-state", s.state));
+    row.append(el("span", "plan-path", s.path));
+    if (s.detail) row.append(el("span", "plan-detail", `— ${s.detail}`));
+    if (s.blocked) row.append(el("span", "badge blocked", "blocked"));
+    body.append(row);
+  }
+  if (plan.blocked_count) {
+    body.append(el("div", "accept-note warning-callout",
+      `${plan.blocked_count} protected file(s) are drifted — deploy will refuse and change `
+      + `nothing until resolved via adopt/harvest.`));
+  }
+  const section = (label, items, render) => {
+    if (!items.length) return;
+    const sec = el("div", "deploy-plan-section");
+    sec.append(el("h4", null, `${items.length} ${label}`));
+    for (const item of items) sec.append(el("div", "deploy-plan-row", render(item)));
+    body.append(sec);
+  };
+  section("orphan(s) — kept on disk (--prune is CLI-only)", plan.orphans, (p) => p);
+  section("skill warning(s)", plan.skill_warnings, (w) => w);
+  section("repo clone(s)", plan.clones,
+    (c) => `${c.dest} — ${c.present ? "present, untouched" : "absent -> will clone"}`);
+}
+
+async function openDeployConfirm() {
+  const machine = opsMachine || ($("ops-machine") && $("ops-machine").value);
+  if (!machine) { toast("No machine selected."); return; }
+  $("deploy-confirm-machine").textContent = machine;
+  const body = $("deploy-confirm-body");
+  const goBtn = $("deploy-confirm-go");
+  body.replaceChildren(el("div", "empty-state", "Loading plan…"));
+  goBtn.disabled = true;
+  goBtn.title = "";
+  $("deploy-confirm").hidden = false;
+  try {
+    const res = await fetch("/api/ops/deploy/plan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine }),
+    });
+    const out = await res.json();
+    if (!out.ok) {
+      body.replaceChildren(el("div", "empty-state", `Error: ${out.error}`));
+      return;
+    }
+    renderDeployPlan(out);
+  } catch (err) {
+    console.error(err);
+    body.replaceChildren(el("div", "empty-state", `Failed to load plan: ${err.message || err}`));
+  }
+}
+
+function closeDeployConfirm() { $("deploy-confirm").hidden = true; }
+
+async function confirmDeploy() {
+  const machine = $("deploy-confirm-machine").textContent;
+  closeDeployConfirm();
+  try {
+    const res = await fetch("/api/ops/deploy/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine }),
+    });
+    const out = await res.json();
+    if (!out.ok) { toast(`Error: ${out.error}`, 5000); return; }
+    openOpsDrawer();
+    renderOpsSnapshot({ running: true, kind: "deploy", machine, log: "" });
+    startOpsPolling();
+  } catch (err) {
+    console.error(err);
+    toast(`Failed to start deploy: ${err.message || err}`, 6000);
+  }
+}
 
 // sidebar navigation
 $("nav-inbox").onclick = () => showTab("inbox");
@@ -3330,6 +3519,21 @@ $("graph-dock-reason").addEventListener("keydown", (e) => {
 $("graph-dock-propose-accept").onclick = () => proposeGraphDraft(graphSlug, null, true);
 $("graph-dock-discard").onclick = () => discardGraphDraft();
 $("refresh").onclick = () => refresh().then(() => toast("Reloaded from disk."));
+$("nav-compile").onclick = () => runCompile();
+$("nav-deploy").onclick = () => openDeployConfirm();
+$("ops-machine").onchange = () => {
+  opsMachine = $("ops-machine").value || null;
+  store.set(LS.opsMachine, opsMachine);
+};
+$("ops-drawer-toggle").onclick = () => {
+  const body = $("ops-drawer-body");
+  body.hidden = !body.hidden;
+  $("ops-drawer-toggle").textContent = body.hidden ? "▸" : "▾";
+};
+$("ops-drawer-dismiss").onclick = () => { $("ops-drawer").hidden = true; };
+$("deploy-confirm-cancel").onclick = () => closeDeployConfirm();
+$("deploy-confirm-go").onclick = () => confirmDeploy();
+$("deploy-confirm").onclick = (e) => { if (e.target.id === "deploy-confirm") closeDeployConfirm(); };
 $("search").oninput = () => renderList();
 $("compose-copy").onclick = () => copyText(composeOutput(), "composed prompt");
 $("compose-clear").onclick = () => {

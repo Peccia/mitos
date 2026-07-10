@@ -25,7 +25,7 @@ from . import loader, lockfile, render
 from .io import (dump_json, expand, safe_rel, sha256, write_bytes, write_text,
                  zip_bytes, zip_bytes_multiple)
 from .loader import Registry
-from .planner import Output, plan_clones, plan_machine, skill_deploy_warnings
+from .planner import CloneSpec, Output, plan_clones, plan_machine, skill_deploy_warnings
 
 _ruamel = YAML()
 _ruamel.preserve_quotes = True
@@ -179,6 +179,31 @@ def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -
         print(f"  (skipped {len(skipped)} example template(s): {', '.join(skipped)} — "
               f"copy one into registry/local/machines/ to make it your own)")
     return 0
+
+
+def compile_status(reg: Registry, dist_dir: Path) -> dict:
+    """Read-only: does the registry's current render match what's already in dist_dir/?
+    Compares a fresh plan_machine() hash per output against the hashes cmd_compile recorded
+    in each machine's manifest.json — no writes, safe to call on every console refresh."""
+    real = [n for n, m in reg.machines.items() if not m.get("example")]
+    machine_names = real or list(reg.machines)
+    stale_machines = []
+    for machine_name in machine_names:
+        manifest_path = dist_dir / machine_name / "manifest.json"
+        if not manifest_path.is_file():
+            stale_machines.append(machine_name)
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            stale_machines.append(machine_name)
+            continue
+        recorded = {f["dist_rel"]: f["hash"] for f in manifest.get("files", [])}
+        current = {o.dist_rel: sha256(_payload(o)) for o in plan_machine(reg, machine_name)}
+        if current != recorded:
+            stale_machines.append(machine_name)
+    return {"stale": bool(stale_machines), "stale_machines": stale_machines,
+            "checked_machines": machine_names}
 
 
 # ── classification (shared by deploy / diff / harvest) ───────────────────────
@@ -340,28 +365,43 @@ def _checkout_present(dest: Path) -> bool:
 
 
 # ── deploy ───────────────────────────────────────────────────────────────────
-def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
-               root: Path | None = None, lane: str = "all",
-               prune: bool = False, target: str | None = None) -> int:
-    if machine not in reg.machines:
-        print(f"error: unknown machine {machine!r}")
-        return 2
-    # Example machines are templates: previewing (--dry-run) or sandboxing (--root) is fine,
-    # but refuse a real deploy to live paths — copy it into registry/local/machines/ first.
-    if reg.machines[machine].get("example") and not dry_run and root is None:
-        print(f"refusing to deploy example template {machine!r} to real paths. Copy "
-              f"machines/{machine}.yaml into registry/local/machines/, rename and customize "
-              f"it, then deploy that. (Preview with --dry-run, or sandbox with --root <dir>.)")
-        return 2
-    if target and target not in reg.targets and target != "env":
-        print(f"error: unknown target {target!r}")
-        return 2
+def deploy_apply_refusal(reg: Registry, machine: str) -> str | None:
+    """The message a real, non-sandboxed deploy of `machine` (dry_run=False, root=None) would
+    print and refuse with before computing any plan at all — the two hard, machine-level
+    guards in cmd_deploy below. None if a real apply is not pre-emptively blocked (drift/
+    orphan/blocked-file concerns are a separate, softer signal from compute_deploy_plan —
+    those are recoverable and safe to preview even when present; these two are not)."""
+    if reg.machines[machine].get("example"):
+        return (f"refusing to deploy example template {machine!r} to real paths. Copy "
+                f"machines/{machine}.yaml into registry/local/machines/, rename and customize "
+                f"it, then deploy that. (Preview with --dry-run, or sandbox with --root <dir>.)")
     machine_os = reg.machines[machine].get("os")
-    if root is None and machine_os and machine_os != _local_os():
-        print(f"error: machine {machine!r} is {machine_os!r} but this host is "
-              f"{_local_os()!r} — refusing to write into this host's filesystem.\n"
-              f"Use --root <dir> to rehearse this deploy into a sandbox tree.")
-        return 2
+    if machine_os and machine_os != _local_os():
+        return (f"error: machine {machine!r} is {machine_os!r} but this host is "
+                f"{_local_os()!r} — refusing to write into this host's filesystem.\n"
+                f"Use --root <dir> to rehearse this deploy into a sandbox tree.")
+    return None
+
+
+@dataclass
+class DeployPlan:
+    """The read-only half of a deploy: everything cmd_deploy needs to print a plan (or an
+    API caller needs to render a preview) before any file is written. Computed fresh every
+    call — cheap (no I/O beyond reading the lockfile), safe to call anytime, including while
+    another deploy is mid-flight."""
+    outputs: list[Output]
+    statuses: list[Status]
+    orphans: list[str]
+    blocked: list[Status]
+    clones: list[CloneSpec]
+    skill_warnings: list[str]
+    lock: dict
+    lock_base: Path
+    prior: dict
+
+
+def compute_deploy_plan(reg: Registry, machine: str, root: Path | None = None,
+                        lane: str = "all", target: str | None = None) -> DeployPlan:
     lock_base = root if root is not None else reg.root
     lock = lockfile.load(lock_base)
 
@@ -386,6 +426,43 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
 
     blocked = [s for s in statuses
                if s.state in ("drift", "conflict") and s.output.drift_policy == "protect"]
+    # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
+    # targets (hermes/claude-app) receiving a scope: project skill. Warn-only — nothing
+    # here changes what deploys, it just makes a previously silent filter visible.
+    skill_warnings = (skill_deploy_warnings(reg, machine)
+                       if target is None and lane in ("all", "content") else [])
+    # repo clones into the Agentic Context tree (claude-code env only; full deploys only).
+    clones = (plan_clones(reg, machine)
+              if target is None and lane in ("all", "content") else [])
+    return DeployPlan(outputs=outputs, statuses=statuses, orphans=orphans, blocked=blocked,
+                      clones=clones, skill_warnings=skill_warnings, lock=lock,
+                      lock_base=lock_base, prior=prior)
+
+
+def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
+               root: Path | None = None, lane: str = "all",
+               prune: bool = False, target: str | None = None) -> int:
+    if machine not in reg.machines:
+        print(f"error: unknown machine {machine!r}")
+        return 2
+    # Example machines are templates: previewing (--dry-run) or sandboxing (--root) is fine,
+    # but refuse a real deploy to live paths — copy it into registry/local/machines/ first.
+    if reg.machines[machine].get("example") and not dry_run and root is None:
+        print(deploy_apply_refusal(reg, machine))
+        return 2
+    if target and target not in reg.targets and target != "env":
+        print(f"error: unknown target {target!r}")
+        return 2
+    machine_os = reg.machines[machine].get("os")
+    if root is None and machine_os and machine_os != _local_os():
+        print(deploy_apply_refusal(reg, machine))
+        return 2
+
+    plan = compute_deploy_plan(reg, machine, root=root, lane=lane, target=target)
+    lock, lock_base, prior = plan.lock, plan.lock_base, plan.prior
+    outputs, statuses, orphans, blocked = plan.outputs, plan.statuses, plan.orphans, plan.blocked
+    clones, skill_warnings = plan.clones, plan.skill_warnings
+
     sandbox = f", sandbox root {root}" if root is not None else ""
     lane_note = f", lane {lane}" if lane != "all" else ""
     target_note = f", target {target}" if target else ""
@@ -405,18 +482,10 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         print(f"  {len(orphans)} orphan(s) — previously deployed, no longer planned ({note}):")
         for p in orphans:
             print(f"  [orphan   ] {p}")
-    # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
-    # targets (hermes/claude-app) receiving a scope: project skill. Warn-only — nothing
-    # here changes what deploys, it just makes a previously silent filter visible.
-    if target is None and lane in ("all", "content"):
-        skill_warnings = skill_deploy_warnings(reg, machine)
-        if skill_warnings:
-            print(f"  {len(skill_warnings)} skill warning(s):")
-            for w in skill_warnings:
-                print(f"  [warn     ] {w}")
-    # repo clones into the Agentic Context tree (claude-code env only; full deploys only).
-    clones = (plan_clones(reg, machine)
-              if target is None and lane in ("all", "content") else [])
+    if skill_warnings:
+        print(f"  {len(skill_warnings)} skill warning(s):")
+        for w in skill_warnings:
+            print(f"  [warn     ] {w}")
     if clones:
         print(f"  {len(clones)} repo clone(s) (clone-if-absent; existing checkouts left "
               f"untouched):")

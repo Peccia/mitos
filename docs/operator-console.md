@@ -8,6 +8,8 @@ Run the console to:
 3. Browse, create, and edit skills — including supporting files and org-role extensions — and
    visualize your simulated org structure (**Skills & Orgs**).
 4. Search, compose, and copy-paste registry prompts for one-shot chat sessions (**Prompt Library**).
+5. Compile the registry and deploy to a machine directly, with a plan preview before you
+   confirm and a live log of what ran (**Status bar**, above every tab).
 
 ---
 
@@ -26,6 +28,29 @@ build/.venv/Scripts/python.exe build/compile.py review
 ### Options:
 - `--port <number>`: Change the local port (default is `8765`). Useful if another application is binding to the default port.
 - `--no-open`: Start the server without automatically launching your default web browser.
+
+---
+
+## ⚙️ The Status Bar: Compile & Deploy
+
+A slim bar sits above every tab: a **Compile** badge (green "Compiled" when `dist/` matches
+the current registry, orange "Compile needed" otherwise) and a machine selector for the
+**Deploy** button. Both actions also live as icon buttons in the sidebar footer, next to
+Reload.
+
+- **Compile** (⚙ icon) runs the registry render into `dist/` and opens the log drawer with
+  the result — the same work `compile.py compile` does from the CLI.
+- **Deploy** (↓ icon) first shows a **plan preview**: every output's classification
+  (`create`/`unchanged`/`drift`/`conflict`/…), orphans, skill warnings, and repo clones for
+  the selected machine — exactly what `deploy --dry-run` would print. Protected drift is
+  flagged but never silently bypassed: the console never sends `--force`, so a blocked file
+  still blocks the deploy (resolve it with `adopt`/`harvest` first). Click **Confirm &
+  Deploy** to run it for real; a log drawer tracks progress and the final result.
+- `--force`, `--prune`, and scoped `--lane`/`--target` deploys stay CLI-only — those bypass
+  safety checks or narrow the deploy in ways that deserve a typed, deliberate command rather
+  than a button.
+- Only one compile or deploy runs at a time; starting a second while one is in flight is
+  refused, not queued.
 
 ---
 
