@@ -2420,9 +2420,13 @@ function skillRow(s, domain) {
     actBar.append(editBtn);
     body.append(actBar);
 
-    body.append(renderSkillFilesSection(s));
-    body.append(renderSkillExtensionSection(s));
-    body.append(renderSkillScopeSection(s));
+    const detailGrid = el("div", "skill-detail-grid");
+    detailGrid.append(renderSkillFilesSection(s));
+    const detailCol = el("div", "skill-detail-col");
+    detailCol.append(renderSkillExtensionSection(s));
+    detailCol.append(renderSkillScopeSection(s));
+    detailGrid.append(detailCol);
+    body.append(detailGrid);
 
     // Org structure panel — only for org-domain skills
     if (domain && orgData && orgData[domain]) {

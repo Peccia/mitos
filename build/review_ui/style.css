@@ -1,6 +1,15 @@
 /* ── Fonts ───────────────────────────────────────────────────────────────── */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
+/* ── z-index ramp (low → high; every fixed-position element lives here) ─────
+   8  #compose / #graph-dock (bottom docks, mutually exclusive by tab)
+   9  #ops-drawer
+   10 #sidebar
+   12 #toast
+   50 #deploy-confirm
+   100 #cmdk (command palette — always wins over the deploy modal)          */
+body { isolation: isolate; }
+
 /* ── Design tokens ───────────────────────────────────────────────────────── */
 :root {
   --font-sans: "Inter", system-ui, "Segoe UI", sans-serif;
@@ -17,7 +26,7 @@
 
   /* workspace — adapts to system preference */
   --bg: #f6f7f9;
-  --panel: #ffffff;
+  --panel: #fafbfc;
   --ink: #1b1f24;
   --muted: #6a737d;
   --line: #d8dee4;
@@ -1109,7 +1118,7 @@ details.payload pre {
   align-items: flex-start;
   justify-content: center;
   padding-top: 8vh;
-  z-index: 100;
+  z-index: 50;
 }
 #deploy-confirm-panel {
   width: min(680px, 92vw);
@@ -1496,6 +1505,14 @@ details.payload pre {
   text-transform: uppercase;
   letter-spacing: .04em;
 }
+
+.skill-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 860px) { .skill-detail-grid { grid-template-columns: 1fr; } }
 
 .new-skill-form h3 { margin: 0 0 .8rem; }
 .target-checks { display: flex; flex-wrap: wrap; gap: .8rem; }
