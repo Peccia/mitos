@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-07-11
+
+### Added
+- Feature: Multi-store `document_store` support — a project or machine can draw its knowledge graph from more than one document store at once, with per-store document tagging and one generated section per store in `AGENTS.md`/`AGENTS_DETAILS.md`.
+- Feature: Diff-aware graph candidate review — the Inbox shows an added/changed/removed summary for knowledge-graph candidates instead of only a raw line diff, and de-emphasizes (never hides) Accept for true no-ops.
+- UI: Hover-revealed row-level Copy button on every Prompt Library row, and Ctrl/Cmd+Enter in the command palette to copy without closing it.
+- UI: Compact E/M draft-state badges (replacing the old "edited"/"base moved" text tags), shared between the Prompt Library and Skills & Orgs tabs, plus a fullscreen toggle on the contextual editor.
+
+### Changed
+- Refactored: Retired the Claude Code subagents lane (`registry/agents/`, the `agents:` manifest field, `Agent`/`render_agent`) — skills already cover the reusable-behavior story, and Claude Code ships a built-in code-reviewer agent.
+- UI: Console visual-craft cleanup — softened the light-mode panel color, fixed a z-index collision between the deploy-confirm modal and the command palette, and split the expanded skill card into a two-column layout.
+- UI: Unified filter-chip padding/font-size across the Prompt Library and Skills & Orgs tabs so the same control looks identical in both places.
+
+### Fixed
+- Fix: A CSS specificity bug that squashed the Favorites "Manage"/"Unpin selected" buttons to crushed padding.
+- Fix: The New Skill form being clipped by an inherited max-height, and guarded the Project scope option against selection when a skill has no bound projects.
+
+### Breaking Changes
+- Any project manifest with an `agents:` field now fails validation at compile time — remove the field; skills cover the same reusable-behavior story.
+
 ## [0.1.1] - 2026-07-09
 
 ### Added
