@@ -618,6 +618,19 @@ details.payload pre {
 /* the list-scoped filter — narrower and quieter than the old global topbar search,
    since finding anything across the whole registry is now the command palette's job */
 .prompt-search { margin-left: auto; }
+/* Static legend for the E/M draft-state badges — lives in the always-visible toolbar
+   (not the scrollable list) so it never needs re-rendering and is never scrolled away. */
+.state-legend {
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  margin-left: .7rem;
+  font-size: .72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.state-legend .state-badge { margin-left: 0; }
+.state-legend span + .state-badge { margin-left: .5rem; }
 #search {
   font: inherit;
   font-size: .82rem;
@@ -632,7 +645,8 @@ details.payload pre {
 #search:focus { outline: none; border-color: var(--accent); }
 .chip {
   font-size: .8rem;
-  padding: .2rem .7rem;
+  font-weight: 500;
+  padding: .25rem .75rem;
   border-radius: 999px;
   color: var(--muted);
   background: none;
@@ -640,6 +654,11 @@ details.payload pre {
 }
 .chip:hover:not(.active) { color: var(--ink); }
 .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* `.chip` + `.tiny` (Favorites' Manage/Done/Unpin-selected) previously lost this fight:
+   `button.tiny` (element+class) outranks `.chip` (class-only) on CSS specificity alone,
+   so the base tiny-button padding (.05rem .35rem) silently won and squashed these pills
+   next to the full-size chips in the same row. This rule outranks both on purpose. */
+button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 
 #prompt-split {
   display: grid;
@@ -728,8 +747,30 @@ details.payload pre {
   padding: .02rem .32rem;
 }
 .row-tag + .row-tag { margin-left: .3rem; }
-.row-tag.edited { background: var(--warn-bg); color: var(--warn); }
-.row-tag.stale { background: var(--bad-bg, transparent); color: var(--bad); border: 1px solid var(--bad); }
+
+/* Compact E/M draft-state badges — replace the old "edited"/"base moved" text tags.
+   Letter + color carries the severity (E = in-progress, M = needs a look before
+   saving); the title attribute carries the full explanation, same as the tags they
+   replace. `.state-badge` inherits `.row-tag`'s self-right-align-then-collapse trick:
+   the first badge's margin-left:auto pushes the pair to the row's right edge, and the
+   fixed gap below keeps a second badge from re-triggering that push. */
+.state-badge {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1em;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: .66rem;
+  line-height: 1;
+  border-radius: 4px;
+  padding: .1rem .28rem;
+}
+.row-tag + .state-badge, .state-badge + .row-tag, .state-badge + .state-badge { margin-left: .3rem; }
+.state-badge.edited { background: var(--warn-bg); color: var(--warn); }
+.state-badge.stale { background: var(--bad-bg, transparent); color: var(--bad); border: 1px solid var(--bad); }
 .row-copy {
   flex: none;
   align-self: center;
@@ -905,6 +946,18 @@ details.payload pre {
 }
 
 /* ── Contextual Editor: toolbar + line-nums gutter + textarea (+ optional preview) */
+.ce-root.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  padding: .8rem 1rem 1rem;
+  overflow: auto;
+}
+.ce-root.fullscreen .editor-wrap { flex: 1; margin-bottom: 0; }
+.ce-root.fullscreen .editor-wrap textarea { min-height: 0; height: 100%; }
 .editor-toolbar {
   display: flex;
   align-items: center;
@@ -1308,9 +1361,13 @@ details.payload pre {
 .left-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 
 .pool-toggle { display: inline-flex; gap: .3rem; }
+/* Same geometry as `.chip` (padding, font-size, font-weight) — both are pill-shaped
+   filter/toggle controls and should read as one system across tabs; `.pool-opt` keeps
+   its own class because it's a segmented control (mutually exclusive), not a filter
+   row, and needs its own `background` (sits on cards/panels, not a bare toolbar). */
 .pool-opt {
   border: 1px solid var(--line); border-radius: 999px;
-  font-size: .76rem; font-weight: 500; padding: .25rem .75rem;
+  font-size: .8rem; font-weight: 500; padding: .25rem .75rem;
   color: var(--muted); background: var(--panel);
   transition: background .15s ease, color .15s ease, border-color .15s ease;
 }

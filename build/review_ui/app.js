@@ -1608,6 +1608,30 @@ function appendSection(list, gid, label, items) {
   for (const p of items) list.append(listRow(p, isFav));
 }
 
+// ── draft-state badges: compact E/M letters replacing the old "edited"/"base moved"
+// text tags. E = pending draft; M = the draft's base has since changed in the registry
+// (Save to Inbox would diff against stale text — the more urgent of the two, so it's
+// always second and colored as a warning rather than a sibling state). Keyed the same
+// way as `drafts`/`draftBase` (prompt key, e.g. "skill:plan"), so the Prompt Library
+// list and a skill's card in Skills & Orgs read the exact same state and can never
+// disagree. `body` is the CALLER's current registry body for that key (p.body for a
+// prompt-library row, s.body for a skill card) — needed to detect staleness.
+function draftStateBadges(key, body) {
+  if (drafts[key] == null) return [];
+  const edited = el("span", "state-badge edited", "E");
+  edited.title = "Unsaved draft — edited since the registry copy";
+  edited.setAttribute("aria-label", "Edited");
+  const out = [edited];
+  if (draftBase[key] != null && draftBase[key] !== body) {
+    const stale = el("span", "state-badge stale", "M");
+    stale.title = "The registry file changed since this draft was started — review "
+      + "before saving, the old base is no longer what Save to Inbox would diff against.";
+    stale.setAttribute("aria-label", "Base moved");
+    out.push(stale);
+  }
+  return out;
+}
+
 function listRow(p, isFavSection = false) {
   const row = el("div", "list-row" + (p.key === selectedKey ? " active" : ""));
   row.dataset.key = p.key;
@@ -1640,15 +1664,7 @@ function listRow(p, isFavSection = false) {
   const name = el("span", "row-name", p.label);
   name.title = p.name;
   line1.append(name);
-  if (drafts[p.key] != null) {
-    line1.append(el("span", "row-tag edited", "edited"));
-    if (draftBase[p.key] != null && draftBase[p.key] !== p.body) {
-      const tag = el("span", "row-tag stale", "base moved");
-      tag.title = "The registry file changed since this draft was started — review "
-        + "before saving, the old base is no longer what Save to Inbox would diff against.";
-      line1.append(tag);
-    }
-  }
+  for (const badge of draftStateBadges(p.key, p.body)) line1.append(badge);
   if (compose.items.includes(p.key)) line1.append(el("span", "row-tag", "compose"));
   col.append(line1);
   if (p.desc) {
@@ -1814,6 +1830,25 @@ function buildContextualEditor(opts) {
   const previewToggle = el("button", "tiny ghost", "Preview");
   previewToggle.type = "button";
   toolbar.append(previewToggle);
+
+  // Fullscreen toggle — a pure CSS class swap (.ce-root.fullscreen fixes the whole
+  // editor over the viewport), no layout library needed. Escape exits from anywhere,
+  // matching the convention every other overlay in this app already uses (cmdk, drawers).
+  const fullscreenToggle = tbtn("⤢", "Toggle fullscreen", () => {
+    root.classList.toggle("fullscreen");
+    fullscreenToggle.classList.toggle("active", root.classList.contains("fullscreen"));
+    ta.focus();
+  });
+  toolbar.append(fullscreenToggle);
+  // Scoped to `root` (not document) so it only ever fires while focus is somewhere
+  // inside this editor instance, and needs no manual teardown — once a re-render
+  // detaches `root` from the DOM, it stops receiving bubbled events on its own.
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && root.classList.contains("fullscreen")) {
+      root.classList.remove("fullscreen");
+      fullscreenToggle.classList.remove("active");
+    }
+  });
 
   const editorWrap = el("div", "editor-wrap");
   const gutter = el("div", "line-nums");
@@ -2232,6 +2267,12 @@ function renderDetail() {
   const metaPanel = buildMetaPanel(p);
   if (metaPanel) box.append(metaPanel);
 
+  // Tracks the edited/not-edited transition so the sidebar's E/M badge appears the
+  // moment a draft starts (or clears the moment it's undone back to the registry text)
+  // instead of waiting for some unrelated action (search, favorite, tab switch) to
+  // happen to call renderList() next. Gated on the transition, not every keystroke —
+  // draftBase only pins once per draft, so the badge state can't change mid-typing.
+  let wasEditing = drafts[p.key] != null;
   const editor = buildContextualEditor({
     value: drafts[p.key] != null ? drafts[p.key] : p.body,
     onInput(value) {
@@ -2242,6 +2283,8 @@ function renderDetail() {
       }
       store.set(LS.drafts, drafts);
       store.set(LS.draftBase, draftBase);
+      const isEditing = drafts[p.key] != null;
+      if (isEditing !== wasEditing) { wasEditing = isEditing; renderList(); }
     },
     statusText(value) {
       const modified = drafts[p.key] != null;
@@ -2428,16 +2471,19 @@ function skillRow(s, domain) {
   }
   if (s.description) header.append(el("span", "muted skill-row-desc", s.description));
 
-  // target chips pinned to the right of the header
+  // right-aligned cluster: draft-state badges (if this skill's SKILL.md has a pending
+  // Prompt Library edit — same drafts/draftBase state, so the card can never disagree
+  // with the Prompt Library row) followed by target chips, sharing one right-alignment.
+  const rightBox = el("div", "doc-tags skill-row-targets");
+  for (const badge of draftStateBadges(`skill:${s.name}`, s.body)) rightBox.append(badge);
   if (s.targets && s.targets.length) {
-    const chips = el("div", "doc-tags skill-row-targets");
     for (const t of s.targets) {
       const chip = el("span", "tag-chip", t);
       chip.dataset.target = t;
-      chips.append(chip);
+      rightBox.append(chip);
     }
-    header.append(chips);
   }
+  if (rightBox.children.length) header.append(rightBox);
 
   header.onclick = () => {
     expandedSkillName = isOpen ? null : s.name;
