@@ -328,6 +328,10 @@ button.accept:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 button.accept:active:not(:disabled) { transform: translateY(0); }
+/* A no-op graph candidate (c.no_changes) — de-emphasized, never hidden/disabled: fully
+   clickable, just visually quieter than a real change waiting for review. */
+button.accept.deemphasized { opacity: .55; box-shadow: none; }
+button.accept.deemphasized:hover:not(:disabled) { opacity: .8; }
 button.reject {
   background: linear-gradient(135deg, #f43f5e, #e11d48);
   border-color: #e11d48;
@@ -556,6 +560,30 @@ select:focus, textarea:focus {
 }
 .diff-fold:hover { color: var(--accent); }
 .hidden-row { display: none; }
+
+/* batch2 item 2: the concise added/changed/removed summary for a graph candidate — the
+   full line diff moves behind the details.payload disclosure below. */
+.doc-delta { padding: .5rem .9rem; display: flex; flex-direction: column; gap: .35rem; }
+.doc-delta-row {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .3rem .5rem;
+  border-left: 3px solid var(--line);
+  border-radius: 2px;
+  font-size: .85rem;
+}
+.doc-delta-row.ins { background: var(--ok-bg); border-left-color: var(--ok); }
+.doc-delta-row.chg { background: var(--chg-bg); border-left-color: var(--accent); }
+.doc-delta-row.del { background: var(--bad-bg); border-left-color: var(--bad); }
+.doc-delta-label { font-weight: 600; white-space: nowrap; }
+.doc-delta-ids {
+  font-family: var(--mono);
+  font-size: .78rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.doc-delta-note { margin: 0; }
 
 details.payload { border-top: 1px solid var(--line); }
 details.payload summary { padding: .4rem .9rem; cursor: pointer; color: var(--muted); }

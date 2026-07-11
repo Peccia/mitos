@@ -231,6 +231,38 @@ function inboxListRow(c) {
   return row;
 }
 
+// batch2 item 2 (diff-aware candidates): a graph candidate's added/changed/removed
+// document IDs (review._doc_delta, computed store-scoped so a store-A candidate never
+// flags store-B's documents) — the concise view; the full line diff over the merged
+// JSON-LD moves behind a <details> disclosure in candidateCard so re-running `connect`
+// on a whole store doesn't bury the reviewer in unchanged lines.
+function docDeltaSummary(c) {
+  const box = el("div", "doc-delta");
+  const delta = c.doc_delta || {};
+  const added = delta.added || [], changed = delta.changed || [], removed = delta.removed || [];
+  if (c.no_changes) {
+    box.append(el("div", "muted card-note",
+      "No changes — every document in this enumeration already matches the registry."));
+    return box;
+  }
+  const row = (label, ids, cls) => {
+    if (!ids.length) return;
+    const r = el("div", "doc-delta-row " + cls);
+    r.append(el("span", "doc-delta-label", `${label} (${ids.length})`));
+    r.append(el("code", "doc-delta-ids", ids.join(", ")));
+    box.append(r);
+  };
+  row("Added", added, "ins");
+  row("Changed", changed, "chg");
+  row("Not in this enumeration", removed, "del");
+  if (removed.length) {
+    box.append(el("p", "muted doc-delta-note",
+      "These exist in the registry but weren't returned by this enumeration — they are "
+      + "NOT being removed. Propose an explicit removal separately if that's intended."));
+  }
+  return box;
+}
+
 function candidateCard(c) {
   const card = el("article", "card");
 
@@ -284,6 +316,12 @@ function candidateCard(c) {
 
   if (c.kind === "new") {
     card.append(el("div", "muted card-note", "New file — nothing to diff against; see the proposed text below."));
+  } else if (c.kind === "graph") {
+    card.append(docDeltaSummary(c));
+    const fullDiff = el("details", "payload");
+    fullDiff.append(el("summary", "", "Full graph diff (raw)"));
+    fullDiff.append(diffTable(c.diff));
+    card.append(fullDiff);
   } else {
     card.append(diffTable(c.diff));
   }
@@ -299,6 +337,10 @@ function candidateCard(c) {
   reason.placeholder = "Reason (optional — logged to decisions.jsonl)";
   const isStale = c.stale === true && c.acceptable;
   const accept = el("button", "accept", isStale ? "Force accept" : "Accept");
+  // A no-op graph candidate (nothing added/changed/removed) is de-emphasized, never
+  // hidden or disabled — the server-side accept path stays the real check regardless
+  // (same force-accept principle as the stale-registry gate above).
+  if (c.no_changes) accept.classList.add("deemphasized");
   const reject = el("button", "reject", "Reject");
   reject.onclick = () => sendDecision(c.id, "reject", reason.value);
   const copy = el("button", "ghost", "Copy proposed");

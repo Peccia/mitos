@@ -347,7 +347,10 @@ Nothing writes the graph directly. Inspect any project with
 ## Operator console
 
 `python build/compile.py review` opens a localhost web console with four tabs: **Inbox**
-(review/accept/reject every candidate against a live diff), **Knowledge Graph** (propose
+(review/accept/reject every candidate against a live diff — a `kind: graph` candidate shows
+a concise added/changed/removed document summary first, full line diff behind a toggle, so
+re-running `connect` on a whole store doesn't bury what's new under unchanged lines),
+**Knowledge Graph** (propose
 document mappings and tag efforts with the org domain that governs them), **Skills & Orgs**
 (browse, create, and edit skills as cards — including supporting files under `examples/`/
 `scripts/` and org-role extensions via `extends_skill`/`extends_role`; each org-domain card
