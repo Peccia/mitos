@@ -2626,6 +2626,7 @@ function renderSkillExtensionSection(s) {
 function renderSkillScopeSection(s) {
   const key = `skill:${s.name}`;
   const section = el("div", "skill-extension-section");
+  const hasProjects = !!(s.bound_projects && s.bound_projects.length);
 
   const header = el("div", "resources-panel-header");
   header.append(el("h4", "", "Scope"));
@@ -2640,7 +2641,17 @@ function renderSkillScopeSection(s) {
   function refreshActionState() {
     const d = metaDrafts[key];
     const hasDraft = !!d && ("scope" in d);
-    save.disabled = !hasDraft;
+    // Block save when the effective scope is "project" but no project manifest
+    // lists this skill — saving that state would produce an inbox candidate that
+    // deploys the skill nowhere, which is never useful.
+    const effectiveScope = (d && "scope" in d) ? d.scope : (s.frontmatter.scope || "global");
+    const projectBlocksSave = effectiveScope === "project" && !hasProjects;
+    save.disabled = !hasDraft || projectBlocksSave;
+    if (projectBlocksSave) {
+      save.title = "Add this skill to a project's registry/projects/<slug>.yaml first";
+    } else {
+      save.title = "Propose this skill's scope as an inbox candidate";
+    }
     revert.disabled = !hasDraft;
     badge.classList.toggle("hidden", !hasDraft);
   }
@@ -2648,9 +2659,13 @@ function renderSkillScopeSection(s) {
   const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
   const scopeRow = el("div", "meta-grid");
   const scopeSelect = el("select");
-  for (const [val, label] of [["global", "Global"], ["project", "Project"]]) {
+  for (const [val, label] of [
+    ["global", "Global"],
+    ["project", hasProjects ? "Project" : "Project (configure in a project manifest first)"],
+  ]) {
     const opt = el("option", "", label);
     opt.value = val;
+    if (!hasProjects && val === "project") opt.disabled = true;
     if ((current.scope || "global") === val) opt.selected = true;
     scopeSelect.append(opt);
   }
@@ -2666,7 +2681,7 @@ function renderSkillScopeSection(s) {
   if ((current.scope || "global") === "project") {
     const boundWrap = el("div", "graph-field");
     boundWrap.append(el("label", "", "Bound projects (edit their manifest to change)"));
-    if (s.bound_projects && s.bound_projects.length) {
+    if (hasProjects) {
       const chips = el("div", "doc-tags");
       for (const slug of s.bound_projects) chips.append(el("span", "tag-chip", slug));
       boundWrap.append(chips);
@@ -2683,7 +2698,6 @@ function renderSkillScopeSection(s) {
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save scope to inbox");
-  save.title = "Propose this skill's scope as an inbox candidate";
   const revert = el("button", "reject tiny", "Revert scope");
   revert.title = "Discard the local scope edit for this skill";
   save.onclick = () => {
@@ -2763,7 +2777,7 @@ function resetNewSkillDraft() {
 }
 
 function newSkillForm() {
-  const wrap = el("div", "inline-editor new-skill-form");
+  const wrap = el("div", "new-skill-form");
   const isExtension = !!newSkillPrefillExtendsSkill;
   wrap.append(el("h3", "", isExtension ? "New department extension" : "New skill"));
 

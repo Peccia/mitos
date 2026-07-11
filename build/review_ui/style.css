@@ -1551,6 +1551,19 @@ details.payload pre {
 }
 @media (max-width: 860px) { .skill-detail-grid { grid-template-columns: 1fr; } }
 
+/* New-skill form: full card styling (mirrors .inline-editor) but without the
+   max-height/overflow cap so the form grows to its natural height and the
+   Create/Cancel buttons are always accessible by scrolling the parent view. */
+.new-skill-form {
+  display: flex; flex-direction: column; gap: .4rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: .6rem .7rem;
+  margin: .4rem 0;
+  background: var(--bg);
+  scroll-margin: 1rem;
+}
+.new-skill-form .editor-wrap textarea { min-height: 10rem; }
 .new-skill-form h3 { margin: 0 0 .8rem; }
 .target-checks { display: flex; flex-wrap: wrap; gap: .8rem; }
 .target-check { display: flex; align-items: center; gap: .3rem; font-size: .84rem; cursor: pointer; }
