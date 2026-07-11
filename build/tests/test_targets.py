@@ -193,6 +193,61 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert out.section_bodies
     assert any(render.is_generated_source(s) for s, _ in out.section_bodies)
 
+def test_multi_store_project_renders_one_connection_section_per_store():
+    """A project bound to two stores (document_store: a list) gets one `## <Name>
+    (`key`)` section per store in its generated AGENTS.md, each holding only that
+    store's documents — the render primitive already produces one section per call;
+    multi-store just calls it once per store (planner._project_doc_block)."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
+    rig.projects["mitos"]["document_store"] = ["gws", "fake2"]
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[
+            graphmod.Document("GWS_DOC", "Gws Design", "a gws doc", "2026-06-27", store="gws"),
+            graphmod.Document("FAKE_DOC", "Fake Plan", "a fake2 doc", "2026-06-27",
+                              store="fake2"),
+        ], efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path["C:/Projects/Mitos/AGENTS.md"]
+    det = by_path["C:/Projects/Mitos/AGENTS_DETAILS.md"]
+
+    # AGENTS.md nests under the project's prose H1, so BOTH store sections render as H2.
+    assert out.content.count("## Google Workspace suite") == 1
+    assert out.content.count("## Fake Store") == 1
+    # AGENTS_DETAILS.md is standalone: the FIRST store's heading is the file's own H1
+    # identity (invariant #12 — exactly one H1), the second nests as a sibling H2.
+    assert det.content.count("# Google Workspace suite") == 1
+    assert "## Google Workspace suite" not in det.content
+    assert det.content.count("## Fake Store") == 1
+    for content in (out.content, det.content):
+        assert "Gws Design" in content
+        assert "Fake Plan" in content
+    # each doc's raw ID lives only in the details file, under its OWN store's section —
+    # not leaked into the other store's section
+    gws_section, fake_section = det.content.split("## Fake Store", 1)
+    assert "`GWS_DOC`" in gws_section and "`FAKE_DOC`" not in gws_section
+    assert "`FAKE_DOC`" in fake_section and "`GWS_DOC`" not in fake_section
+
+def test_multi_store_machine_connections_block_emits_one_section_per_store():
+    """A machine bound to two stores gets one connection section per store on the
+    operating root (render.connections_block), same as a project."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
+    block = render.connections_block(
+        rig.servers["servers"],
+        {"document_store": ["gws", "fake2"]},
+        {})
+    assert block.count("## Google Workspace suite") == 1
+    assert block.count("## Fake Store") == 1
+
 def test_project_agents_md_drops_identity_on_hermes_machines():
     """On a machine that also deploys hermes, SOUL.md already carries the identity
     partials on every request — the project-root AGENTS.md (project_agents) must not

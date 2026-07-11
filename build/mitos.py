@@ -194,14 +194,17 @@ def _cmd_connect(args) -> int:
     (the MCP server you set up separately), so the same command works for any store. Pass
     `--backend mock` only to force the in-process demo connector.
 
+    A project bound to MORE THAN ONE store (`document_store:` is a list) loops all of
+    them, one enumeration + one candidate per store (`--store <name>` narrows to just
+    one). `--stage` doesn't support looping multiple stores yet — pass `--store` to pick
+    one when staging a multi-store project.
+
     If ``--project`` is omitted the command runs in *unassigned* mode: documents are staged
     to ``inbox/staging/unassigned.json`` without being bound to any project. Open the
     operator console to select documents and propose them to the project of your choice.
     Unassigned mode requires ``--stage``; proposing directly to the inbox without a project
     target is not supported."""
     from agentic import loader
-    from agentic.connectors import (ConnectorError, bootstrap_to_inbox, stage_listing,
-                                     connector_for_store, get_connector)
     try:
         reg = loader.load(REPO_ROOT)
     except loader.RegistryError as e:
@@ -222,17 +225,17 @@ def _cmd_connect(args) -> int:
         # Resolve the backend: explicit --backend wins, otherwise pick the first
         # project that has a document_store configured.
         if not args.backend:
-            store_name = next(
+            raw_store = next(
                 (p.get("document_store") for p in reg.projects.values()
                  if p.get("document_store") and p.get("document_store") != "none"),
                 None)
-            if not store_name:
+            if not raw_store:
                 print("error: no project has a document_store configured.\n"
                       "Either add `document_store: <server>` to a project manifest or "
                       "pass --backend explicitly.", file=sys.stderr)
                 return 2
         else:
-            store_name = None  # will use args.backend below
+            raw_store = None  # will use args.backend below
         slug = "unassigned"
     else:
         # Named project: must exist.
@@ -245,13 +248,45 @@ def _cmd_connect(args) -> int:
         if not args.backend and (not proj.get("document_store")
                                  or proj.get("document_store") == "none"):
             return _explain_missing_store(reg, slug)
-        store_name = None  # resolved from proj.document_store below
+        raw_store = proj.get("document_store")
 
+    stores = loader.document_stores(raw_store)
+    if args.store:
+        if stores and args.store not in stores:
+            print(f"error: --store {args.store!r} is not one of this project's "
+                  f"document_store entries ({', '.join(stores)})", file=sys.stderr)
+            return 2
+        stores = [args.store]
+    if args.stage and len(stores) > 1:
+        print("error: --stage doesn't support multiple stores yet — pass --store <name> "
+              "to pick one (stage the others in separate runs).", file=sys.stderr)
+        return 2
+
+    if args.backend or len(stores) <= 1:
+        # Prefer the resolved project/unassigned store (for its exclude_folders config)
+        # even under a --backend override; args.backend is only the last-resort fallback,
+        # same priority order the single-store path always used.
+        resolved_store = (stores[0] if stores else None) or args.backend
+        return _connect_one(reg, args, slug, proj, resolved_store)
+
+    # Multi-store: one enumeration + one candidate per store (prefer one candidate per
+    # store — reuses the single-store shape verbatim, so each stays small and reviewable).
+    exit_code = 0
+    for store_val in stores:
+        print(f"\n== store: {store_val} ==")
+        rc = _connect_one(reg, args, slug, proj, store_val)
+        exit_code = rc if rc != 0 else exit_code
+    return exit_code
+
+
+def _connect_one(reg, args, slug: str, proj: dict | None, resolved_store: str | None) -> int:
+    """One connect pass against a single resolved store — the body `_cmd_connect` used to run
+    once; now shared so a multi-store project can loop it. `resolved_store` is a plain
+    server name (or None/args.backend), never a list."""
+    from agentic.connectors import (ConnectorError, bootstrap_to_inbox, stage_listing,
+                                     connector_for_store, get_connector)
     # Build the merged exclude_folders list: server-level ∪ project-level.
     servers = (reg.servers.get("servers") or {})
-    resolved_store = (store_name
-                      or (proj.get("document_store") if proj else None)
-                      or (args.backend if args.backend else None))
     server_cfg = servers.get(resolved_store) if resolved_store else {}
     server_excl = list(server_cfg.get("exclude_folders") or []) if server_cfg else []
     proj_excl = list(proj.get("exclude_folders") or []) if proj else []
@@ -260,10 +295,8 @@ def _cmd_connect(args) -> int:
     try:
         if args.backend:
             connector = get_connector(args.backend, root=REPO_ROOT)
-        elif slug == "unassigned":
-            connector = connector_for_store(reg, store_name, root=REPO_ROOT)
         else:
-            connector = connector_for_store(reg, proj.get("document_store"), root=REPO_ROOT)
+            connector = connector_for_store(reg, resolved_store, root=REPO_ROOT)
         folder_id = args.folder_id
         if folder_id is None and not args.query:
             folder_id = _pick_folder(connector, exclude_folders=exclude_folders)
@@ -284,7 +317,8 @@ def _cmd_connect(args) -> int:
             return 1
         result = bootstrap_to_inbox(reg, connector, slug,
                                     folder_id=folder_id, query=args.query,
-                                    exclude_folders=exclude_folders, recursive=recursive)
+                                    exclude_folders=exclude_folders, recursive=recursive,
+                                    store=resolved_store or "")
     except ConnectorError as e:
         print(f"connector error: {e}", file=sys.stderr)
         return 1
@@ -608,6 +642,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="discover the scope and write inbox/staging/<slug>.json for the "
                          "console to curate (instead of proposing every file at once). "
                          "Required when --project is omitted.")
+    pc.add_argument("--store", default=None,
+                    help="which of the project's document_store entries to use — only "
+                         "needed when the project binds more than one store; omit to loop "
+                         "all of them (one candidate per store; not supported with --stage)")
     sub.add_parser("connectors", help="list available workspace connectors")
     ps = sub.add_parser("sync", help="set up and run git-only overlay sync")
     ps.add_argument("--machine", required=True)

@@ -382,6 +382,63 @@ def test_connect_missing_store_explains_servers_file_and_line():
     assert "projects/example-project.yaml" in msg         # names the manifest file
     assert "document_store: gws" in msg                   # gives the exact line
 
+def test_connect_loops_multi_store_one_candidate_per_store():
+    """A project bound to two stores loops connect once per store — one candidate each,
+    each tagged with its own store (review._apply_graph_candidate's store-scoped upsert
+    then keeps them from touching each other's documents, covered in test_graph.py)."""
+    import argparse
+    import importlib
+    import json as _json
+    import yaml as _y
+    from agentic import review
+    from agentic.connectors.mock import MockConnector
+    import agentic.connectors as connectors_pkg
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    mitos = importlib.import_module("mitos")
+
+    treg, tmp = _temp_registry()
+    pfile = tmp / "registry" / "projects" / "example-project.yaml"
+    data = _y.safe_load(pfile.read_text(encoding="utf-8"))
+    data["document_store"] = ["gws", "fake2"]
+    pfile.write_text(_y.safe_dump(data), encoding="utf-8")
+    conn_file = tmp / "connections" / "servers.yaml"
+    conn_data = _y.safe_load(conn_file.read_text(encoding="utf-8"))
+    conn_data["servers"]["fake2"] = {"description": "Second store — for tests."}
+    conn_file.write_text(_y.safe_dump(conn_data), encoding="utf-8")
+
+    calls: list[str] = []
+
+    def fake_connector_for_store(reg2, store, root=None):
+        calls.append(store)
+        return MockConnector(files=[
+            {"id": f"{store.upper()}1", "name": f"{store} doc", "dateModified": "2026-06-01"}])
+
+    orig_connector_for_store = connectors_pkg.connector_for_store
+    orig_repo_root = mitos.REPO_ROOT
+    connectors_pkg.connector_for_store = fake_connector_for_store
+    mitos.REPO_ROOT = tmp
+    try:
+        args = argparse.Namespace(project="example-project", backend=None,
+                                  folder_id=None, recursive=False, query=None,
+                                  stage=False, store=None)
+        rc = mitos._cmd_connect(args)
+    finally:
+        connectors_pkg.connector_for_store = orig_connector_for_store
+        mitos.REPO_ROOT = orig_repo_root
+
+    assert rc == 0
+    assert sorted(calls) == ["fake2", "gws"]
+    cands = [c for c in review.load_candidates(loader.load(tmp)) if c["kind"] == "graph"]
+    assert len(cands) == 2
+    stores_seen = set()
+    for c in cands:
+        meta = _y.safe_load((_inbox(tmp) / c["id"] / "meta.yaml").read_text(encoding="utf-8"))
+        stores_seen.add(meta["store"])
+        payload = _json.loads((_inbox(tmp) / c["id"] / "graph.jsonld").read_text(encoding="utf-8"))
+        ids = [n["identifier"] for n in payload["@graph"] if n.get("@type") == "DigitalDocument"]
+        assert ids == [meta["store"].upper() + "1"]
+    assert stores_seen == {"gws", "fake2"}
+
 def test_stage_listing_writes_artifact_with_weburl():
     """stage_listing writes inbox/staging/<slug>.json and keeps webUrl."""
     import json as _json

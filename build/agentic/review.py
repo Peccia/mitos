@@ -577,7 +577,8 @@ def _write_candidate(reg: Registry, slug: str, meta: dict, payload_filename: str
 def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                          removals: list[str] | None = None, reason: str = "",
                          efforts: list[dict] | None = None,
-                         effort_removals: list[str] | None = None) -> dict:
+                         effort_removals: list[str] | None = None,
+                         store: str = "") -> dict:
     """Save proposed document and effort mappings as a `kind: graph` inbox candidate.
     Writes only inbox/, never registry/ (invariant #3).
 
@@ -587,6 +588,15 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     effort IDs to remove. A candidate may carry only removals (no upserts).
     `parentId` in a document dict is the effort ID (or "" / omitted for project root).
 
+    `store` (optional) is the document_store server key this candidate's documents were
+    enumerated from — a multi-store project's connect loop proposes ONE candidate per
+    store, so every document in the batch shares it; a document dict may still carry its
+    own `store` key to override (e.g. a hand-curated console edit). Recorded on the
+    candidate's meta so the review UI can label which store it's for. IDs are store-native
+    (a document is identified by its connector-provided ID alone), so a store-A candidate's
+    documents can only ever carry store-A IDs — the upsert below (matched by drive_id) never
+    touches a different store's nodes.
+
     The fragment always includes ALL current + proposed efforts so that document
     isPartOf links validate self-consistently. Returns {ok, id, registry_path} or
     {ok: False, error}."""
@@ -595,18 +605,18 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         return {"ok": False, "error": f"unknown project {slug!r}"}
 
     # ── parse document dicts ──────────────────────────────────────────────────
-    # An upsert replaces the whole node, so a caller that doesn't send `type` (an older
-    # console payload) must not wipe an existing annotation — preserve it from the
+    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store` (an
+    # older console payload) must not wipe an existing annotation — preserve each from the
     # current graph when the key is absent.
-    existing_types = {d.drive_id: d.doc_type
-                      for d in (reg.graphs.get(slug).documents if reg.graphs.get(slug)
-                                else [])}
+    existing = {d.drive_id: d for d in (reg.graphs.get(slug).documents
+                                        if reg.graphs.get(slug) else [])}
     docs = []
     for d in documents:
         try:
             parent_id = str(d.get("parentId", "")).strip()
             parent_iri = (graphmod.CREATIVE_WORK_NS + parent_id) if parent_id else ""
             did = str(d["id"]).strip()
+            prior = existing.get(did)
             docs.append(graphmod.Document(
                 drive_id=did, name=str(d["name"]).strip(),
                 description=str(d.get("description", "")).strip(),
@@ -615,7 +625,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 keywords=str(d.get("keywords", "")).strip(),
                 web_url=str(d.get("webUrl", "")).strip(),
                 doc_type=(str(d["type"]).strip() if "type" in d
-                          else existing_types.get(did, ""))))
+                          else (prior.doc_type if prior else "")),
+                store=(str(d["store"]).strip() if "store" in d
+                      else (store or (prior.store if prior else "")))))
         except KeyError as e:
             return {"ok": False, "error": f"document missing required field {e}"}
 
@@ -686,6 +698,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         meta["effort_removals"] = effort_removals
     if reason:
         meta["reason"] = reason
+    if store:
+        meta["store"] = store
     cid = _write_candidate(reg, f"graph-{slug}", meta, "graph.jsonld", fragment)
     return {"ok": True, "id": cid, "registry_path": graph_rel}
 

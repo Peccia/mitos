@@ -304,6 +304,15 @@ document_store: gws        # the server from connections/servers.yaml that holds
 Already created the project without a store? **Just edit that one line** in
 `registry/local/projects/<slug>.yaml` (change `none` → a server name). That's the whole binding.
 
+**Multiple stores per project** — `document_store:` also accepts a list when a project's
+graph should draw from more than one server (e.g. `[gws, notion]`); a plain string stays
+valid forever, no migration. Each document is tagged with the store that enumerated it
+(omitted for pre-existing documents — they're treated as "the project's sole store"), so
+accepting one store's candidate never touches another's documents. The generated
+`AGENTS.md`/`AGENTS_DETAILS.md` render one `## <Name> (\`key\`)` connection section per
+store. This is *multiple connections*, not multiple accounts of the same server type — the
+server key stays identity everywhere (env files, `urls:`, connection labels).
+
 **Stage 2 — set up the document MCP server, separately.** Deliberately **not** part of `init`:
 you may already run a server, and it may be authless. See [`docs/connectors/`](docs/connectors/)
 — e.g. the [Google Workspace guide](docs/connectors/google-workspace.md).
@@ -318,6 +327,9 @@ It enumerates a scoped folder (interactive picker in a terminal, or pass `--fold
 proposes the documents as a `kind: graph` candidate, and you accept it in the console.
 If the project has no `document_store` set, `connect` defaults to the **local-file connector**
 — no credentials required; point it at any local directory with `--folder-id /path/to/docs`.
+Bound to more than one store? `connect` loops all of them — one enumeration, one candidate
+per store, each reviewable independently. Pass `--store <name>` to run against just one
+(required for `--stage`, which doesn't loop multiple stores yet).
 
 Three connector backends feed the same valve, all **beside** the compiler with lazy, optional
 deps (the deterministic verbs never import them):

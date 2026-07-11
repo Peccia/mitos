@@ -99,10 +99,14 @@ def bootstrap_to_inbox(reg: Registry, connector: WorkspaceConnector, slug: str,
                        folder_id: str | None = None, query: str | None = None,
                        reason: str = "",
                        exclude_folders: list[str] | None = None,
-                       recursive: bool = False) -> dict:
+                       recursive: bool = False, store: str = "") -> dict:
     """Enumerate a project's *scoped* folder via the connector and propose its documents as a
     `kind: graph` candidate, routed through `review.propose_graph_change` (writes only
-    `inbox/`). Returns that result: ``{ok, id, registry_path}`` or ``{ok: False, error}``."""
+    `inbox/`). Returns that result: ``{ok, id, registry_path}`` or ``{ok: False, error}``.
+
+    `store` (optional) is the document_store server key this connector was resolved from —
+    a multi-store project's connect loop calls this once per store, passing that store's key
+    so every document in the resulting candidate is tagged (see propose_graph_change)."""
     from .. import review
     connector.authenticate()
     files = connector.list_files(folder_id=folder_id, query=query,
@@ -112,4 +116,4 @@ def bootstrap_to_inbox(reg: Registry, connector: WorkspaceConnector, slug: str,
         return {"ok": False, "error": "connector returned no usable documents"}
     why = reason or (f"bootstrapped from the {connector.name} connector "
                      f"(folder {folder_id or '(scoped)'})")
-    return review.propose_graph_change(reg, slug, documents, reason=why)
+    return review.propose_graph_change(reg, slug, documents, reason=why, store=store)

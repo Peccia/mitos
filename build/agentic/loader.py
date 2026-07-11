@@ -488,6 +488,49 @@ def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict
     return None
 
 
+def document_stores(raw) -> list[str]:
+    """Normalize an already-validated `document_store:` value (project or machine) to a list
+    of server names for iteration. A single string (the common case) becomes a one-item
+    list; a list passes through; None/absent is empty. The stored manifest value itself is
+    never rewritten by validation — a plain string stays valid forever, no migration — so
+    call this wherever a store needs to be iterated (Stage 3 connect, the generated
+    connection sections); single-store code paths may keep reading the raw value directly."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return list(raw)
+
+
+def _check_document_store(label: str, ds, known: set[str]) -> None:
+    """Validate a `document_store:` value shared by project and machine manifests: a string
+    OR a list of strings ("multi connections" — a project's/machine's graph may draw from
+    more than one server; explicitly NOT multi-account-per-server-type, so the server key
+    stays identity everywhere). Each entry must be a known server name or the literal
+    'none'; duplicates and an empty list are rejected loudly. 'none' cannot be combined with
+    a real store — it means "no store", which is contradictory alongside one."""
+    if isinstance(ds, str):
+        values = [ds]
+    elif isinstance(ds, list) and all(isinstance(v, str) for v in ds):
+        values = ds
+    else:
+        raise RegistryError(
+            f"{label}: document_store must be a string or a list of strings — a server "
+            f"name from connections/servers.yaml, or 'none'")
+    if not values:
+        raise RegistryError(f"{label}: document_store list must not be empty")
+    if len(values) != len(set(values)):
+        raise RegistryError(f"{label}: document_store lists a duplicate server name")
+    if "none" in values and len(values) > 1:
+        raise RegistryError(
+            f"{label}: document_store 'none' cannot be combined with other stores")
+    bad = [v for v in values if v not in known]
+    if bad:
+        raise RegistryError(
+            f"{label}: document_store {bad!r} is not a known MCP server; "
+            f"known: {sorted(known)}")
+
+
 def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
     """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
     when valid. No per-target incompatibility to check: a target with no project-scoped
@@ -671,15 +714,8 @@ def _validate(reg: Registry) -> None:
         # in connections/servers.yaml (or the literal 'none' for a project with no store).
         ds = proj.get("document_store")
         if ds is not None:
-            if not isinstance(ds, str):
-                raise RegistryError(
-                    f"project {slug}: document_store must be a string — a server name from "
-                    f"connections/servers.yaml, or 'none'")
             known = set(reg.servers.get("servers") or {}) | {"none"}
-            if ds not in known:
-                raise RegistryError(
-                    f"project {slug}: document_store {ds!r} is not a known MCP server; "
-                    f"known: {sorted(known)}")
+            _check_document_store(f"project {slug}", ds, known)
         # exclude_folders (optional) — folder names or IDs to skip during staging.
         # Each entry must be a non-empty string.
         ef = proj.get("exclude_folders")
@@ -721,15 +757,8 @@ def _validate(reg: Registry) -> None:
         # shape/validation as a project's document_store.
         ds = m.get("document_store")
         if ds is not None:
-            if not isinstance(ds, str):
-                raise RegistryError(
-                    f"machine {name}: document_store must be a string — a server name "
-                    f"from connections/servers.yaml, or 'none'")
             known = set(reg.servers.get("servers") or {}) | {"none"}
-            if ds not in known:
-                raise RegistryError(
-                    f"machine {name}: document_store {ds!r} is not a known MCP server; "
-                    f"known: {sorted(known)}")
+            _check_document_store(f"machine {name}", ds, known)
         paths = m.get("paths") or {}
         # 1. Detect invalid/control characters in machine path keys (escape sequence bugs)
         for key, pval in paths.items():

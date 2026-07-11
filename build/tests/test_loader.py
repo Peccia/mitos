@@ -636,6 +636,109 @@ def test_repo_validation_rejects_wrong_type():
     except RegistryError as e:
         assert "string or a list of strings" in str(e)
 
+# ── multi-store document_store validation ───────────────────────────────────────────────────
+
+def test_document_store_validation_accepts_string():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = "gws"
+    _validate(rig)  # must not raise
+
+def test_document_store_validation_accepts_list():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.servers["servers"]["fake2"] = {"description": "Second store — for tests."}
+    rig.projects["example-project"]["document_store"] = ["gws", "fake2"]
+    _validate(rig)  # must not raise
+
+def test_document_store_validation_rejects_empty_list():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = []
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "list must not be empty" in str(e)
+
+def test_document_store_validation_rejects_duplicate():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = ["gws", "gws"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "duplicate server name" in str(e)
+
+def test_document_store_validation_rejects_unknown_server_in_list():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = ["gws", "not-a-server"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "not-a-server" in str(e)
+
+def test_document_store_validation_rejects_none_combined_with_real_store():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = ["gws", "none"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "cannot be combined" in str(e)
+
+def test_document_store_validation_rejects_wrong_type():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["document_store"] = {"server": "gws"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "string or a list of strings" in str(e)
+
+def test_machine_document_store_validation_accepts_list():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.servers["servers"]["fake2"] = {"description": "Second store — for tests."}
+    rig.machines["rig"] = {
+        "name": "rig", "os": "windows", "targets": ["claude-code"],
+        "document_store": ["gws", "fake2"],
+    }
+    _validate(rig)  # must not raise
+
+def test_machine_document_store_validation_rejects_duplicate():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.machines["rig"] = {
+        "name": "rig", "os": "windows", "targets": ["claude-code"],
+        "document_store": ["gws", "gws"],
+    }
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "duplicate server name" in str(e)
+
+def test_document_stores_helper_normalizes_str_list_none():
+    from agentic.loader import document_stores
+    assert document_stores(None) == []
+    assert document_stores("gws") == ["gws"]
+    assert document_stores(["gws", "fake2"]) == ["gws", "fake2"]
+
 # ── multi-repo clone planning ──────────────────────────────────────────────────────────────
 
 def test_plan_clones_multi_repo_local_path_lane():
