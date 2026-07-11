@@ -2,7 +2,7 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, subagents, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
 
 The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -153,8 +153,8 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 
 | Term | What it is |
 |---|---|
-| **registry/** | The moat. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), subagents (`agents/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
-| **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills and agents are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
+| **registry/** | The moat. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
+| **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
 | **Skill resources** | A skill's supporting files — `registry/skills/<name>/examples/` (expected-output samples) and `.../scripts/` (executables Claude can run) — auto-discovered, deployed alongside `SKILL.md`, and bundled into claude.ai zips. Each file adopts/harvests back to its own path, never `SKILL.md`. |
 | **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. The Skills & Orgs tab's `+ Extend department` button scaffolds one. |
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |
@@ -304,6 +304,15 @@ document_store: gws        # the server from connections/servers.yaml that holds
 Already created the project without a store? **Just edit that one line** in
 `registry/local/projects/<slug>.yaml` (change `none` → a server name). That's the whole binding.
 
+**Multiple stores per project** — `document_store:` also accepts a list when a project's
+graph should draw from more than one server (e.g. `[gws, notion]`); a plain string stays
+valid forever, no migration. Each document is tagged with the store that enumerated it
+(omitted for pre-existing documents — they're treated as "the project's sole store"), so
+accepting one store's candidate never touches another's documents. The generated
+`AGENTS.md`/`AGENTS_DETAILS.md` render one `## <Name> (\`key\`)` connection section per
+store. This is *multiple connections*, not multiple accounts of the same server type — the
+server key stays identity everywhere (env files, `urls:`, connection labels).
+
 **Stage 2 — set up the document MCP server, separately.** Deliberately **not** part of `init`:
 you may already run a server, and it may be authless. See [`docs/connectors/`](docs/connectors/)
 — e.g. the [Google Workspace guide](docs/connectors/google-workspace.md).
@@ -318,6 +327,9 @@ It enumerates a scoped folder (interactive picker in a terminal, or pass `--fold
 proposes the documents as a `kind: graph` candidate, and you accept it in the console.
 If the project has no `document_store` set, `connect` defaults to the **local-file connector**
 — no credentials required; point it at any local directory with `--folder-id /path/to/docs`.
+Bound to more than one store? `connect` loops all of them — one enumeration, one candidate
+per store, each reviewable independently. Pass `--store <name>` to run against just one
+(required for `--stage`, which doesn't loop multiple stores yet).
 
 Three connector backends feed the same valve, all **beside** the compiler with lazy, optional
 deps (the deterministic verbs never import them):
@@ -335,7 +347,10 @@ Nothing writes the graph directly. Inspect any project with
 ## Operator console
 
 `python build/compile.py review` opens a localhost web console with four tabs: **Inbox**
-(review/accept/reject every candidate against a live diff), **Knowledge Graph** (propose
+(review/accept/reject every candidate against a live diff — a `kind: graph` candidate shows
+a concise added/changed/removed document summary first, full line diff behind a toggle, so
+re-running `connect` on a whole store doesn't bury what's new under unchanged lines),
+**Knowledge Graph** (propose
 document mappings and tag efforts with the org domain that governs them), **Skills & Orgs**
 (browse, create, and edit skills as cards — including supporting files under `examples/`/
 `scripts/` and org-role extensions via `extends_skill`/`extends_role`; each org-domain card

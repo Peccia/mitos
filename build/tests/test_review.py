@@ -17,20 +17,20 @@ def test_graph_index_lists_local_projects_regardless_of_drive_key():
     # project with no drive key at all — must appear
     rig.projects["proj-no-drive"] = {
         "name": "No Drive", "slug": "proj-no-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
     }
     # project with empty drive dict — the original bug trigger
     rig.projects["proj-empty-drive"] = {
         "name": "Empty Drive", "slug": "proj-empty-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
         "drive": {},
     }
     # project with a populated drive block — must continue to appear
     rig.projects["proj-full-drive"] = {
         "name": "Full Drive", "slug": "proj-full-drive", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
         "document_store": "gws",
         "drive": {"root_folder": "1abc"},
     }
@@ -52,7 +52,7 @@ def test_graph_index_core_projects_step_aside_when_local_overlay_present():
     # inject exactly one local project
     rig.projects["my-local"] = {
         "name": "My Local", "slug": "my-local", "_is_local": True,
-        "local_path": {}, "agents": [], "context": {},
+        "local_path": {}, "context": {},
     }
 
     result = graph_index(rig)
@@ -916,6 +916,86 @@ def test_graph_propose_then_decide_chain_upserts_and_leaves_inbox_on_failure():
     assert not result2["ok"]
     assert (tmp / "registry" / "local" / "inbox" / out2["id"]).is_dir()
 
+
+def test_load_candidates_doc_delta_computes_added_changed_removed():
+    """batch2 item 2 (diff-aware candidates): load_candidates computes doc_delta by
+    set-comparing the candidate's proposed documents against the CURRENT graph — added
+    (new IDs), changed (same ID, different name/date/url/type/store), and removed
+    (existing IDs absent from this candidate's enumeration — informational only, never
+    auto-deleted)."""
+    from agentic import graph
+    from agentic.review import load_candidates, propose_graph_change
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug=slug, name="P", description="", documents=[
+        graph.Document("KEEP", "Keeper", "d", "2026-01-01"),
+        graph.Document("CHANGE", "Old Name", "d", "2026-01-01"),
+        graph.Document("GONE", "Goner", "d", "2026-01-02")])
+    (gdir / f"{slug}.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    out = propose_graph_change(treg, slug, [
+        {"id": "KEEP", "name": "Keeper", "description": "d", "dateModified": "2026-01-01"},
+        {"id": "CHANGE", "name": "New Name", "description": "d", "dateModified": "2026-01-01"},
+        {"id": "NEW", "name": "Fresh", "description": "d", "dateModified": "2026-07-01"}])
+    assert out["ok"], out
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert cand["doc_delta"] == {"added": ["NEW"], "changed": ["CHANGE"], "removed": ["GONE"]}
+    assert cand["no_changes"] is False
+
+def test_load_candidates_doc_delta_empty_sets_no_changes():
+    """A candidate that re-proposes exactly what's already in the registry (e.g. a plain
+    re-run of `connect` with nothing new in the store) has an empty delta and is flagged
+    no_changes — the console de-emphasizes Accept, it doesn't hide or disable it."""
+    from agentic import graph
+    from agentic.review import load_candidates, propose_graph_change
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug=slug, name="P", description="", documents=[
+        graph.Document("SAME", "Unchanged", "d", "2026-01-01")])
+    (gdir / f"{slug}.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    out = propose_graph_change(treg, slug, [
+        {"id": "SAME", "name": "Unchanged", "description": "d", "dateModified": "2026-01-01"}])
+    assert out["ok"], out
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert cand["doc_delta"] == {"added": [], "changed": [], "removed": []}
+    assert cand["no_changes"] is True
+
+def test_load_candidates_doc_delta_scoped_by_store():
+    """A store-scoped candidate (item 1's one-candidate-per-store shape) must never flag
+    ANOTHER store's documents as "removed" just because they're absent from THIS
+    candidate's enumeration — the delta compares only against the candidate's own store."""
+    from agentic import graph
+    from agentic.review import load_candidates, propose_graph_change
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug=slug, name="P", description="", documents=[
+        graph.Document("GWS1", "Gws Doc", "d", "2026-01-01", store="gws"),
+        graph.Document("FAKE1", "Fake Doc", "d", "2026-01-01", store="fake2")])
+    (gdir / f"{slug}.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    # a fake2-scoped candidate that only re-proposes FAKE1, unchanged — GWS1 must not
+    # appear in "removed" even though it's absent from this candidate's fragment
+    out = propose_graph_change(treg, slug, [
+        {"id": "FAKE1", "name": "Fake Doc", "description": "d", "dateModified": "2026-01-01"}],
+        store="fake2")
+    assert out["ok"], out
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert cand["store"] == "fake2"
+    assert cand["doc_delta"] == {"added": [], "changed": [], "removed": []}
+    assert cand["no_changes"] is True
 
 def test_graph_propose_carries_and_preserves_doc_type():
     """`type` on a proposed document lands in the graph as additionalType; a later

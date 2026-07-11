@@ -12,7 +12,7 @@ import re
 
 import yaml
 
-from .loader import EXTENSION_ANCHOR, Agent, Prompt, Registry, Skill, SkillResource
+from .loader import EXTENSION_ANCHOR, Prompt, Registry, Skill, SkillResource, document_stores
 
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
@@ -348,24 +348,28 @@ def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:
 
 
 def connections_block(servers: dict, machine: dict, user: dict) -> str:
-    """The `<generated>` connection section for a tree/branch root (operating root and the
-    Assistant branch): the SHORT form — a `## <Name> (`key`)` heading plus one sentence on
-    what the wired document store is for. Project nodes get the FULL form (folder paths +
-    document map) from graph.py under the same heading. Empty (no section) when the machine
-    has no document store."""
-    label = connection_label(servers, machine.get("document_store"))
-    if not label:
-        return ""
-    heading, detail = label
-    ds = (machine.get("document_store") or "").strip()
-    server = servers.get(ds) or {}
-    categories = ", ".join(sorted((server.get("tools") or {}).keys()))
+    """The `<generated>` connection section(s) for a tree/branch root (operating root and
+    the Assistant branch): the SHORT form — a `## <Name> (`key`)` heading plus one sentence
+    on what the wired document store is for. Project nodes get the FULL form (folder paths
+    + document map) from graph.py under the same heading. Empty (no section) when the
+    machine has no document store. A machine bound to more than one store (multi
+    connections) renders one such section per store, concatenated — each store gets its
+    own heading/blurb, same as a single-store machine's."""
     possessive = _user_value(user, "users_given_name") or "the owner's"
-    suite = f" ({categories})" if categories else ""
-    blurb = f" {detail}" if detail else ""
-    lines = [f"## {heading}", "",
-             f"Use this suite{suite} as the source of truth for {possessive} data.{blurb}"]
-    return "\n".join(lines) + "\n"
+    blocks = []
+    for ds in document_stores(machine.get("document_store")):
+        label = connection_label(servers, ds)
+        if not label:
+            continue
+        heading, detail = label
+        server = servers.get(ds) or {}
+        categories = ", ".join(sorted((server.get("tools") or {}).keys()))
+        suite = f" ({categories})" if categories else ""
+        blurb = f" {detail}" if detail else ""
+        blocks.append(
+            f"## {heading}\n\n"
+            f"Use this suite{suite} as the source of truth for {possessive} data.{blurb}")
+    return ("\n\n".join(blocks) + "\n") if blocks else ""
 
 
 def skills_block(skills: list) -> str:
@@ -457,22 +461,6 @@ def render_prompt(prompt: Prompt, target: str) -> str:
         meta = {"description": prompt.frontmatter.get("description", "")}
         return _frontmatter_doc(meta, prompt.body)
     return prompt.body.rstrip("\n") + "\n"
-
-
-# ── Agents (Claude Code subagents) ───────────────────────────────────────────
-def render_agent(agent: Agent, target: str) -> str:
-    """Render an agent in a harness's subagent format. Today only claude-code:
-    `.claude/agents/<name>.md` with name/description (+ optional tools/model) frontmatter
-    and the system-prompt body."""
-    if target != "claude-code":
-        raise ValueError(f"agent rendering not defined for target {target!r}")
-    fm = agent.frontmatter
-    meta = {"name": fm["name"], "description": fm.get("description", "")}
-    if fm.get("tools"):
-        meta["tools"] = fm["tools"]
-    if fm.get("model"):
-        meta["model"] = fm["model"]
-    return _frontmatter_doc(meta, agent.body)
 
 
 def _frontmatter_doc(meta: dict, body: str) -> str:

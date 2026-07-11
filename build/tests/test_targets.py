@@ -76,7 +76,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
@@ -107,7 +107,7 @@ def test_non_hermes_machine_coproduces_agents_md():
     # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_hermes = copy.deepcopy(reg)
     if "apoc" not in rig_hermes.projects:
-        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
@@ -192,6 +192,61 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     # section-aware drift tracking: prose sections stay separate from the generated tail
     assert out.section_bodies
     assert any(render.is_generated_source(s) for s, _ in out.section_bodies)
+
+def test_multi_store_project_renders_one_connection_section_per_store():
+    """A project bound to two stores (document_store: a list) gets one `## <Name>
+    (`key`)` section per store in its generated AGENTS.md, each holding only that
+    store's documents — the render primitive already produces one section per call;
+    multi-store just calls it once per store (planner._project_doc_block)."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
+    rig.projects["mitos"]["document_store"] = ["gws", "fake2"]
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[
+            graphmod.Document("GWS_DOC", "Gws Design", "a gws doc", "2026-06-27", store="gws"),
+            graphmod.Document("FAKE_DOC", "Fake Plan", "a fake2 doc", "2026-06-27",
+                              store="fake2"),
+        ], efforts=[], path=None)
+
+    outs = planner.plan_machine(rig, "example-windows")
+    by_path = {o.deploy_path: o for o in outs}
+    out = by_path["C:/Projects/Mitos/AGENTS.md"]
+    det = by_path["C:/Projects/Mitos/AGENTS_DETAILS.md"]
+
+    # AGENTS.md nests under the project's prose H1, so BOTH store sections render as H2.
+    assert out.content.count("## Google Workspace suite") == 1
+    assert out.content.count("## Fake Store") == 1
+    # AGENTS_DETAILS.md is standalone: the FIRST store's heading is the file's own H1
+    # identity (invariant #12 — exactly one H1), the second nests as a sibling H2.
+    assert det.content.count("# Google Workspace suite") == 1
+    assert "## Google Workspace suite" not in det.content
+    assert det.content.count("## Fake Store") == 1
+    for content in (out.content, det.content):
+        assert "Gws Design" in content
+        assert "Fake Plan" in content
+    # each doc's raw ID lives only in the details file, under its OWN store's section —
+    # not leaked into the other store's section
+    gws_section, fake_section = det.content.split("## Fake Store", 1)
+    assert "`GWS_DOC`" in gws_section and "`FAKE_DOC`" not in gws_section
+    assert "`FAKE_DOC`" in fake_section and "`GWS_DOC`" not in fake_section
+
+def test_multi_store_machine_connections_block_emits_one_section_per_store():
+    """A machine bound to two stores gets one connection section per store on the
+    operating root (render.connections_block), same as a project."""
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
+    block = render.connections_block(
+        rig.servers["servers"],
+        {"document_store": ["gws", "fake2"]},
+        {})
+    assert block.count("## Google Workspace suite") == 1
+    assert block.count("## Fake Store") == 1
 
 def test_project_agents_md_drops_identity_on_hermes_machines():
     """On a machine that also deploys hermes, SOUL.md already carries the identity
@@ -326,7 +381,7 @@ def test_non_hermes_clone_uses_local_path():
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
-        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -341,7 +396,7 @@ def test_non_hermes_clone_uses_local_path():
     # agentic_context_root lane still works when both are present on the same machine
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
-        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "agents": [], "context": {}}
+        rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
@@ -499,40 +554,26 @@ def test_parse_fragment_rejects_wrong_project_and_bad_shape():
     name, desc, docs, efforts = graph.parse_fragment(good, "example-project")
     assert name is None and [d.drive_id for d in docs] == ["D2"]
 
-def test_agents_load_and_render_claude_code():
-    assert "code-reviewer" in reg.agents
-    agent = reg.agents["code-reviewer"]
-    assert agent.rel == "agents/code-reviewer.md"
-    out = render.render_agent(agent, "claude-code")
-    assert out.startswith("---\nname: code-reviewer\n")
-    head = out.split("---")[1]
-    assert "description:" in head and "tools:" in head and "model:" in head
-    assert "code reviewer" in out.lower() and not out.rstrip().endswith("---")
-
-def test_per_project_binding_deploys_skills_and_agents():
-    """Per-project skill/agent binding: a manifest-bound agent deploys to that project's
-    checkout; a skill not in the manifest does not. Uses an isolated rig so the test
-    is independent of overlay local_path config."""
+def test_per_project_binding_deploys_skills():
+    """Per-project skill binding: a manifest-bound scope:project skill deploys to that
+    project's checkout; a skill not in the manifest does not. Uses an isolated rig so
+    the test is independent of overlay local_path config."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = ["claude-code"]
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.skills["proj-skill"] = loader.Skill(
+        name="proj-skill", rel="local/skills/proj-skill/SKILL.md",
+        frontmatter={"targets": ["claude-code"], "scope": "project"}, body="proj body")
     # give example-project a local_path so _local() resolves it (core registry has this)
-    # and pin a minimal binding — just the agent
     r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
-    r.projects["example-project"]["agents"] = ["code-reviewer"]
-    r.projects["example-project"]["skills"] = []  # no skills — agent only
+    r.projects["example-project"]["skills"] = ["proj-skill"]
     outs = planner.plan_machine(r, "example-windows")
     paths = [o.deploy_path for o in outs]
-    # agent deployed to this project
-    assert any(p.endswith("example-project/.claude/agents/code-reviewer.md") for p in paths)
+    # bound skill deployed to this project
+    assert any(p.endswith("example-project/.claude/skills/proj-skill/SKILL.md") for p in paths)
     # new-session skill not bound → not deployed
     assert not any(p.endswith("example-project/.claude/skills/new-session/SKILL.md") for p in paths)
-    # agent output points at the one shared registry source
-    agent_outs = [o for o in outs if o.deploy_path.endswith("agents/code-reviewer.md")]
-    assert len(agent_outs) >= 1
-    assert all(o.sources == ["agents/code-reviewer.md"] for o in agent_outs)
-    assert all(o.drift_policy == "harvest" for o in agent_outs)
 
 def test_binding_validation_rejects_unknown_and_incompatible():
     import copy
@@ -540,7 +581,6 @@ def test_binding_validation_rejects_unknown_and_incompatible():
     from agentic.loader import RegistryError, _validate
     for mutate in (
         lambda p: p.update(skills=["no-such-skill"]),
-        lambda p: p.update(agents=["no-such-agent"]),
         lambda p: p.update(skills=["graph-bootstrap"]),  # exists but not claude-code-compatible
         lambda p: p.update(skills="plan"),           # not a list
     ):
@@ -551,6 +591,20 @@ def test_binding_validation_rejects_unknown_and_incompatible():
             raise AssertionError("expected RegistryError")
         except RegistryError:
             pass
+
+def test_agents_manifest_field_rejected_loudly():
+    """The agents lane was retired (0.1.3 batch 1) — any manifest `agents:` key, even
+    an empty list, is a loud RegistryError, mirroring the retired `org:` field."""
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    r = copy.deepcopy(reg)
+    r.projects["example-project"]["agents"] = []
+    try:
+        _validate(r)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "agents" in str(e)
 
 def test_repo_basename_forms():
     from agentic.planner import _repo_basename

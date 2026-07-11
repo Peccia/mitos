@@ -74,6 +74,13 @@ def load_candidates(reg: Registry) -> list[dict]:
         # non-graph candidates.
         project, doc_ids, removal_ids, effort_ids, effort_removal_ids = \
             _graph_candidate_targets(reg, meta, payload)
+        doc_delta = _doc_delta(reg, meta, payload)
+        # A graph candidate with nothing to add/change and no in-flight removal is a
+        # true no-op — the console de-emphasizes (never hides) Accept for it; the
+        # server-side accept path is the real check either way.
+        no_changes = (meta.get("kind") == "graph"
+                     and not doc_delta.get("added") and not doc_delta.get("changed")
+                     and not doc_delta.get("removed"))
         registry_path = meta.get("registry_path") or ""
         out.append({
             "id": folder.name,
@@ -87,6 +94,9 @@ def load_candidates(reg: Registry) -> list[dict]:
             "removal_ids": removal_ids,
             "effort_ids": effort_ids,
             "effort_removal_ids": effort_removal_ids,
+            "doc_delta": doc_delta,
+            "no_changes": no_changes,
+            "store": meta.get("store", ""),
             "source": meta.get("source") or {},
             "deploy_path": meta.get("deploy_path", ""),
             "captured_at": meta.get("captured_at", ""),
@@ -122,6 +132,53 @@ def _graph_candidate_targets(reg: Registry, meta: dict, payload: str
                effort_removals)
     except Exception:
         return slug, [], removals, [], effort_removals
+
+
+def _doc_delta(reg: Registry, meta: dict, payload: str) -> dict:
+    """Added/changed/removed document IDs for a `kind: graph` candidate — the diff-aware
+    view (batch2 item 2): re-running `connect` re-enumerates a whole store, so the generic
+    line diff over the full merged JSON-LD is noisy; this set-compares the candidate's
+    proposed documents against the CURRENT registry/graph/<slug>.jsonld and surfaces only
+    what actually differs. "changed" = same drive_id, different name/date_modified/
+    web_url/doc_type/store.
+
+    "removed" here means "not present in this candidate's enumeration" — PRESENTATION
+    ONLY. The accept/upsert path is untouched (upsert_document never deletes; only an
+    explicit `removals` entry in meta does that — see `removal_ids`), so nothing in
+    this list is deleted unless the reviewer separately proposes it.
+
+    Scoped to the candidate's own store when one is recorded (meta["store"], from item
+    1's one-candidate-per-store shape) so a store-A candidate never flags store-B's (or
+    another store's) documents as "removed" — comparing against the whole graph would
+    otherwise manufacture a false "these got removed" signal for data the candidate
+    never touched. Unscoped (compares the whole graph) for a single-store candidate,
+    matching legacy keyless documents. {} for a non-graph candidate or an unparsable one
+    (the accept-path's own error already covers that case)."""
+    if meta.get("kind") != "graph":
+        return {}
+    slug = meta.get("project") or ""
+    from . import graph as graphmod
+    try:
+        _name, _desc, docs, _efforts = graphmod.parse_fragment(payload, slug)
+    except graphmod.GraphError:
+        return {}
+    existing_pg = reg.graphs.get(slug)
+    existing_docs = existing_pg.documents if existing_pg else []
+    store = meta.get("store") or ""
+    if store:
+        existing_docs = [d for d in existing_docs if d.store == store]
+    existing_by_id = {d.drive_id: d for d in existing_docs}
+    proposed_by_id = {d.drive_id: d for d in docs}
+
+    def _differs(a, b) -> bool:
+        return ((a.name, a.date_modified, a.web_url, a.doc_type, a.store)
+                != (b.name, b.date_modified, b.web_url, b.doc_type, b.store))
+
+    added = sorted(i for i in proposed_by_id if i not in existing_by_id)
+    changed = sorted(i for i in proposed_by_id
+                     if i in existing_by_id and _differs(existing_by_id[i], proposed_by_id[i]))
+    removed = sorted(i for i in existing_by_id if i not in proposed_by_id)
+    return {"added": added, "changed": changed, "removed": removed}
 
 
 def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, str]:
@@ -577,7 +634,8 @@ def _write_candidate(reg: Registry, slug: str, meta: dict, payload_filename: str
 def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                          removals: list[str] | None = None, reason: str = "",
                          efforts: list[dict] | None = None,
-                         effort_removals: list[str] | None = None) -> dict:
+                         effort_removals: list[str] | None = None,
+                         store: str = "") -> dict:
     """Save proposed document and effort mappings as a `kind: graph` inbox candidate.
     Writes only inbox/, never registry/ (invariant #3).
 
@@ -587,6 +645,15 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     effort IDs to remove. A candidate may carry only removals (no upserts).
     `parentId` in a document dict is the effort ID (or "" / omitted for project root).
 
+    `store` (optional) is the document_store server key this candidate's documents were
+    enumerated from — a multi-store project's connect loop proposes ONE candidate per
+    store, so every document in the batch shares it; a document dict may still carry its
+    own `store` key to override (e.g. a hand-curated console edit). Recorded on the
+    candidate's meta so the review UI can label which store it's for. IDs are store-native
+    (a document is identified by its connector-provided ID alone), so a store-A candidate's
+    documents can only ever carry store-A IDs — the upsert below (matched by drive_id) never
+    touches a different store's nodes.
+
     The fragment always includes ALL current + proposed efforts so that document
     isPartOf links validate self-consistently. Returns {ok, id, registry_path} or
     {ok: False, error}."""
@@ -595,18 +662,18 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         return {"ok": False, "error": f"unknown project {slug!r}"}
 
     # ── parse document dicts ──────────────────────────────────────────────────
-    # An upsert replaces the whole node, so a caller that doesn't send `type` (an older
-    # console payload) must not wipe an existing annotation — preserve it from the
+    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store` (an
+    # older console payload) must not wipe an existing annotation — preserve each from the
     # current graph when the key is absent.
-    existing_types = {d.drive_id: d.doc_type
-                      for d in (reg.graphs.get(slug).documents if reg.graphs.get(slug)
-                                else [])}
+    existing = {d.drive_id: d for d in (reg.graphs.get(slug).documents
+                                        if reg.graphs.get(slug) else [])}
     docs = []
     for d in documents:
         try:
             parent_id = str(d.get("parentId", "")).strip()
             parent_iri = (graphmod.CREATIVE_WORK_NS + parent_id) if parent_id else ""
             did = str(d["id"]).strip()
+            prior = existing.get(did)
             docs.append(graphmod.Document(
                 drive_id=did, name=str(d["name"]).strip(),
                 description=str(d.get("description", "")).strip(),
@@ -615,7 +682,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 keywords=str(d.get("keywords", "")).strip(),
                 web_url=str(d.get("webUrl", "")).strip(),
                 doc_type=(str(d["type"]).strip() if "type" in d
-                          else existing_types.get(did, ""))))
+                          else (prior.doc_type if prior else "")),
+                store=(str(d["store"]).strip() if "store" in d
+                      else (store or (prior.store if prior else "")))))
         except KeyError as e:
             return {"ok": False, "error": f"document missing required field {e}"}
 
@@ -686,6 +755,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         meta["effort_removals"] = effort_removals
     if reason:
         meta["reason"] = reason
+    if store:
+        meta["store"] = store
     cid = _write_candidate(reg, f"graph-{slug}", meta, "graph.jsonld", fragment)
     return {"ok": True, "id": cid, "registry_path": graph_rel}
 

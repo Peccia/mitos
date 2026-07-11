@@ -34,6 +34,12 @@ CREATIVE_WORK_NS = PECCIA + "creativework/"
 # can hold software and marketing efforts side by side and the session routes per task.
 # (Orgs are global domain skills; nothing org-shaped is stored per project.)
 ORG_DOMAIN_PRED = PECCIA + "orgDomain"
+# store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
+# which document_store (a connections/servers.yaml server key) enumerated this document.
+# Missing key = legacy = "the project's sole store" (only new enumerations write it), and
+# the value is the SAME server key used everywhere else (env files, urls:, connection
+# labels) — never a second identity for one store.
+STORE_PRED = PECCIA + "store"
 
 # The @context every stored graph carries (kept verbatim in canonical output). An
 # explicit @vocab — not the bare "https://schema.org" string — so terms resolve offline
@@ -63,6 +69,9 @@ class Document:
     doc_type: str = ""     # schema:additionalType — optional friendly kind ("spreadsheet",
                            # "document", "pdf", …) so the agent picks the right tool
                            # (e.g. sheets vs docs) before touching the store
+    store: str = ""        # peccia:store — the document_store server key that enumerated
+                           # this document; "" = legacy/single-store (the project's sole
+                           # store, whatever it is today)
 
     @property
     def iri(self) -> str:
@@ -252,13 +261,16 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
         web_url = str(url_val) if url_val is not None else ""
         type_val = g.value(subj, SDO("additionalType"))
         doc_type = str(type_val) if type_val is not None else ""
+        store_val = g.value(subj, URIRef(STORE_PRED))
+        store = str(store_val) if store_val is not None else ""
         docs.append((part_of_str, Document(drive_id=drive_id, name=name,
                                            description=description,
                                            date_modified=date_modified,
                                            is_part_of=part_of_str,
                                            keywords=keywords,
                                            web_url=web_url,
-                                           doc_type=doc_type)))
+                                           doc_type=doc_type,
+                                           store=store)))
 
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
@@ -366,6 +378,8 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             doc_node["keywords"] = d.keywords
         if d.doc_type:
             doc_node["additionalType"] = d.doc_type
+        if d.store:
+            doc_node[STORE_PRED] = d.store
         graph_nodes.append(doc_node)
     doc = {"@context": JSONLD_CONTEXT, "@graph": graph_nodes}
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
@@ -592,20 +606,25 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
                       include_effort_desc=False)
 
 
-def project_details_markdown(pg: ProjectGraph, heading: str | None = None) -> str:
+def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
+                             level: int = 1) -> str:
     """A project's `Projects/<slug>/AGENTS_DETAILS.md`: the DETAILED reference, read on
     demand — the full, UNCAPPED document set (title, document ID, modified date, plus
     description and tags when present; no URL), grouped by effort. Generated and
     non-adoptable, like the index.
 
-    Standalone file, so its identity is the H1 `# <Name> (`key`)` connection heading; effort
-    groups render as `## Documents` / `## <effort>` one level under it."""
+    Standalone file, so at the default `level=1` its identity IS the H1 `# <Name> (`key`)`
+    connection heading; effort groups render as `## Documents` / `## <effort>` one level
+    under it. A multi-store project's planner loop passes `level=2` for every store past
+    the first (`planner._project_doc_block`) so the file still has exactly one H1 overall
+    — the first store's heading stays the file's identity, later stores nest as sibling
+    H2 sections, same shape every other multi-section tree node already uses."""
     intro = "Full document reference for `AGENTS.md`. Resolve a document by its ID."
 
     def entry_fn(docs: list[Document]) -> list[str]:
         return [_concise_entry(d) for d in docs] + [""]
 
-    return _doc_block(pg, heading=_conn_heading(pg, heading), level=1,
+    return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=True, intro=intro, entry_fn=entry_fn,
                       include_effort_desc=True)
 

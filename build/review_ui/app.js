@@ -231,6 +231,38 @@ function inboxListRow(c) {
   return row;
 }
 
+// batch2 item 2 (diff-aware candidates): a graph candidate's added/changed/removed
+// document IDs (review._doc_delta, computed store-scoped so a store-A candidate never
+// flags store-B's documents) — the concise view; the full line diff over the merged
+// JSON-LD moves behind a <details> disclosure in candidateCard so re-running `connect`
+// on a whole store doesn't bury the reviewer in unchanged lines.
+function docDeltaSummary(c) {
+  const box = el("div", "doc-delta");
+  const delta = c.doc_delta || {};
+  const added = delta.added || [], changed = delta.changed || [], removed = delta.removed || [];
+  if (c.no_changes) {
+    box.append(el("div", "muted card-note",
+      "No changes — every document in this enumeration already matches the registry."));
+    return box;
+  }
+  const row = (label, ids, cls) => {
+    if (!ids.length) return;
+    const r = el("div", "doc-delta-row " + cls);
+    r.append(el("span", "doc-delta-label", `${label} (${ids.length})`));
+    r.append(el("code", "doc-delta-ids", ids.join(", ")));
+    box.append(r);
+  };
+  row("Added", added, "ins");
+  row("Changed", changed, "chg");
+  row("Not in this enumeration", removed, "del");
+  if (removed.length) {
+    box.append(el("p", "muted doc-delta-note",
+      "These exist in the registry but weren't returned by this enumeration — they are "
+      + "NOT being removed. Propose an explicit removal separately if that's intended."));
+  }
+  return box;
+}
+
 function candidateCard(c) {
   const card = el("article", "card");
 
@@ -284,6 +316,12 @@ function candidateCard(c) {
 
   if (c.kind === "new") {
     card.append(el("div", "muted card-note", "New file — nothing to diff against; see the proposed text below."));
+  } else if (c.kind === "graph") {
+    card.append(docDeltaSummary(c));
+    const fullDiff = el("details", "payload");
+    fullDiff.append(el("summary", "", "Full graph diff (raw)"));
+    fullDiff.append(diffTable(c.diff));
+    card.append(fullDiff);
   } else {
     card.append(diffTable(c.diff));
   }
@@ -299,6 +337,10 @@ function candidateCard(c) {
   reason.placeholder = "Reason (optional — logged to decisions.jsonl)";
   const isStale = c.stale === true && c.acceptable;
   const accept = el("button", "accept", isStale ? "Force accept" : "Accept");
+  // A no-op graph candidate (nothing added/changed/removed) is de-emphasized, never
+  // hidden or disabled — the server-side accept path stays the real check regardless
+  // (same force-accept principle as the stale-registry gate above).
+  if (c.no_changes) accept.classList.add("deemphasized");
   const reject = el("button", "reject", "Reject");
   reject.onclick = () => sendDecision(c.id, "reject", reason.value);
   const copy = el("button", "ghost", "Copy proposed");
@@ -1566,6 +1608,30 @@ function appendSection(list, gid, label, items) {
   for (const p of items) list.append(listRow(p, isFav));
 }
 
+// ── draft-state badges: compact E/M letters replacing the old "edited"/"base moved"
+// text tags. E = pending draft; M = the draft's base has since changed in the registry
+// (Save to Inbox would diff against stale text — the more urgent of the two, so it's
+// always second and colored as a warning rather than a sibling state). Keyed the same
+// way as `drafts`/`draftBase` (prompt key, e.g. "skill:plan"), so the Prompt Library
+// list and a skill's card in Skills & Orgs read the exact same state and can never
+// disagree. `body` is the CALLER's current registry body for that key (p.body for a
+// prompt-library row, s.body for a skill card) — needed to detect staleness.
+function draftStateBadges(key, body) {
+  if (drafts[key] == null) return [];
+  const edited = el("span", "state-badge edited", "E");
+  edited.title = "Unsaved draft — edited since the registry copy";
+  edited.setAttribute("aria-label", "Edited");
+  const out = [edited];
+  if (draftBase[key] != null && draftBase[key] !== body) {
+    const stale = el("span", "state-badge stale", "M");
+    stale.title = "The registry file changed since this draft was started — review "
+      + "before saving, the old base is no longer what Save to Inbox would diff against.";
+    stale.setAttribute("aria-label", "Base moved");
+    out.push(stale);
+  }
+  return out;
+}
+
 function listRow(p, isFavSection = false) {
   const row = el("div", "list-row" + (p.key === selectedKey ? " active" : ""));
   row.dataset.key = p.key;
@@ -1598,15 +1664,7 @@ function listRow(p, isFavSection = false) {
   const name = el("span", "row-name", p.label);
   name.title = p.name;
   line1.append(name);
-  if (drafts[p.key] != null) {
-    line1.append(el("span", "row-tag edited", "edited"));
-    if (draftBase[p.key] != null && draftBase[p.key] !== p.body) {
-      const tag = el("span", "row-tag stale", "base moved");
-      tag.title = "The registry file changed since this draft was started — review "
-        + "before saving, the old base is no longer what Save to Inbox would diff against.";
-      line1.append(tag);
-    }
-  }
+  for (const badge of draftStateBadges(p.key, p.body)) line1.append(badge);
   if (compose.items.includes(p.key)) line1.append(el("span", "row-tag", "compose"));
   col.append(line1);
   if (p.desc) {
@@ -1616,6 +1674,17 @@ function listRow(p, isFavSection = false) {
   }
 
   row.append(col);
+
+  if (!manageActive) {
+    const rowCopy = el("button", "row-copy ghost tiny", "Copy");
+    rowCopy.title = "Copy prompt body";
+    rowCopy.onclick = (e) => {
+      e.stopPropagation();
+      copyText(currentBody(p), p.name);
+      pushRecent(p.key);
+    };
+    row.append(rowCopy);
+  }
 
   if (isFavSection && !favManageMode) {
     // Native HTML5 drag-and-drop reorders `favorites` in place — no library needed.
@@ -1761,6 +1830,25 @@ function buildContextualEditor(opts) {
   const previewToggle = el("button", "tiny ghost", "Preview");
   previewToggle.type = "button";
   toolbar.append(previewToggle);
+
+  // Fullscreen toggle — a pure CSS class swap (.ce-root.fullscreen fixes the whole
+  // editor over the viewport), no layout library needed. Escape exits from anywhere,
+  // matching the convention every other overlay in this app already uses (cmdk, drawers).
+  const fullscreenToggle = tbtn("⤢", "Toggle fullscreen", () => {
+    root.classList.toggle("fullscreen");
+    fullscreenToggle.classList.toggle("active", root.classList.contains("fullscreen"));
+    ta.focus();
+  });
+  toolbar.append(fullscreenToggle);
+  // Scoped to `root` (not document) so it only ever fires while focus is somewhere
+  // inside this editor instance, and needs no manual teardown — once a re-render
+  // detaches `root` from the DOM, it stops receiving bubbled events on its own.
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && root.classList.contains("fullscreen")) {
+      root.classList.remove("fullscreen");
+      fullscreenToggle.classList.remove("active");
+    }
+  });
 
   const editorWrap = el("div", "editor-wrap");
   const gutter = el("div", "line-nums");
@@ -2179,6 +2267,12 @@ function renderDetail() {
   const metaPanel = buildMetaPanel(p);
   if (metaPanel) box.append(metaPanel);
 
+  // Tracks the edited/not-edited transition so the sidebar's E/M badge appears the
+  // moment a draft starts (or clears the moment it's undone back to the registry text)
+  // instead of waiting for some unrelated action (search, favorite, tab switch) to
+  // happen to call renderList() next. Gated on the transition, not every keystroke —
+  // draftBase only pins once per draft, so the badge state can't change mid-typing.
+  let wasEditing = drafts[p.key] != null;
   const editor = buildContextualEditor({
     value: drafts[p.key] != null ? drafts[p.key] : p.body,
     onInput(value) {
@@ -2189,6 +2283,8 @@ function renderDetail() {
       }
       store.set(LS.drafts, drafts);
       store.set(LS.draftBase, draftBase);
+      const isEditing = drafts[p.key] != null;
+      if (isEditing !== wasEditing) { wasEditing = isEditing; renderList(); }
     },
     statusText(value) {
       const modified = drafts[p.key] != null;
@@ -2375,16 +2471,19 @@ function skillRow(s, domain) {
   }
   if (s.description) header.append(el("span", "muted skill-row-desc", s.description));
 
-  // target chips pinned to the right of the header
+  // right-aligned cluster: draft-state badges (if this skill's SKILL.md has a pending
+  // Prompt Library edit — same drafts/draftBase state, so the card can never disagree
+  // with the Prompt Library row) followed by target chips, sharing one right-alignment.
+  const rightBox = el("div", "doc-tags skill-row-targets");
+  for (const badge of draftStateBadges(`skill:${s.name}`, s.body)) rightBox.append(badge);
   if (s.targets && s.targets.length) {
-    const chips = el("div", "doc-tags skill-row-targets");
     for (const t of s.targets) {
       const chip = el("span", "tag-chip", t);
       chip.dataset.target = t;
-      chips.append(chip);
+      rightBox.append(chip);
     }
-    header.append(chips);
   }
+  if (rightBox.children.length) header.append(rightBox);
 
   header.onclick = () => {
     expandedSkillName = isOpen ? null : s.name;
@@ -2420,9 +2519,13 @@ function skillRow(s, domain) {
     actBar.append(editBtn);
     body.append(actBar);
 
-    body.append(renderSkillFilesSection(s));
-    body.append(renderSkillExtensionSection(s));
-    body.append(renderSkillScopeSection(s));
+    const detailGrid = el("div", "skill-detail-grid");
+    detailGrid.append(renderSkillFilesSection(s));
+    const detailCol = el("div", "skill-detail-col");
+    detailCol.append(renderSkillExtensionSection(s));
+    detailCol.append(renderSkillScopeSection(s));
+    detailGrid.append(detailCol);
+    body.append(detailGrid);
 
     // Org structure panel — only for org-domain skills
     if (domain && orgData && orgData[domain]) {
@@ -2569,6 +2672,7 @@ function renderSkillExtensionSection(s) {
 function renderSkillScopeSection(s) {
   const key = `skill:${s.name}`;
   const section = el("div", "skill-extension-section");
+  const hasProjects = !!(s.bound_projects && s.bound_projects.length);
 
   const header = el("div", "resources-panel-header");
   header.append(el("h4", "", "Scope"));
@@ -2583,7 +2687,17 @@ function renderSkillScopeSection(s) {
   function refreshActionState() {
     const d = metaDrafts[key];
     const hasDraft = !!d && ("scope" in d);
-    save.disabled = !hasDraft;
+    // Block save when the effective scope is "project" but no project manifest
+    // lists this skill — saving that state would produce an inbox candidate that
+    // deploys the skill nowhere, which is never useful.
+    const effectiveScope = (d && "scope" in d) ? d.scope : (s.frontmatter.scope || "global");
+    const projectBlocksSave = effectiveScope === "project" && !hasProjects;
+    save.disabled = !hasDraft || projectBlocksSave;
+    if (projectBlocksSave) {
+      save.title = "Add this skill to a project's registry/projects/<slug>.yaml first";
+    } else {
+      save.title = "Propose this skill's scope as an inbox candidate";
+    }
     revert.disabled = !hasDraft;
     badge.classList.toggle("hidden", !hasDraft);
   }
@@ -2591,9 +2705,13 @@ function renderSkillScopeSection(s) {
   const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
   const scopeRow = el("div", "meta-grid");
   const scopeSelect = el("select");
-  for (const [val, label] of [["global", "Global"], ["project", "Project"]]) {
+  for (const [val, label] of [
+    ["global", "Global"],
+    ["project", hasProjects ? "Project" : "Project (configure in a project manifest first)"],
+  ]) {
     const opt = el("option", "", label);
     opt.value = val;
+    if (!hasProjects && val === "project") opt.disabled = true;
     if ((current.scope || "global") === val) opt.selected = true;
     scopeSelect.append(opt);
   }
@@ -2609,7 +2727,7 @@ function renderSkillScopeSection(s) {
   if ((current.scope || "global") === "project") {
     const boundWrap = el("div", "graph-field");
     boundWrap.append(el("label", "", "Bound projects (edit their manifest to change)"));
-    if (s.bound_projects && s.bound_projects.length) {
+    if (hasProjects) {
       const chips = el("div", "doc-tags");
       for (const slug of s.bound_projects) chips.append(el("span", "tag-chip", slug));
       boundWrap.append(chips);
@@ -2626,7 +2744,6 @@ function renderSkillScopeSection(s) {
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save scope to inbox");
-  save.title = "Propose this skill's scope as an inbox candidate";
   const revert = el("button", "reject tiny", "Revert scope");
   revert.title = "Discard the local scope edit for this skill";
   save.onclick = () => {
@@ -2706,7 +2823,7 @@ function resetNewSkillDraft() {
 }
 
 function newSkillForm() {
-  const wrap = el("div", "inline-editor new-skill-form");
+  const wrap = el("div", "new-skill-form");
   const isExtension = !!newSkillPrefillExtendsSkill;
   wrap.append(el("h3", "", isExtension ? "New department extension" : "New skill"));
 
@@ -3289,6 +3406,13 @@ $("cmdk-input").oninput = (e) => renderPaletteResults(e.target.value);
 $("cmdk-input").addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown") { e.preventDefault(); movePaletteSelection(1); }
   else if (e.key === "ArrowUp") { e.preventDefault(); movePaletteSelection(-1); }
+  else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Ctrl/Cmd+Enter copies the highlighted result's body without opening it —
+    // the palette stays open so the user can keep browsing.
+    e.preventDefault();
+    const p = paletteResults[paletteIdx];
+    if (p) { copyText(currentBody(p), p.name); pushRecent(p.key); }
+  }
   else if (e.key === "Enter") { e.preventDefault(); selectPaletteResult(paletteIdx); }
   else if (e.key === "Escape") { e.preventDefault(); closePalette(); }
 });

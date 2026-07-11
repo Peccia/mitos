@@ -1,6 +1,6 @@
 # Authoring Custom Capabilities Guide
 
-Mitos allows you to extend your agent organization by authoring three kinds of reusable text assets: **Skills**, **Subagents**, and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
+Mitos allows you to extend your agent organization by authoring two kinds of reusable text assets: **Skills** and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
 
 ---
 
@@ -73,43 +73,7 @@ regardless of scope) is bound the same way for both targets:
 
 ---
 
-## 🤖 2. Authoring Subagents
-
-A **Subagent** is a specialized agent persona (like a Database Debugger or Code Reviewer) that Claude Code can spawn in the background to handle off-thread sub-tasks.
-
-### File Location
-Subagents live at the top level of the agents folder:
-```
-registry/local/agents/<name>.md
-```
-
-### Frontmatter Schema
-Each agent Markdown file must specify a `name` and `description` in its frontmatter:
-
-```yaml
----
-name: code-reviewer
-description: "Reviews git diffs for style and safety guidelines"
-# optional fields supported by Claude Code:
-# tools: [Read, Edit, Bash]
-# model: gemini-3.5-flash
----
-
-You are the Code Reviewer subagent. Your role is to examine the provided code changes...
-```
-
-### Binding to Projects
-To deploy a subagent to a project's Claude Code environment:
-1. List the agent in the project manifest's `agents:` list:
-   ```yaml
-   agents:
-     - code-reviewer
-   ```
-2. The file will deploy to `<project-root>/.claude/agents/<name>.md`.
-
----
-
-## 💬 3. Authoring Prompts (Slash-Commands)
+## 💬 2. Authoring Prompts (Slash-Commands)
 
 A **Prompt** is a harness-agnostic text template. In Claude Code, prompts deploy as custom `/commands` that inject instructions on demand. In other harnesses, they appear in the Operator Console's Prompt Library for copy-pasting.
 
@@ -139,7 +103,7 @@ Context: $ARGUMENTS
 If a prompt targets `claude-code`, the placeholder `$ARGUMENTS` in the markdown body is replaced by any text you type after the command in the Claude Code terminal (e.g. `/bug-report "Connection timed out"`).
 
 ### Binding to Projects
-Prompts are bound to Claude Code checkouts identically to skills and agents. List the prompt under `prompts:` in your project's manifest:
+Prompts are bound to Claude Code checkouts identically to skills. List the prompt under `prompts:` in your project's manifest:
 
 ```yaml
 # registry/local/projects/acme.yaml
@@ -152,7 +116,7 @@ The prompt compiles to `<project-root>/.claude/commands/bug-report.md`.
 
 ## 🔄 The Authoring daily loop
 
-1. **Write the asset**: Create the skill folder, agent file, or prompt file in `registry/local/`.
+1. **Write the asset**: Create the skill folder or prompt file in `registry/local/`.
 2. **Bind to a project**: Edit the target project's manifest under `registry/local/projects/<slug>.yaml`.
 3. **Validate**: Run `python build/compile.py compile` to run schema checks.
 4. **Deploy**: Run `python build/compile.py deploy --machine <name>` to materialize the files into your project checkouts or global config directories.

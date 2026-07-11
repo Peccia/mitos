@@ -271,6 +271,31 @@ def test_graph_doc_type_round_trip_and_rendering():
     assert det_line == full_line, "claude-code and hermes doc lines must stay identical"
 
 
+def test_graph_store_round_trip():
+    """peccia:store is optional; present -> serialized/loaded; absent -> omitted (legacy =
+    "the project's sole store"), so a pre-multi-store graph round-trips byte-for-byte."""
+    import json, tempfile
+    from pathlib import Path
+    from agentic import graph
+    doc_with = graph.Document("T1", "Budget", "desc", "2026-01-01", store="gws")
+    doc_without = graph.Document("T2", "Brief", "desc", "2026-01-01")
+    pg = graph.ProjectGraph(slug="p", name="P", description="",
+                            documents=[doc_with, doc_without])
+
+    raw = graph.canonical_jsonld(pg)
+    data = json.loads(raw)
+    nodes = {n["identifier"]: n for n in data["@graph"] if n.get("@type") == "DigitalDocument"}
+    assert nodes["T1"][graph.STORE_PRED] == "gws"
+    assert graph.STORE_PRED not in nodes["T2"]
+
+    p = Path(tempfile.mktemp(suffix=".jsonld"))
+    p.write_text(raw, encoding="utf-8")
+    pg2 = graph.load_project_graph(p)
+    p.unlink()
+    assert next(d for d in pg2.documents if d.drive_id == "T1").store == "gws"
+    assert next(d for d in pg2.documents if d.drive_id == "T2").store == ""
+
+
 def test_friendly_doc_type_mapping():
     """MIME types map to short agent-facing kinds; unknown MIME falls back to the
     subtype tail; short values (local-connector extensions) pass through; empty stays
@@ -522,7 +547,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     rig = copy.deepcopy(reg)
     rig.projects["apdict"] = {
         "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"}, "agents": [],
+        "local_path": {"example-windows": "apdict"},
         "context": {"assistant": "registry/context/projects/apdict.md"},
         "document_store": "gws",
     }
@@ -629,6 +654,69 @@ def test_graph_candidate_with_removals_drops_and_upserts():
     merged = graph.load_project_graph(gdir / "example-project.jsonld")
     assert {d.drive_id for d in merged.documents} == {"KEEP", "NEW1"}   # GONE dropped
 
+def test_graph_candidate_store_scoped_upsert_preserves_other_stores():
+    """Accepting a store-B candidate must never touch store-A's documents — IDs are
+    store-native, so a candidate proposed with `store="fake2"` can only ever carry
+    fake2's IDs, and its upsert (matched by drive_id) leaves the gws-tagged doc and the
+    legacy keyless doc (predating the second store) exactly as they were."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug="example-project", name="Example Project",
+                              description="d", documents=[
+                                  graph.Document("GWS1", "Gws Doc", "kept", "2026-01-01",
+                                                store="gws"),
+                                  _doc("LEGACY1", "Legacy Doc", "kept", "2026-01-01")])
+    (gdir / "example-project.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    out = review.propose_graph_change(
+        treg, "example-project",
+        [{"id": "FAKE1", "name": "Fake Store Doc", "description": "new",
+          "dateModified": "2026-06-14"}],
+        reason="from fake2 connect", store="fake2")
+    assert out["ok"]
+    meta_path = _inbox(tmp) / out["id"] / "meta.yaml"
+    import yaml as _y
+    meta = _y.safe_load(meta_path.read_text(encoding="utf-8"))
+    assert meta["store"] == "fake2"
+
+    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    by_id = {d.drive_id: d for d in merged.documents}
+    assert set(by_id) == {"GWS1", "LEGACY1", "FAKE1"}
+    assert by_id["GWS1"].store == "gws"            # untouched by the fake2 candidate
+    assert by_id["LEGACY1"].store == ""             # legacy keyless doc untouched
+    assert by_id["FAKE1"].store == "fake2"          # new doc tagged with its store
+
+def test_propose_graph_change_preserves_existing_store_when_omitted():
+    """An older console payload that doesn't send `store` per document must not wipe an
+    existing store tag — mirrors the doc_type preservation guarantee."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug="example-project", name="Example Project",
+                              description="d", documents=[
+                                  graph.Document("GWS1", "Gws Doc", "kept", "2026-01-01",
+                                                store="gws")])
+    (gdir / "example-project.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    # re-propose GWS1 with an updated description, no `store` key, no candidate-level store
+    out = review.propose_graph_change(
+        treg, "example-project",
+        [{"id": "GWS1", "name": "Gws Doc", "description": "updated",
+          "dateModified": "2026-06-14"}])
+    assert out["ok"]
+    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    doc = next(d for d in merged.documents if d.drive_id == "GWS1")
+    assert doc.store == "gws" and doc.description == "updated"
+
 def test_propose_graph_change_allows_removals_only():
     """A candidate may carry only removals (no upserts) — the empty guard must not reject it,
     and a removal whose id is also being upserted is dropped (the upsert wins)."""
@@ -708,7 +796,7 @@ def test_graph_tree_deploys_only_on_claude_code_env():
     rig = copy.deepcopy(reg)
     rig.projects["apdict"] = {
         "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"}, "agents": [],
+        "local_path": {"example-windows": "apdict"},
         "context": {"assistant": "registry/context/projects/apdict.md"},
     }
     rig.partials["context/projects/apdict.md"] = Partial(
@@ -747,7 +835,7 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     if "apdict" not in reg2.projects:
         reg2.projects["apdict"] = {
             "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-            "local_path": {"example-windows": "apdict"}, "agents": [], "context": {},
+            "local_path": {"example-windows": "apdict"}, "context": {},
         }
     if "apdict" not in reg2.graphs:
         reg2.graphs["apdict"] = graph.ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)

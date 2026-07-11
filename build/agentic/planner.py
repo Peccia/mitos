@@ -15,7 +15,8 @@ import yaml
 
 from . import render
 from .io import safe_rel
-from .loader import Registry, RegistryError, resolve_local_path, _repo_basename
+from .loader import (Registry, RegistryError, resolve_local_path, _repo_basename,
+                     document_stores)
 
 # A dynamically discovered agentic branch: any partial whose logical key matches
 # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch (see
@@ -410,8 +411,8 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
         # full document context inline + repos cloned beside this file (no details file)
         repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
         prose_src, prose = _project_prose(reg, proj, "agents-md")
-        gen_body = graphmod.project_full_markdown(
-            pg, repos or None, _doc_store_heading(reg, proj),
+        gen_body = _project_doc_block(
+            reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
             level=2 if prose_src else 1,
             emit_heading=_connection_emit(proj, prose))
         if prose_src:
@@ -482,9 +483,13 @@ def _doc_store_heading(reg: Registry, proj: dict) -> str | None:
     """The connection-section title for a project's generated document block: the bound
     store's STABLE label `<Name> (`key`)` (render.connection_label) — the same heading the
     operating root's connection block uses, so SOUL/skills reference one name. None (→
-    "<name> — Documents" fallback) when the project has no store or an unknown one."""
-    label = render.connection_label(reg.servers.get("servers") or {},
-                                    proj.get("document_store"))
+    "<name> — Documents" fallback) when the project has no store, an unknown one, or more
+    than one (a multi-store project's per-store headings come from `_project_doc_block`
+    instead — this single label only makes sense for exactly one store)."""
+    stores = document_stores(proj.get("document_store"))
+    if len(stores) != 1:
+        return None
+    label = render.connection_label(reg.servers.get("servers") or {}, stores[0])
     return label[0] if label else None
 
 
@@ -492,11 +497,60 @@ def _connection_emit(proj: dict, prose_text: str) -> bool:
     """Whether the generated document block emits its own `## <Name> (`key`)` heading. True
     unless the project's prose already opened that connection section — detected by the
     `` (`<store>`) `` marker an author writes when curating store-folder paths — in which
-    case the document map attaches beneath the curated section instead of duplicating it."""
-    ds = (proj.get("document_store") or "").strip()
-    if not ds or ds == "none":
+    case the document map attaches beneath the curated section instead of duplicating it.
+    Always True for a multi-store project — curated-prose attach is a single-store nicety;
+    `_project_doc_block` always emits its own heading per store."""
+    stores = document_stores(proj.get("document_store"))
+    if len(stores) != 1 or stores[0] == "none":
         return True
-    return f"(`{ds}`)" not in (prose_text or "")
+    return f"(`{stores[0]}`)" not in (prose_text or "")
+
+
+def _project_doc_block(reg: Registry, proj: dict, pg, render_fn, **kwargs) -> str:
+    """Render a project's document connection block via one of graph.py's per-project
+    renderers (project_index_markdown / project_details_markdown / project_full_markdown),
+    looping once per store for a multi-store project — each store gets its own
+    `## <Name> (`key`)` section (the render primitive already produces one section per
+    call; multi-store just calls it once per store, filtered to that store's documents,
+    and concatenates the blocks). A project with 0 or 1 store renders exactly as before:
+    one call, the full unfiltered document set, the caller's own `heading`/`emit_heading`
+    (curated-prose attach only applies to the single-store case).
+
+    Legacy documents with no store tag are never dropped: when multiple real stores exist,
+    any keyless leftover (predating the second store) renders as its own trailing section
+    with heading=None (graph.py's "<project name> — Documents" fallback).
+
+    Header taxonomy (invariant #12 — exactly one H1 per file): the caller's `level` is
+    honored ONLY for the first store's section; every later section is forced to at least
+    level 2. When the caller's level is 1 (this block IS the file's own identity, e.g.
+    project_details_markdown's standalone AGENTS_DETAILS.md), the first store's heading
+    stays the file's H1 and later stores nest as sibling H2 sections — never two H1s in
+    one file. When the caller's level is already 2 (nested under an existing prose H1),
+    every store's section renders at that same level, as normal sibling sections."""
+    stores = document_stores(proj.get("document_store"))
+    if len(stores) <= 1:
+        return render_fn(pg, heading=_doc_store_heading(reg, proj), **kwargs)
+    from dataclasses import replace as _dc_replace
+    servers = reg.servers.get("servers") or {}
+    base_level = kwargs.pop("level", 2)
+    if "emit_heading" in kwargs:
+        kwargs["emit_heading"] = True
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for i, s in enumerate(stores):
+        docs = [d for d in pg.documents if d.store == s]
+        seen.update(d.drive_id for d in docs)
+        label = render.connection_label(servers, s)
+        level = base_level if i == 0 else max(base_level, 2)
+        blocks.append(render_fn(_dc_replace(pg, documents=docs),
+                                heading=(label[0] if label else s),
+                                level=level, **kwargs))
+    leftover = [d for d in pg.documents if d.drive_id not in seen]
+    if leftover:
+        level = max(base_level, 2) if stores else base_level
+        blocks.append(render_fn(_dc_replace(pg, documents=leftover),
+                                heading=None, level=level, **kwargs))
+    return "\n\n".join(b.rstrip("\n") for b in blocks) + "\n"
 
 
 def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None, str]:
@@ -823,8 +877,8 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                 prose_body = render.plain_document(sections).rstrip("\n")
                 outputs.append(_mixed_doc_output(
                     "agents-md", deploy_path, prose_body,
-                    graphmod.project_index_markdown(
-                        pg, _doc_store_heading(reg, proj),
+                    _project_doc_block(
+                        reg, proj, pg, graphmod.project_index_markdown, level=2,
                         emit_heading=_connection_emit(proj, prose_body)),
                     src_rel, policy))
             else:
@@ -841,8 +895,8 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                 outputs.append(Output(
                     target="agents-md", kind="text", deploy_path=details_path,
                     dist_rel=f"agents-md/{safe_rel(details_path)}",
-                    content=graphmod.project_details_markdown(
-                        pg, _doc_store_heading(reg, proj)),
+                    content=_project_doc_block(
+                        reg, proj, pg, graphmod.project_details_markdown, level=1),
                     drift_policy="generated", sources=[],
                 ))
     return outputs
@@ -908,10 +962,10 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 # per-document detail on demand — so declaring `builder` instead of
                 # `assistant` context never costs it its knowledge-graph docs.
                 from . import graph as graphmod
-                heading = _doc_store_heading(reg, proj)
                 prose_body = render.plain_document(sections).rstrip("\n")
-                gen_body = graphmod.project_index_markdown(
-                    pg, heading, emit_heading=_connection_emit(proj, prose_body))
+                gen_body = _project_doc_block(
+                    reg, proj, pg, graphmod.project_index_markdown, level=2,
+                    emit_heading=_connection_emit(proj, prose_body))
                 if at_subdir:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
@@ -927,7 +981,8 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 outputs.append(Output(
                     target="agents-md", kind="text", deploy_path=details_path,
                     dist_rel=f"agents-md/{safe_rel(details_path)}",
-                    content=graphmod.project_details_markdown(pg, heading),
+                    content=_project_doc_block(
+                        reg, proj, pg, graphmod.project_details_markdown, level=1),
                     drift_policy="generated", sources=[],
                 ))
                 continue
@@ -1050,8 +1105,8 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             from . import graph as graphmod
             repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
             prose_src, prose = _project_prose(reg, proj, "agents-md")
-            gen_body = graphmod.project_full_markdown(
-                pg, repos or None, _doc_store_heading(reg, proj),
+            gen_body = _project_doc_block(
+                reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
                 level=2 if prose_src else 1,
                 emit_heading=_connection_emit(proj, prose))
             # A project may ALSO have an agentic_tree mount — two AGENTS.md-shaped files
@@ -1137,15 +1192,13 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             ))
             outputs += _skill_resource_outputs(skill, resources, "claude-code",
                                                base_dir, policy)
-    # per-project skills, agents, and prompts (the per-project binding design): each
+    # per-project skills and prompts (the per-project binding design): each
     # project's manifest names the assets it uses; they deploy to that project's checkout.
-    # A skill/agent/prompt is reused across projects by naming it in each manifest, never
+    # A skill/prompt is reused across projects by naming it in each manifest, never
     # copied. Only scope: project skills are read here — a scope: global skill already
     # deploys everywhere above, so a stray manifest listing for it is simply inert.
-    ag = spec.get("agents") or {}
     pr = spec.get("prompts") or {}
     sk_subdir = sk.get("subdir", ".claude/skills/{name}")
-    ag_subdir = ag.get("subdir", ".claude/agents")
     pr_subdir = pr.get("subdir", ".claude/commands")
     for slug, proj in reg.projects.items():
         local = _local(reg, machine_name, proj)
@@ -1171,15 +1224,6 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             ))
             outputs += _skill_resource_outputs(skill, resources, "claude-code",
                                                base_dir, policy)
-        for aname in sorted(proj.get("agents") or []):
-            agent = reg.agents[aname]
-            deploy_path = f"{local}/{ag_subdir.rstrip('/')}/{agent.name}.md"
-            outputs.append(Output(
-                target="claude-code", kind="text", deploy_path=deploy_path,
-                dist_rel=f"claude-code/{safe_rel(deploy_path)}",
-                content=render.render_agent(agent, "claude-code"),
-                drift_policy=ag.get("drift_policy", "harvest"), sources=[agent.rel],
-            ))
         for pname in sorted(proj.get("prompts") or []):
             prompt = reg.prompts.get(pname)
             if prompt is None or "claude-code" not in prompt.targets:

@@ -11,7 +11,6 @@ document_store: none      # MCP server (from connections/servers.yaml) that back
                           # e.g. `gws`. `none` = no document store mapped for this project.
 local_path:
   example-windows: example-project   # checkout dir under the machine's projects_root
-agents: [code-reviewer]   # a subagent reused across projects, authored once
 context:
   assistant: registry/context/projects/example-project.md
   repo: registry/context/projects/example-project-repo.md

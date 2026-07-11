@@ -142,20 +142,9 @@ class Skill:
 
 
 @dataclass
-class Agent:
-    """A Claude Code subagent, authored once in registry/agents/<name>.md and bound to
-    projects via the manifest. Harness-agnostic source; today only a claude-code flavor
-    emits it (the agents design)."""
-    name: str
-    rel: str                       # registry-relative path to <name>.md
-    frontmatter: dict
-    body: str
-
-
-@dataclass
 class Prompt:
     """A harness-agnostic reusable prompt, authored in registry/prompts/<name>.md.
-    The substrate every harness understands. Skills and agents are progressive enhancement
+    The substrate every harness understands. Skills are progressive enhancement
     on top; a Prompt degrades gracefully to copy-paste where no native deployment path
     exists. `targets:` is optional — omitting it means console-only (not an error)."""
     name: str
@@ -183,7 +172,6 @@ class Registry:
     machines: dict[str, dict]      # keyed by machine name
     graphs: dict = field(default_factory=dict)   # slug -> graph.ProjectGraph (lazy;
                                    # empty unless registry/graph/ holds JSON-LD files)
-    agents: dict = field(default_factory=dict)   # name -> Agent (registry/agents/)
     prompts: dict = field(default_factory=dict)  # name -> Prompt (registry/prompts/)
     user: dict = field(default_factory=lambda: dict(_DEFAULT_USER))  # given_name,
                                    # full_name, email, location — core defaults merged
@@ -243,7 +231,6 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
 
     partials = _load_partials(reg_dir)
     skills = _load_skills(reg_dir)
-    agents = _load_agents(reg_dir)
     prompts = _load_prompts(reg_dir)
     projects = _load_projects(reg_dir)
     graphs = _load_graphs(reg_dir)
@@ -259,7 +246,6 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
         pfx = f"{LOCAL_OVERLAY}/"
         partials = _overlay(partials, _load_partials(local_dir, prefix=pfx))
         skills = _overlay(skills, _load_skills(local_dir, prefix=pfx))
-        agents = _overlay(agents, _load_agents(local_dir, prefix=pfx))
         prompts = _overlay(prompts, _load_prompts(local_dir, prefix=pfx))
         local_projects = _load_projects(local_dir, is_local=True)
         projects = _overlay(projects, local_projects)
@@ -300,7 +286,7 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
 
     reg = Registry(root=root, partials=partials, skills=skills, servers=servers,
                    projects=projects, targets=targets, machines=machines, graphs=graphs,
-                   agents=agents, prompts=prompts, user=user)
+                   prompts=prompts, user=user)
     _validate(reg)
     return reg
 
@@ -373,26 +359,6 @@ def _load_skills(base: Path, *, prefix: str = "") -> dict[str, Skill]:
         resources = _load_skill_resources(sk.parent, base, prefix, rel)
         out[name] = Skill(name=name, rel=rel, frontmatter=meta, body=body.strip("\n"),
                           resources=resources)
-    return out
-
-
-def _load_agents(base: Path, *, prefix: str = "") -> dict[str, Agent]:
-    out: dict[str, Agent] = {}
-    adir = base / "agents"
-    if not adir.is_dir():
-        return out
-    for af in sorted(adir.glob("*.md")):
-        rel = prefix + af.relative_to(base).as_posix()
-        meta, body = _split_frontmatter(af.read_text(encoding="utf-8"), rel)
-        name = meta.get("name")
-        if not name:
-            raise RegistryError(f"{rel}: agent missing 'name'")
-        if name in out:
-            raise RegistryError(f"{rel}: duplicate agent name {name!r} "
-                                f"(also declared by {out[name].rel})")
-        if not meta.get("description"):
-            raise RegistryError(f"{rel}: agent {name!r} missing 'description'")
-        out[name] = Agent(name=name, rel=rel, frontmatter=meta, body=body.strip("\n"))
     return out
 
 
@@ -522,6 +488,49 @@ def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict
     return None
 
 
+def document_stores(raw) -> list[str]:
+    """Normalize an already-validated `document_store:` value (project or machine) to a list
+    of server names for iteration. A single string (the common case) becomes a one-item
+    list; a list passes through; None/absent is empty. The stored manifest value itself is
+    never rewritten by validation — a plain string stays valid forever, no migration — so
+    call this wherever a store needs to be iterated (Stage 3 connect, the generated
+    connection sections); single-store code paths may keep reading the raw value directly."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return list(raw)
+
+
+def _check_document_store(label: str, ds, known: set[str]) -> None:
+    """Validate a `document_store:` value shared by project and machine manifests: a string
+    OR a list of strings ("multi connections" — a project's/machine's graph may draw from
+    more than one server; explicitly NOT multi-account-per-server-type, so the server key
+    stays identity everywhere). Each entry must be a known server name or the literal
+    'none'; duplicates and an empty list are rejected loudly. 'none' cannot be combined with
+    a real store — it means "no store", which is contradictory alongside one."""
+    if isinstance(ds, str):
+        values = [ds]
+    elif isinstance(ds, list) and all(isinstance(v, str) for v in ds):
+        values = ds
+    else:
+        raise RegistryError(
+            f"{label}: document_store must be a string or a list of strings — a server "
+            f"name from connections/servers.yaml, or 'none'")
+    if not values:
+        raise RegistryError(f"{label}: document_store list must not be empty")
+    if len(values) != len(set(values)):
+        raise RegistryError(f"{label}: document_store lists a duplicate server name")
+    if "none" in values and len(values) > 1:
+        raise RegistryError(
+            f"{label}: document_store 'none' cannot be combined with other stores")
+    bad = [v for v in values if v not in known]
+    if bad:
+        raise RegistryError(
+            f"{label}: document_store {bad!r} is not a known MCP server; "
+            f"known: {sorted(known)}")
+
+
 def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
     """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
     when valid. No per-target incompatibility to check: a target with no project-scoped
@@ -576,6 +585,12 @@ def _validate(reg: Registry) -> None:
                 f"project {slug}: 'org' is no longer a manifest field — org domains "
                 f"are tagged per effort in registry/graph/{slug}.jsonld (peccia:orgDomain "
                 f"on a CreativeWork node); remove 'org:' from the manifest")
+        if "agents" in proj:
+            raise RegistryError(
+                f"project {slug}: 'agents' is no longer a manifest field — the agents "
+                f"lane was retired (0.1.3 batch 1: skills already cover the reusable-"
+                f"behavior story, and Claude Code ships a built-in code-reviewer agent); "
+                f"remove 'agents:' from the manifest")
     for slug, pg in reg.graphs.items():
         for e in pg.efforts:
             if e.org_domain and e.org_domain not in valid_orgs:
@@ -666,9 +681,9 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: context.{label} -> missing partial {rel}"
                 )
         # per-project capability binding (the per-project binding design): the named
-        # skills/agents must exist; a bound skill must be claude-code-compatible (the
+        # skills must exist; a bound skill must be claude-code-compatible (the
         # manifest decides WHICH projects, the skill's targets: decides WHICH tools).
-        for label, key in (("skills", "skills"), ("agents", "agents")):
+        for label, key in (("skills", "skills"),):
             val = proj.get(key)
             if val is not None and not isinstance(val, list):
                 raise RegistryError(f"project {slug}: '{key}' must be a list")
@@ -686,10 +701,6 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: skills binds {sname!r}, which is an extension "
                     f"(extends_skill) — bind its parent skill instead; extensions "
                     f"deploy only spliced into their parent, never standalone")
-        for aname in (proj.get("agents") or []):
-            if aname not in reg.agents:
-                raise RegistryError(
-                    f"project {slug}: agents binds unknown agent {aname!r}")
         for pname in (proj.get("prompts") or []):
             if pname not in reg.prompts:
                 raise RegistryError(
@@ -703,15 +714,8 @@ def _validate(reg: Registry) -> None:
         # in connections/servers.yaml (or the literal 'none' for a project with no store).
         ds = proj.get("document_store")
         if ds is not None:
-            if not isinstance(ds, str):
-                raise RegistryError(
-                    f"project {slug}: document_store must be a string — a server name from "
-                    f"connections/servers.yaml, or 'none'")
             known = set(reg.servers.get("servers") or {}) | {"none"}
-            if ds not in known:
-                raise RegistryError(
-                    f"project {slug}: document_store {ds!r} is not a known MCP server; "
-                    f"known: {sorted(known)}")
+            _check_document_store(f"project {slug}", ds, known)
         # exclude_folders (optional) — folder names or IDs to skip during staging.
         # Each entry must be a non-empty string.
         ef = proj.get("exclude_folders")
@@ -753,15 +757,8 @@ def _validate(reg: Registry) -> None:
         # shape/validation as a project's document_store.
         ds = m.get("document_store")
         if ds is not None:
-            if not isinstance(ds, str):
-                raise RegistryError(
-                    f"machine {name}: document_store must be a string — a server name "
-                    f"from connections/servers.yaml, or 'none'")
             known = set(reg.servers.get("servers") or {}) | {"none"}
-            if ds not in known:
-                raise RegistryError(
-                    f"machine {name}: document_store {ds!r} is not a known MCP server; "
-                    f"known: {sorted(known)}")
+            _check_document_store(f"machine {name}", ds, known)
         paths = m.get("paths") or {}
         # 1. Detect invalid/control characters in machine path keys (escape sequence bugs)
         for key, pval in paths.items():

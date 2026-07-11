@@ -36,13 +36,6 @@ skills:
   frontmatter: claude-code          # name + description only
   drift_policy: harvest
 
-# Agents — Claude Code subagents authored once in registry/agents/<name>.md, bound per
-# project in the manifest (`agents:`), deployed under .claude/agents/<name>.md in each
-# bound project's checkout (the agents design).
-agents:
-  subdir: .claude/agents
-  drift_policy: harvest
-
 # Prompts — harness-agnostic prompts bound per project in the manifest (`prompts:` list)
 # AND compatible (their `targets:` contains "claude-code"). Each prompt becomes a slash
 # command: deployed as .claude/commands/<name>.md, invoked as /<name> in Claude Code.

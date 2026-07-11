@@ -5,6 +5,5 @@ stage: build              # ideation | speccing | build | maintain
 repo: "git@github.com:Peccia/mitos.git"
 local_path:
   example-windows: mitos        # the repo manages itself at <projects_root>/mitos
-agents: [code-reviewer]
 context:
   builder: registry/context/projects/mitos.md   # → root AGENTS.md
