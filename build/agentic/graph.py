@@ -34,6 +34,10 @@ CREATIVE_WORK_NS = PECCIA + "creativework/"
 # can hold software and marketing efforts side by side and the session routes per task.
 # (Orgs are global domain skills; nothing org-shaped is stored per project.)
 ORG_DOMAIN_PRED = PECCIA + "orgDomain"
+# goal is likewise a peccia predicate: a free-text statement of what "done" looks like
+# for an effort, rendered as its own line under the effort heading so the agent reads
+# intent — not just a document list. Optional, omit-when-absent, no validation set.
+GOAL_PRED = PECCIA + "goal"
 # store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
 # which document_store (a connections/servers.yaml server key) enumerated this document.
 # Missing key = legacy = "the project's sole store" (only new enumerations write it), and
@@ -92,6 +96,7 @@ class CreativeWork:
     is_part_of: str       # must be the project IRI
     org_domain: str = ""  # peccia:orgDomain — the org domain governing this effort
                           # (e.g. "software"); "" → untagged, route by request nature
+    goal: str = ""        # peccia:goal — free-text outcome statement for this effort
 
     @property
     def iri(self) -> str:
@@ -187,8 +192,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str]] = []  # (iri, name, description,
-                                                       #  org_domain)
+    raw_efforts: list[tuple[str, str, str, str, str]] = []  # (iri, name, description,
+                                                             #  org_domain, goal)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -219,10 +224,12 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
             name = _one_literal(g, subj, SDO("name"), label, "CreativeWork", "name")
             desc = g.value(subj, SDO("description"))
             domain_val = g.value(subj, URIRef(ORG_DOMAIN_PRED))
+            goal_val = g.value(subj, URIRef(GOAL_PRED))
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
-                                str(domain_val) if domain_val is not None else ""))
+                                str(domain_val) if domain_val is not None else "",
+                                str(goal_val) if goal_val is not None else ""))
 
-    effort_iris = {iri for iri, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -275,12 +282,13 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain in raw_efforts:
+    for iri, name, desc, org_domain, goal in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
                                     is_part_of=str(part_of) if part_of is not None else "",
-                                    org_domain=org_domain))
+                                    org_domain=org_domain,
+                                    goal=goal))
 
     return projects, docs, efforts
 
@@ -360,6 +368,8 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
         }
         if e.org_domain:
             effort_node[ORG_DOMAIN_PRED] = e.org_domain
+        if e.goal:
+            effort_node[GOAL_PRED] = e.goal
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -520,6 +530,15 @@ def _effort_domain_line(e: CreativeWork) -> list[str]:
             f"`org-{e.org_domain}` skill._", ""]
 
 
+def _effort_goal_line(e: CreativeWork) -> list[str]:
+    """The intent line under an effort's heading: the user-stated outcome this effort
+    drives toward. Rendered in every view (like the org routing line) — a single line
+    of intent is worth its always-on cost where a full description is not."""
+    if not e.goal:
+        return []
+    return [f"**Goal:** {e.goal}", ""]
+
+
 def _conn_heading(pg: ProjectGraph, heading: str | None) -> str:
     """The connection-section title for a project's document block. `heading` is the bound
     store's stable label (`<Name> (`key`)`, from the planner); falls back to
@@ -571,6 +590,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             lines += _effort_domain_line(e)
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
+            lines += _effort_goal_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
             else:

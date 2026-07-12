@@ -1044,6 +1044,7 @@ function renderRegistryRows(g) {
       edit.onclick = () => {
         openEditor = { where: "registry", lockId: true, kind: "effort",
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
+                               goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "" } };
         renderRegistryRows(g);
       };
@@ -1244,7 +1245,7 @@ function scrollCardIntoView(card) {
 // the inbox Reason field, which deliberately does NOT bind Enter to Accept).
 function bindEnterToApply(inputs, apply) {
   for (const inp of Object.values(inputs)) {
-    if (!inp || inp.tagName === "SELECT") continue;
+    if (!inp || inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); apply.click(); }
     });
@@ -1269,6 +1270,16 @@ function effortEditorCard(g) {
   field("id", "Effort ID (slug)", "auth-rework", openEditor.lockId);
   field("name", "Name", "Auth Rework");
   field("description", "Description", "short summary (optional)");
+
+  // Goal — free-text outcome statement, often a paragraph or two, so a textarea rather
+  // than the single-line inputs above.
+  const goalWrap = el("div", "graph-field");
+  goalWrap.append(el("label", "", "Goal"));
+  const goalArea = el("textarea");
+  goalArea.value = vals.goal || "";
+  goalArea.placeholder = "what done looks like (optional)";
+  goalArea.rows = 3;
+  goalWrap.append(goalArea); card.append(goalWrap); inputs.goal = goalArea;
 
   // Org domain — the routing tag: work in this effort loads the matching org-* skill.
   // Optional; untagged efforts route by the nature of the request. Domains come from
@@ -1300,6 +1311,7 @@ function effortEditorCard(g) {
     const effort = { id: inputs.id.value.trim().toLowerCase(),
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
+                     goal: inputs.goal.value.trim(),
                      orgDomain: inputs.orgDomain.value };
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
@@ -1355,6 +1367,7 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
   const removals = Object.keys(d.remove);
   const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => ({
     id: x.id, name: x.name, description: x.description || "",
+    goal: x.goal || "",
     orgDomain: x.orgDomain || "" }));
   const effortRemovals = Object.keys(d.effortRemove);
   if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {

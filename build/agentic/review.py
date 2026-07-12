@@ -716,7 +716,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
                 is_part_of=proj_iri,
-                org_domain=str(e_dict.get("orgDomain", "")).strip())
+                org_domain=str(e_dict.get("orgDomain", "")).strip(),
+                goal=str(e_dict.get("goal", "")).strip())
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -1392,7 +1393,7 @@ def graph_index(reg: Registry) -> list[dict]:
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
-                         "orgDomain": e.org_domain}
+                         "orgDomain": e.org_domain, "goal": e.goal}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
