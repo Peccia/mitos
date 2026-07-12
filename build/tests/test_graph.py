@@ -946,6 +946,59 @@ def test_merged_graph_preserves_org_domain_on_untouched_efforts():
     eff = next(e for e in merged.efforts if e.id == "launch-prep")
     assert eff.org_domain == "marketing"
 
+def test_effort_goal_round_trips_and_renders():
+    """An effort's goal survives serialize → parse (omit-when-absent, byte-compat with
+    pre-goal graphs) and renders as its own line in all three markdown views, after the
+    description and before the documents."""
+    import tempfile
+    from pathlib import Path
+
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="")
+    with_goal = graph.CreativeWork(id="launch", name="Launch", description="the push",
+                                   is_part_of=pg.iri, goal="Ship v1 to 100 beta users")
+    plain = graph.CreativeWork(id="build", name="Build", description="",
+                               is_part_of=pg.iri)
+    pg = graph.upsert_effort(graph.upsert_effort(pg, with_goal), plain)
+    text = graph.canonical_jsonld(pg)
+    assert text.count(graph.GOAL_PRED) == 1           # only the goaled effort carries it
+    f = Path(tempfile.mktemp(suffix=".jsonld")); f.write_text(text, encoding="utf-8")
+    pg2 = graph.load_project_graph(f)
+    by_id = {e.id: e for e in pg2.efforts}
+    assert by_id["launch"].goal == "Ship v1 to 100 beta users"
+    assert by_id["build"].goal == ""
+    assert graph.is_canonical(f, pg2)
+    f.unlink()
+
+    d = graph.Document(drive_id="D1", name="Doc One", description="x",
+                       date_modified="2026-01-01", is_part_of=with_goal.iri)
+    pg2 = graph.upsert_document(pg2, d)
+    for out in (graph.project_index_markdown(pg2), graph.project_details_markdown(pg2),
+                graph.project_full_markdown(pg2)):
+        assert "**Goal:** Ship v1 to 100 beta users" in out
+        # goal precedes the effort's documents
+        assert out.index("**Goal:**") < out.index("Doc One")
+    # in the desc-bearing views the goal sits under the description
+    full = graph.project_full_markdown(pg2)
+    assert full.index("the push") < full.index("**Goal:**")
+
+def test_propose_graph_change_round_trips_effort_goal():
+    """An effort's goal survives propose → accept through the console API."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+
+    out = review.propose_graph_change(
+        treg, "example-project", [],
+        efforts=[{"id": "steam-launch", "name": "Steam Launch",
+                  "description": "launch push", "goal": "Wishlist 5k before launch"}])
+    assert out["ok"], out
+    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"], acc
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    eff = next(e for e in merged.efforts if e.id == "steam-launch")
+    assert eff.goal == "Wishlist 5k before launch"
+
 def test_graph_rejects_organization_nodes():
     """Organization nodes were retired (orgs are global domain skills, never stored per
     project) — a graph still carrying one must fail loudly, not load silently."""
