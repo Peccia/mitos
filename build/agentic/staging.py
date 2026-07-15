@@ -9,7 +9,7 @@ duplicated across that boundary.
 
 File shape (current):
     {"slug": "...", "listings": [
-        {"scope_key": "...", "staged_at": "...", "connector": "...",
+        {"scope_key": "...", "label": "", "staged_at": "...", "connector": "...",
          "scope": {"store": "", "folder_id": None, "query": None, "recursive": False,
                    "exclude_folders": []},
          "documents": [...]},
@@ -32,6 +32,11 @@ import json
 # instead of silently forking a second one.
 _IDENTITY_FIELDS = ("store", "folder_id", "query", "recursive")
 
+# A label is cosmetic — the operator's name for a watch, never part of its identity. It is
+# stored on the listing rather than derived, so renaming one watch can't disturb another
+# and a refresh keeps the name (bootstrap.stage_listing carries it across a re-stage).
+LABEL_MAX = 60
+
 
 def scope_key(scope: dict) -> str:
     """Deterministic identity for a staging scope, from _IDENTITY_FIELDS only."""
@@ -53,8 +58,8 @@ def is_full_scope(scope: dict) -> bool:
 
 
 def scope_label(scope: dict) -> str:
-    """Short human label for a scope — used in overlap notes and the console's
-    watched-scopes strip. Not persisted; derived fresh from the scope dict each time."""
+    """Short human label for a scope — used in overlap notes and as the fallback name for
+    an unlabelled watch. Not persisted; derived fresh from the scope dict each time."""
     if scope.get("folder_id"):
         return f"folder {scope['folder_id']}" + (" (recursive)" if scope.get("recursive") else "")
     if scope.get("query"):
@@ -62,11 +67,26 @@ def scope_label(scope: dict) -> str:
     return "unscoped"
 
 
+def clean_label(raw: object) -> str:
+    """Normalize an operator-supplied watch name: a single trimmed line, capped at
+    LABEL_MAX. Empty (or anything unstringy) means "no label" — the caller falls back to
+    scope_label, so clearing the field restores the derived name rather than blanking it."""
+    if not isinstance(raw, str):
+        return ""
+    return " ".join(raw.split())[:LABEL_MAX]
+
+
+def listing_label(listing: dict) -> str:
+    """What to call a watch: the operator's name when set, else the derived scope label."""
+    return listing.get("label") or scope_label(listing.get("scope") or {})
+
+
 def _normalize_listing(listing: dict) -> dict:
     docs = listing.get("documents")
     scope = listing.get("scope") if isinstance(listing.get("scope"), dict) else {}
     return {
         "scope_key": listing.get("scope_key") or scope_key(scope),
+        "label": clean_label(listing.get("label")),
         "staged_at": listing.get("staged_at", ""),
         "connector": listing.get("connector", ""),
         "scope": scope,
@@ -129,5 +149,5 @@ def overlapping_listings(new_scope_key: str, new_doc_ids: set[str],
         shared = new_doc_ids & ids
         if shared:
             out.append({"scope_key": listing["scope_key"], "scope": listing["scope"],
-                       "count": len(shared)})
+                       "label": listing_label(listing), "count": len(shared)})
     return out

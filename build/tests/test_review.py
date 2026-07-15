@@ -485,6 +485,61 @@ def test_remove_watch_rejects_invalid_slug_or_missing_key():
     assert review.remove_watch(treg, "example-project", scope_key="nope")["ok"] is False
 
 
+def test_rename_watch_names_one_listing_without_touching_identity():
+    """A label is cosmetic: the renamed listing keeps its scope_key (so refresh/dedupe are
+    unaffected) and its documents, and the sibling watch is untouched."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    scope_a = {"folder_id": "FA", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    scope_b = {"folder_id": "FB", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    _stage_listings(tmp, [
+        ([{"id": "A1", "name": "A1"}], scope_a, "2026-07-15T1000Z"),
+        ([{"id": "B1", "name": "B1"}], scope_b, "2026-07-15T1000Z"),
+    ])
+    key_a = _scope_key(scope_a)
+    out = review.rename_watch(treg, "example-project", scope_key=key_a,
+                              label="Marketing archive")
+    assert out["ok"], out
+    by_key = {l["scope_key"]: l for l in review.load_staged(treg, "example-project")["listings"]}
+    assert by_key[key_a]["label"] == "Marketing archive"
+    assert by_key[key_a]["scope"]["folder_id"] == "FA"
+    assert by_key[key_a]["count"] == 1
+    assert by_key[_scope_key(scope_b)]["label"] == ""
+
+
+def test_rename_watch_cleans_and_clears_the_label():
+    """Whitespace collapses, over-long names are capped, and an empty label clears the
+    name — the console's undo, restoring the derived scope label."""
+    from agentic import review, staging
+    treg, tmp = _temp_registry()
+    scope = {"folder_id": "FA", "query": None, "exclude_folders": [],
+             "recursive": False, "store": ""}
+    _stage_listings(tmp, [([{"id": "A1", "name": "A1"}], scope, "2026-07-15T1000Z")])
+    key = _scope_key(scope)
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="  Docs \n  archive ")
+    assert review.load_staged(treg, "example-project")["listings"][0]["label"] == "Docs archive"
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="x" * 200)
+    assert len(review.load_staged(treg, "example-project")["listings"][0]["label"]) == staging.LABEL_MAX
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="   ")
+    listing = review.load_staged(treg, "example-project")["listings"][0]
+    assert listing["label"] == ""
+    assert staging.listing_label(listing) == "folder FA"
+
+
+def test_rename_watch_rejects_invalid_slug_or_missing_key():
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "A1", "name": "A1"}])
+    assert review.rename_watch(treg, "../etc", scope_key="x", label="n")["ok"] is False
+    assert review.rename_watch(treg, "example-project", scope_key="", label="n")["ok"] is False
+    assert review.rename_watch(treg, "example-project", scope_key="nope", label="n")["ok"] is False
+
+
 def test_dismiss_docs_rejects_invalid_slug():
     """dismiss_docs/restore_docs refuse a traversal or empty slug, same as load_staged."""
     from agentic import review

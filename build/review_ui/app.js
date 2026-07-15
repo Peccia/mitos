@@ -863,6 +863,12 @@ function scopeLabel(scope) {
   return "unscoped";
 }
 
+// What to call a watch in prose (confirms, tooltips, toasts) — the operator's name when
+// they've set one, else the derived scope. Mirrors staging.listing_label server-side.
+function watchName(l) {
+  return (l && l.label) || scopeLabel(l && l.scope);
+}
+
 // The "watch more than one folder" story made visible: one row per watched listing (a
 // project can stage several disjoint — or overlapping — scopes at once, see
 // staging.merge_documents). Each row's own ↻ Refresh replays JUST that scope
@@ -875,8 +881,14 @@ function renderWatchedScopes(g) {
   for (const l of listings) {
     const row = el("div", "watched-scope-row");
     const info = el("div", "watched-scope-info");
-    info.append(el("span", "watched-scope-label", scopeLabel(l.scope)));
+    // A named watch leads with its name; the raw scope drops to the meta line so the
+    // identity the system actually refreshes on is never hidden, only de-emphasized.
+    const named = !!l.label;
+    const scopeText = scopeLabel(l.scope);
+    info.append(el("span", "watched-scope-label" + (named ? "" : " untitled"),
+      named ? l.label : scopeText));
     const bits = [`${l.count} doc${l.count === 1 ? "" : "s"}`];
+    if (named) bits.push(scopeText);
     if (l.staged_at) bits.push(l.staged_at);
     if (l.connector) bits.push(l.connector);
     if (l.scope && l.scope.store) bits.push(l.scope.store);
@@ -884,9 +896,15 @@ function renderWatchedScopes(g) {
     row.append(info);
 
     const actions = el("span", "row-actions");
+    const rename = el("button", "ghost tiny", "Rename");
+    rename.title = named
+      ? "Rename this watch. The folder it watches doesn't change."
+      : "Give this watch a human-readable name. The folder it watches doesn't change.";
+    rename.onclick = () => renameWatch(g, l);
+    actions.append(rename);
     if (l.scope && (l.scope.folder_id || l.scope.query)) {
       const rescan = el("button", "ghost tiny", "↻ Refresh");
-      rescan.title = "Re-enumerate " + scopeLabel(l.scope) + " and surface any new documents";
+      rescan.title = "Re-enumerate " + watchName(l) + " and surface any new documents";
       rescan.onclick = () => refreshStaging(g, rescan, l.scope_key);
       actions.append(rescan);
     }
@@ -894,12 +912,39 @@ function renderWatchedScopes(g) {
     remove.title = "Stop watching this scope. Its documents leave Discovery — anything "
       + "already mapped into the graph is unaffected. Re-stage it later from the CLI to "
       + "watch it again.";
-    remove.onclick = () => unwatchScope(g, l.scope_key, scopeLabel(l.scope));
+    remove.onclick = () => unwatchScope(g, l.scope_key, watchName(l));
     actions.append(remove);
     row.append(actions);
     box.append(row);
   }
   return box;
+}
+
+// "Rename" — POST /api/graph/rename-watch. Cosmetic only: the scope_key the server
+// refreshes and dedupes on is untouched, so this is safe to do freely and needs no confirm
+// (unlike Remove watch). Submitting an empty name clears the label and the row falls back
+// to its derived scope — that's the undo.
+async function renameWatch(g, l) {
+  const next = prompt(`Name this watch\n\n${scopeLabel(l.scope)}\n\n`
+    + "Renaming affects this label only — the folder being watched and its refresh are "
+    + "unchanged. Leave blank to go back to the folder id.", l.label || "");
+  if (next === null || next === (l.label || "")) return;
+  try {
+    const r = await fetch("/api/graph/rename-watch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, scope_key: l.scope_key, label: next,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Rename failed.", 6000); return; }
+    stagedData = out.staged && out.staged.ok ? out.staged : stagedData;
+    renderGraph();
+    toast(next.trim() ? "Watch renamed." : "Name cleared.");
+  } catch (e) {
+    toast("Rename failed — server unreachable.");
+  }
 }
 
 // "Remove watch" — POST /api/graph/unwatch. Confirmed first: unlike a refresh, this can't
@@ -1002,6 +1047,10 @@ function renderStagedRows(g) {
   const draft = draftFor(g.slug);
   for (const id of [...curStagedSel()]) if (pending.has(id) || draft.add[id]) curStagedSel().delete(id);
   const { all, filtered } = stagedVisible(g);
+  const listings = (stagedData && stagedData.listings) || [];
+  // Built once per render pass, not per row — nameByKey.get(key) below replaces an
+  // O(listings) filter+map that used to rerun for every staged document.
+  const nameByKey = new Map(listings.map((l) => [l.scope_key, watchName(l)]));
 
   rows.replaceChildren();
   if (all.length === 0) {
@@ -1033,13 +1082,15 @@ function renderStagedRows(g) {
       if (inDraft) nameLine.append(el("span", "badge draft", "In draft"));
       // Only worth showing once there's more than one watched listing to distinguish —
       // with a single watch every row trivially belongs to it, so the chip is pure noise.
-      const listingCount = ((stagedData && stagedData.listings) || []).length;
-      if (listingCount > 1 && d.scope_keys && d.scope_keys.length) {
+      if (listings.length > 1 && d.scope_keys && d.scope_keys.length) {
         const chip = el("span", "badge scope-count",
           d.scope_keys.length > 1 ? `${d.scope_keys.length} watches` : "1 watch");
-        chip.title = d.scope_keys.length > 1
+        // Naming the watches is the whole point of labels — an operator with several
+        // folders staged can tell WHICH ones a document came from, not just how many.
+        const names = d.scope_keys.map((k) => nameByKey.get(k)).filter(Boolean).join(", ");
+        chip.title = (d.scope_keys.length > 1
           ? "Seen in more than one watched scope — removing one watch won't drop it from here"
-          : "Seen in one watched scope";
+          : "Seen in one watched scope") + (names ? ":\n" + names : "");
         nameLine.append(chip);
       }
       body.append(nameLine);

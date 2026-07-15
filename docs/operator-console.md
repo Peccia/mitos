@@ -112,14 +112,28 @@ ever deleted from the document store; the console is not a filesystem actor.
 `inbox/staging/<slug>.json` holds a *list* of watched listings, each its own
 `(store, folder_id, query, recursive)`. Discovery shows a **watched-scopes strip** above the
 staged rows, one entry per listing (its scope, staged-at timestamp, doc count), each with its own
-**↻ Refresh** and **Remove watch**. Refresh replays that ONE listing's enumeration — it runs
+**Rename**, **↻ Refresh** and **Remove watch**. Refresh replays that ONE listing's enumeration — it runs
 `build/mitos.py` as a *subprocess*, so the connector never enters the console's own import graph
 (invariant #11). Remove watch drops the listing from the file; anything already mapped into the
 graph is unaffected, only what Discovery *offers* changes. The first stage of a scope still
 happens in a terminal (it may need an interactive OAuth consent); until at least one watch
 exists, Discovery shows the copyable command instead. A document reachable through more than one
-watch appears once in Discovery, tagged with a small "N watches" chip — watching two overlapping
-scopes is never an error, `--stage` just notes the overlap and stages both.
+watch appears once in Discovery, tagged with a small "N watches" chip (hover it to see which
+watches by name) — watching two overlapping scopes is never an error, `--stage` just notes the
+overlap and stages both.
+
+**Naming a watch.** A raw `folder 1u7GX8M9UZDJlMn7m-2-arxO_QQRPYV8n` says nothing about what's in
+it, and several of them side by side say even less. **Rename** gives a listing a human name
+(`label` on the listing, ≤60 chars), which then leads its row with the scope demoted to the meta
+line beneath — the identifier the system acts on is never hidden, just no longer the headline. The
+label is **cosmetic**: identity stays the derived `scope_key` (`store`/`folder_id`/`query`/
+`recursive` — `staging.scope_key`), so renaming can't change which documents a watch holds, can't
+disturb a sibling watch, and a later Refresh replays the same scope and keeps the name
+(`bootstrap.stage_listing` carries the label across a re-stage). Names are free text and not
+unique-checked. Submitting an empty name clears the label and the row falls back to its derived
+scope — that's the undo. Like Remove watch, it's console-only (`POST /api/graph/rename-watch` →
+`review.rename_watch`) — a pure file edit with no connector involved, so a CLI verb would just be
+a second way to write the same line.
 
 **Documents that left the store.** Recovery cross-checks its rows against every CURRENT watched
 listing and badges any doc absent from all of them as **Not in any watched scope**, offering

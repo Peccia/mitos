@@ -549,6 +549,30 @@ def test_stage_listing_replaces_same_scope_appends_new_scope():
     assert ids_by_listing == {("B",), ("C",)}
 
 
+def test_stage_listing_preserves_an_operator_label_across_a_refresh():
+    """A refresh replays the same scope and rewrites the listing wholesale — the operator's
+    name for that watch survives, so renaming isn't undone by the next Refresh click."""
+    import json as _json
+    from agentic import review
+    from agentic.connectors.bootstrap import stage_listing
+    from agentic.connectors.mock import MockConnector
+    treg, tmp = _temp_registry()
+    artifact = _inbox(tmp) / "staging" / "example-project.json"
+
+    stage_listing(treg, MockConnector(files=[{"id": "A", "name": "q1 Alpha"}]),
+                  "example-project", query="q1")
+    key = _json.loads(artifact.read_text(encoding="utf-8"))["listings"][0]["scope_key"]
+    assert review.rename_watch(treg, "example-project", scope_key=key, label="Q1 plans")["ok"]
+
+    stage_listing(treg, MockConnector(files=[{"id": "A", "name": "q1 Alpha"},
+                                             {"id": "B", "name": "q1 Beta"}]),
+                  "example-project", query="q1")
+    listing = _json.loads(artifact.read_text(encoding="utf-8"))["listings"][0]
+    assert listing["scope_key"] == key
+    assert listing["label"] == "Q1 plans"
+    assert len(listing["documents"]) == 2
+
+
 def test_stage_listing_reports_overlap_with_sibling_listings():
     """Two watched scopes that share a document report the overlap — warn-only, both
     listings are written and both keep the shared document."""

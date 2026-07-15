@@ -112,6 +112,43 @@ def test_overlapping_listings_reports_shared_ids_excludes_self():
     l2 = {"scope_key": "k2", "scope": {"query": "q2"}, "documents": [{"id": "B"}, {"id": "C"}]}
     l3 = {"scope_key": "k3", "scope": {"query": "q3"}, "documents": [{"id": "Z"}]}
     ov = staging.overlapping_listings("k1", {"A", "B"}, [l1, l2, l3])
-    assert ov == [{"scope_key": "k2", "scope": {"query": "q2"}, "count": 1}]
+    # `label` is what the operator calls that watch — its name when set, else the derived
+    # scope, so an overlap note reads the same way the console's watch row does.
+    assert ov == [{"scope_key": "k2", "scope": {"query": "q2"},
+                   "label": 'query "q2"', "count": 1}]
+    l2["label"] = "Q2 planning"
+    assert staging.overlapping_listings("k1", {"A", "B"}, [l1, l2])[0]["label"] == "Q2 planning"
     # no overlap at all → empty list
     assert staging.overlapping_listings("k3", {"Z"}, [l1, l2, l3]) == []
+
+
+def test_clean_label_trims_collapses_and_caps():
+    """An operator-supplied watch name is normalized to one trimmed line within LABEL_MAX;
+    anything unstringy or empty means "no label" (the caller falls back to scope_label)."""
+    from agentic import staging
+    assert staging.clean_label("  Marketing \n  archive ") == "Marketing archive"
+    assert staging.clean_label("x" * 200) == "x" * staging.LABEL_MAX
+    assert staging.clean_label("   ") == ""
+    assert staging.clean_label(None) == ""
+    assert staging.clean_label(42) == ""
+
+
+def test_listing_label_prefers_the_operator_name_over_the_derived_scope():
+    from agentic import staging
+    scoped = {"scope": {"folder_id": "FA", "recursive": True}}
+    assert staging.listing_label(scoped) == "folder FA (recursive)"
+    assert staging.listing_label({**scoped, "label": "Q1 plans"}) == "Q1 plans"
+    assert staging.listing_label({}) == "unscoped"
+
+
+def test_normalize_staging_reads_and_cleans_a_label_defaulting_to_empty():
+    """A label round-trips through normalize (and is cleaned on the way in); a listing
+    written before labels existed — or the legacy single-listing shape — reads as ""."""
+    from agentic import staging
+    listings = staging.normalize_staging({"slug": "p", "listings": [
+        {"scope_key": "k1", "scope": {"query": "q1"}, "label": "  Q1  plans ", "documents": []},
+        {"scope_key": "k2", "scope": {"query": "q2"}, "documents": []},
+    ]})
+    assert [l["label"] for l in listings] == ["Q1 plans", ""]
+    legacy = staging.normalize_staging({"slug": "p", "scope": {"query": "q"}, "documents": []})
+    assert legacy[0]["label"] == ""

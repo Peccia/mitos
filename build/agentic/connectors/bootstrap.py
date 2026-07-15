@@ -101,8 +101,14 @@ def stage_listing(reg: Registry, connector: WorkspaceConnector, slug: str,
         except (ValueError, OSError):
             existing_listings = []   # an unreadable prior file is replaced outright, not merged
 
+    # A re-stage replaces this listing wholesale, so the operator's name for the watch is
+    # carried across explicitly — a refresh renames nothing (mirrors how a re-proposed
+    # document preserves its store/doc_type tag rather than wiping it).
+    prior_label = next((l.get("label", "") for l in existing_listings
+                        if l["scope_key"] == new_key), "")
     new_listing = {
         "scope_key": new_key,
+        "label": prior_label,
         "staged_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ"),
         "connector": getattr(connector, "name", "?"),
         "scope": scope,

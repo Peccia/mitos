@@ -1479,11 +1479,13 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   gap: .1rem;
   min-width: 0;
 }
+/* A named watch reads as prose; an unnamed one is still a raw folder id/query, so it keeps
+   the mono face that makes those legible. */
 .watched-scope-label {
-  font-family: var(--mono);
   font-weight: 600;
   word-break: break-word;
 }
+.watched-scope-label.untitled { font-family: var(--mono); }
 .watched-scope-meta { font-size: .74rem; }
 
 /* Scope-count chip on a staged row — only rendered when more than one listing exists. */

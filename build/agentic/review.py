@@ -1258,8 +1258,9 @@ def _read_staging(path: Path, slug: str, is_unassigned: bool) -> dict:
         return {"ok": False, "error": "staging file is unreadable — re-stage from the CLI"}
     listings = staging_mod.normalize_staging(data)
     documents = staging_mod.merge_documents(listings)
-    summaries = [{"scope_key": l["scope_key"], "staged_at": l["staged_at"],
-                 "connector": l["connector"], "scope": l["scope"], "count": len(l["documents"])}
+    summaries = [{"scope_key": l["scope_key"], "label": l["label"],
+                 "staged_at": l["staged_at"], "connector": l["connector"],
+                 "scope": l["scope"], "count": len(l["documents"])}
                 for l in listings]
     # Most-recent-first — the console's watched-scopes strip and the legacy single-stamp
     # display (top listing) both want the freshest watch surfaced first.
@@ -1563,6 +1564,40 @@ def refresh_staging(reg: Registry, slug: str, pool: str = "", scope_key: str = "
     return {"ok": True, "log": log, "staged": load_staged(reg, slug, pool)}
 
 
+def _open_staging(reg: Registry, slug: str, pool: str, scope_key: str) -> tuple:
+    """Shared front half of the two pure-file watch edits (remove_watch/rename_watch):
+    validate the slug + scope_key, resolve which staging file backs this pool, and parse it
+    into (path, slug-as-written, listings). Returns (None, error_dict) on any failure.
+
+    Mirrors load_staged's fallback: when a project's own staging file doesn't exist, checks
+    the unassigned pool so operations on projectless-but-staged documents work seamlessly."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return None, {"ok": False, "error": "invalid slug"}
+    if not scope_key:
+        return None, {"ok": False, "error": "scope_key required"}
+    staging_dir = loader.inbox_dir(reg) / "staging"
+    unassigned = staging_dir / "unassigned.json"
+    if pool == "unassigned":
+        path = unassigned
+    else:
+        path = staging_dir / f"{slug}.json"
+        if not path.is_file():
+            # Fall back to unassigned pool, same as load_staged does.
+            path = unassigned
+    if not path.is_file():
+        return None, {"ok": False, "error": "nothing staged here"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None, {"ok": False, "error": "staging file is unreadable — re-stage from the CLI"}
+    return (path, data.get("slug", slug), staging_mod.normalize_staging(data)), None
+
+
+def _write_listings(path: Path, slug: str, listings: list[dict]) -> None:
+    path.write_text(json.dumps({"slug": slug, "listings": listings},
+                               ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def remove_watch(reg: Registry, slug: str, pool: str = "", scope_key: str = "") -> dict:
     """Drop one watched listing from inbox/staging/<slug>.json — the console's "Remove
     watch" action. Console-only: there is no CLI verb for this (removing a watch is a pure
@@ -1571,24 +1606,40 @@ def remove_watch(reg: Registry, slug: str, pool: str = "", scope_key: str = "") 
     or an empty `listings: []` if this was the last one) rather than deleted — that keeps
     _dismiss_file's "does a project-specific staging file exist" pool-fallback check
     working exactly as it does for an empty listing today."""
-    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
-        return {"ok": False, "error": "invalid slug"}
-    if not scope_key:
-        return {"ok": False, "error": "scope_key required"}
-    staging_dir = loader.inbox_dir(reg) / "staging"
-    path = (staging_dir / "unassigned.json") if pool == "unassigned" else (staging_dir / f"{slug}.json")
-    if not path.is_file():
-        return {"ok": False, "error": "nothing staged here"}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return {"ok": False, "error": "staging file is unreadable — re-stage from the CLI"}
-    listings = staging_mod.normalize_staging(data)
+    opened, err = _open_staging(reg, slug, pool, scope_key)
+    if err:
+        return err
+    path, file_slug, listings = opened
     remaining = [l for l in listings if l["scope_key"] != scope_key]
     if len(remaining) == len(listings):
         return {"ok": False, "error": "no watched listing with that scope_key"}
-    path.write_text(json.dumps({"slug": data.get("slug", slug), "listings": remaining},
-                               ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_listings(path, file_slug, remaining)
+    return {"ok": True, "staged": load_staged(reg, slug, pool)}
+
+
+def rename_watch(reg: Registry, slug: str, pool: str = "", scope_key: str = "",
+                 label: str = "") -> dict:
+    """Give one watched listing a human name — the console's "Rename" action. Console-only
+    and pure file edit, exactly like remove_watch.
+
+    The label is COSMETIC: identity stays `scope_key` (derived from the scope's
+    store/folder_id/query/recursive — see staging.scope_key), so renaming a watch never
+    touches which documents it holds, never disturbs a sibling watch, and a later refresh
+    replays the same scope and keeps the name (bootstrap.stage_listing carries it across).
+    An empty label clears the name, restoring the derived scope label — that's the undo.
+    Names are free text and deliberately NOT unique-checked: two folders an operator wants
+    to call the same thing is their business, and the scope stays visible underneath."""
+    opened, err = _open_staging(reg, slug, pool, scope_key)
+    if err:
+        return err
+    path, file_slug, listings = opened
+    if not any(l["scope_key"] == scope_key for l in listings):
+        return {"ok": False, "error": "no watched listing with that scope_key"}
+    clean = staging_mod.clean_label(label)
+    for l in listings:
+        if l["scope_key"] == scope_key:
+            l["label"] = clean
+    _write_listings(path, file_slug, listings)
     return {"ok": True, "staged": load_staged(reg, slug, pool)}
 
 
@@ -1981,7 +2032,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
                                   "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/graph/purge", "/api/graph/refresh",
-                                  "/api/graph/unwatch",
+                                  "/api/graph/unwatch", "/api/graph/rename-watch",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
@@ -2119,6 +2170,15 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     holder["reg"], str(body.get("slug", "")),
                     str(body.get("pool", "") or ""),
                     str(body.get("scope_key", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/rename-watch":
+                # "Rename" — name one watch. Cosmetic only: scope_key stays identity, so
+                # nothing about what's watched or refreshed changes. Empty label clears it.
+                result = rename_watch(
+                    holder["reg"], str(body.get("slug", "")),
+                    str(body.get("pool", "") or ""),
+                    str(body.get("scope_key", "") or ""),
+                    str(body.get("label", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/restore":
                 # Recovery tab's Restore action — the doc reappears in Discovery
