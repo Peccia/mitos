@@ -20,6 +20,7 @@ import json
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -28,7 +29,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from . import commands, loader, render
+from . import commands, loader, render, staging as staging_mod
 from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
@@ -1243,15 +1244,28 @@ def prompt_index(reg: Registry) -> dict:
 
 
 def _read_staging(path: Path, slug: str, is_unassigned: bool) -> dict:
-    """Parse one inbox/staging/*.json listing into the staged-panel shape."""
+    """Parse inbox/staging/*.json — one or more watched-scope LISTINGS (see
+    staging.normalize_staging; legacy single-listing files still read as one) — into the
+    console's staged-panel shape. `documents` is the union of every listing, deduped by id
+    and tagged with the `scope_keys` that produced it (staging.merge_documents) — that
+    plural tag is what lets a document watched by two overlapping scopes show once, and
+    what the absence-provenance check in _in_scope_flags keys off of. `listings` carries
+    each watch's own metadata (label-able scope, staged_at, doc count) for the console's
+    watched-scopes strip, without repeating the documents a second time."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return {"ok": False, "error": "staging file is unreadable — re-stage from the CLI"}
-    docs = data.get("documents") if isinstance(data.get("documents"), list) else []
-    return {"ok": True, "slug": slug, "documents": docs,
-            "staged_at": data.get("staged_at", ""), "connector": data.get("connector", ""),
-            "scope": data.get("scope", {}), "is_unassigned": is_unassigned}
+    listings = staging_mod.normalize_staging(data)
+    documents = staging_mod.merge_documents(listings)
+    summaries = [{"scope_key": l["scope_key"], "staged_at": l["staged_at"],
+                 "connector": l["connector"], "scope": l["scope"], "count": len(l["documents"])}
+                for l in listings]
+    # Most-recent-first — the console's watched-scopes strip and the legacy single-stamp
+    # display (top listing) both want the freshest watch surfaced first.
+    summaries.sort(key=lambda s: s["staged_at"], reverse=True)
+    return {"ok": True, "slug": slug, "documents": documents, "listings": summaries,
+            "is_unassigned": is_unassigned}
 
 
 def _dismiss_file(reg: Registry, slug: str, pool: str = "") -> tuple[Path, bool]:
@@ -1287,22 +1301,91 @@ def _write_dismissed(path: Path, docs: list[dict]) -> None:
         encoding="utf-8")
 
 
+def _in_scope_flags(reg: Registry, slug: str, docs: list[dict], pool: str) -> None:
+    """Annotate each Recovery doc with `in_scope`: True (present in at least one current
+    watched listing), False (provably gone), or None (unknowable). Named `in_scope`, not
+    `in_store` — with more than one watched folder/query, presence is always relative to
+    a scope, never a flat "is it in the store" fact.
+
+    Staging listings ARE the store's truth as of their own `staged_at` — no connector call
+    needed, so this stays offline (invariant #11). Absence is provable two ways:
+
+    - a FULL (unscoped) listing exists and doesn't contain the doc — it enumerates the
+      whole store, so its silence about anything is conclusive, regardless of which watch
+      (if any) originally surfaced that doc;
+    - a SCOPED listing exists whose scope_key matches one this doc's own `scope_keys`
+      provenance (recorded at dismiss time — see dismiss_docs) says produced it, and that
+      listing no longer contains it — the specific watch that once had it lost it (the
+      folder scope narrowed, the file moved out, etc.), even though nothing here can speak
+      for OTHER scopes the doc was never part of.
+
+    Anything else is None: no listings at all, or only scoped listings unrelated to this
+    doc's provenance. A None doc is never flagged and never purged — the operator sees no
+    claim rather than a false one. This generalizes (and, for a single unscoped listing,
+    reduces exactly to) the original single-listing rule."""
+    staged = load_staged(reg, slug, pool)
+    listings = staged.get("listings") or []
+    if not staged.get("ok") or not listings:
+        for d in docs:
+            d["in_scope"] = None
+        return
+    present = {str(s.get("id")) for s in (staged.get("documents") or []) if s.get("id")}
+    full_scope_present = any(staging_mod.is_full_scope(l["scope"]) for l in listings)
+    current_keys = {l["scope_key"] for l in listings}
+    for d in docs:
+        did = str(d.get("id"))
+        if did in present:
+            d["in_scope"] = True
+            continue
+        own_keys = set(d.get("scope_keys") or [])
+        if full_scope_present or (own_keys & current_keys):
+            d["in_scope"] = False
+        else:
+            d["in_scope"] = None
+
+
 def load_dismissed(reg: Registry, slug: str, pool: str = "") -> dict:
-    """Read the Recovery list backing `slug` — the console's Recovery tab."""
+    """Read the Recovery list backing `slug` — the console's Recovery tab.
+
+    Permanently dismissed documents are filtered out here: the console must never surface
+    them again (undo means hand-editing the sidecar), while the record itself stays on disk
+    so Discovery keeps filtering the id out too. Everything else is annotated with
+    `in_scope` (see _in_scope_flags)."""
     if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
         return {"ok": False, "error": "invalid slug"}
     path, is_unassigned = _dismiss_file(reg, slug, pool)
-    return {"ok": True, "slug": slug, "documents": _read_dismissed(path),
+    rows = _read_dismissed(path)
+    docs = [d for d in rows if not d.get("permanent")]
+    _in_scope_flags(reg, slug, docs, pool)
+    # `all_ids` carries the PERMANENT rows too. Recovery renders `documents` (permanent
+    # rows are hidden for good), but Discovery filters on the full id set — otherwise a
+    # permanent dismissal, absent from `documents`, would reappear in Discovery: the exact
+    # thing "permanent" promises it won't do.
+    return {"ok": True, "slug": slug, "documents": docs,
+            "all_ids": [str(d["id"]) for d in rows if d.get("id")],
             "is_unassigned": is_unassigned}
 
 
 def dismiss_docs(reg: Registry, slug: str, docs: list[dict], pool: str = "",
-                 source: str = "manual") -> dict:
+                 source: str = "manual", permanent: bool = False) -> dict:
     """Move one or more documents from Discovery into the Recovery list backing
     `slug`/`pool` (see _dismiss_file). Idempotent — dismissing an already-dismissed id
     updates its entry in place rather than duplicating it. `source` is "manual" (the
     Discovery Dismiss action) or "removal" (auto-dismissed when accept drops the doc
-    from the graph)."""
+    from the graph).
+
+    `permanent` (the Recovery tab's "Permanently dismiss") hides the document from the
+    Recovery UI for good while keeping the sidecar record — the id must stay in the
+    dismissed set so Discovery never resurfaces it. Nothing is deleted from the store; the
+    console is not a filesystem actor. Undo is deliberate friction: edit the
+    `.dismissed.json` sidecar by hand.
+
+    A `d` originating from a Discovery row carries `scope_keys` (which watched listing(s)
+    produced it — see staging.merge_documents) — recorded here as provenance so
+    _in_scope_flags can later tell "gone from the one scope that ever had it" from "outside
+    every scope we're watching". A "removal" auto-dismissal (dropped from the registry
+    graph, not from staging) carries none, and stays with none — that's correct: it never
+    came from a watched scope in the first place."""
     if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
         return {"ok": False, "error": "invalid slug"}
     if not docs:
@@ -1315,12 +1398,55 @@ def dismiss_docs(reg: Registry, slug: str, docs: list[dict], pool: str = "",
         did = str(d.get("id") or "").strip()
         if not did:
             continue
-        existing[did] = {
+        prev = existing.get(did) or {}
+        rec = {
             "id": did, "name": d.get("name", ""), "dateModified": d.get("dateModified", ""),
             "webUrl": d.get("webUrl", ""), "dismissed_at": now, "source": src,
         }
+        keys = [str(k) for k in (d.get("scope_keys") or []) if k]
+        if keys:
+            rec["scope_keys"] = keys
+        elif prev.get("scope_keys"):
+            # Re-dismissing the same id without fresh provenance (e.g. Recovery's
+            # Permanently-dismiss button re-posts the existing record) keeps what was
+            # already known rather than erasing it.
+            rec["scope_keys"] = prev["scope_keys"]
+        # A permanent record stays permanent: `permanent=False` is the *default* of every
+        # ordinary dismissal, not an instruction to un-permanent an existing one. Only a
+        # hand edit of the sidecar reverses it.
+        if permanent or prev.get("permanent"):
+            rec["permanent"] = True
+        existing[did] = rec
     _write_dismissed(path, list(existing.values()))
     return {"ok": True}
+
+
+def purge_dismissed(reg: Registry, slug: str, ids: list[str], pool: str = "") -> dict:
+    """Drop Recovery rows for documents that are gone from the store — the "Clear missing"
+    action. Identical mechanics to restore_docs (the record simply leaves the sidecar), but
+    a distinct verb because the intent differs: restore means "show it in Discovery again",
+    purge means "the store no longer has this, stop tracking it".
+
+    Guarded server-side: only ids the CURRENT listings prove absent (`in_scope is False`)
+    are purged. A stale browser tab, or a client that mislabels a row, therefore cannot
+    purge a document that's still live in some watched scope."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not ids:
+        return {"ok": False, "error": "no documents to clear"}
+    path, _ = _dismiss_file(reg, slug, pool)
+    rows = _read_dismissed(path)
+    _in_scope_flags(reg, slug, rows, pool)
+    missing = {str(d.get("id")) for d in rows if d.get("in_scope") is False}
+    asked = {str(i) for i in ids}
+    purge = asked & missing
+    if not purge:
+        return {"ok": False, "error": "those documents are still in a watched scope (or no "
+                                      "listing can prove otherwise) — nothing cleared"}
+    remaining = [{k: v for k, v in d.items() if k != "in_scope"}
+                 for d in rows if str(d.get("id")) not in purge]
+    _write_dismissed(path, remaining)
+    return {"ok": True, "cleared": sorted(purge)}
 
 
 def restore_docs(reg: Registry, slug: str, ids: list[str], pool: str = "") -> dict:
@@ -1349,7 +1475,7 @@ def load_staged(reg: Registry, slug: str, pool: str = "") -> dict:
     unassigned = staging / "unassigned.json"
     if pool == "unassigned":
         if not unassigned.is_file():
-            return {"ok": True, "slug": slug, "documents": [], "staged_at": "",
+            return {"ok": True, "slug": slug, "documents": [], "listings": [],
                     "is_unassigned": True}
         return _read_staging(unassigned, slug, True)
     path = staging / f"{slug}.json"
@@ -1357,11 +1483,113 @@ def load_staged(reg: Registry, slug: str, pool: str = "") -> dict:
         # Fall back to the unassigned pool so that a projectless sync is surfaced in the
         # Knowledge Graph tab even before the user binds documents to a project.
         if not unassigned.is_file():
-            return {"ok": True, "slug": slug, "documents": [], "staged_at": "",
+            return {"ok": True, "slug": slug, "documents": [], "listings": [],
                     "is_unassigned": False}
         return _read_staging(unassigned, slug, True)
     return _read_staging(path, slug, False)
 
+
+
+def refresh_staging(reg: Registry, slug: str, pool: str = "", scope_key: str = "",
+                    timeout: int = 180) -> dict:
+    """Re-run the enumeration behind ONE watched listing — the Discovery pane's
+    "↻ Refresh folder" button, i.e. the "watch a folder" story. `scope_key` picks which
+    listing when a project watches more than one scope; omit it when there's exactly one
+    (the common case) — with two or more listings and no scope_key, this refuses rather
+    than guessing which watch the operator meant.
+
+    Invariant #11 holds by CONSTRUCTION, not by good intentions: this shells out to the
+    separate `build/mitos.py` entrypoint exactly as an operator would from a terminal.
+    `compile.py` still imports no connector, no OAuth, no network code — the reach lives in
+    a child process. (The console already runs compile/deploy; this is the same trust
+    model on a localhost-only server.)
+
+    Requires a scope recorded by a previous `--stage` run (bootstrap.stage_listing). A
+    listing staged before scopes carried `store`/`recursive`, or staged with no scope at
+    all, returns ok:False — the console falls back to showing the copyable CLI command,
+    which is also the right answer for a store's FIRST stage (that one may need an
+    interactive OAuth consent, which has no place in a web button). Re-staging the SAME
+    scope replaces just that listing (stage_listing) — sibling watches are untouched, so
+    the returned `staged` snapshot's OTHER listings carry whatever they had before this
+    call ran."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    staged = load_staged(reg, slug, pool)
+    if not staged.get("ok"):
+        return {"ok": False, "error": staged.get("error") or "no staged listing to refresh"}
+    listings = staged.get("listings") or []
+    if not listings:
+        return {"ok": False, "error": "nothing staged for this project yet — run the "
+                                      "connect command once from a terminal first"}
+    if scope_key:
+        matches = [l for l in listings if l["scope_key"] == scope_key]
+        if not matches:
+            return {"ok": False, "error": "that watched listing is gone — reload and try again"}
+        listing = matches[0]
+    elif len(listings) == 1:
+        listing = listings[0]
+    else:
+        return {"ok": False, "error": f"{len(listings)} watched listings here — specify "
+                                      f"which one to refresh"}
+    scope = listing.get("scope") or {}
+    if not (scope.get("folder_id") or scope.get("query")):
+        return {"ok": False, "error": "this listing was staged without a recorded folder "
+                                      "scope — re-stage it from the CLI once to enable "
+                                      "in-console refresh"}
+    target = "unassigned" if staged.get("is_unassigned") else slug
+    cmd = [sys.executable, str(Path(__file__).resolve().parents[1] / "mitos.py"),
+           "connect", "--stage"]
+    if target != "unassigned":
+        cmd += ["--project", target]
+    if scope.get("store"):
+        cmd += ["--store", str(scope["store"])]
+    if scope.get("folder_id"):
+        cmd += ["--folder-id", str(scope["folder_id"])]
+    if scope.get("query"):
+        cmd += ["--query", str(scope["query"])]
+    if scope.get("recursive"):
+        cmd += ["--recursive"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              cwd=str(Path(__file__).resolve().parents[2]))
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"connect timed out after {timeout}s — run it from a "
+                                      f"terminal to see what it's waiting on"}
+    except OSError as e:
+        return {"ok": False, "error": f"couldn't run connect: {e}"}
+    log = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        return {"ok": False, "error": log or f"connect exited {proc.returncode}", "log": log}
+    return {"ok": True, "log": log, "staged": load_staged(reg, slug, pool)}
+
+
+def remove_watch(reg: Registry, slug: str, pool: str = "", scope_key: str = "") -> dict:
+    """Drop one watched listing from inbox/staging/<slug>.json — the console's "Remove
+    watch" action. Console-only: there is no CLI verb for this (removing a watch is a pure
+    file edit with no connector involved, so a CLI counterpart would just be a second way
+    to do the same one-line write). The file itself is kept (with the remaining listings,
+    or an empty `listings: []` if this was the last one) rather than deleted — that keeps
+    _dismiss_file's "does a project-specific staging file exist" pool-fallback check
+    working exactly as it does for an empty listing today."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": False, "error": "invalid slug"}
+    if not scope_key:
+        return {"ok": False, "error": "scope_key required"}
+    staging_dir = loader.inbox_dir(reg) / "staging"
+    path = (staging_dir / "unassigned.json") if pool == "unassigned" else (staging_dir / f"{slug}.json")
+    if not path.is_file():
+        return {"ok": False, "error": "nothing staged here"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {"ok": False, "error": "staging file is unreadable — re-stage from the CLI"}
+    listings = staging_mod.normalize_staging(data)
+    remaining = [l for l in listings if l["scope_key"] != scope_key]
+    if len(remaining) == len(listings):
+        return {"ok": False, "error": "no watched listing with that scope_key"}
+    path.write_text(json.dumps({"slug": data.get("slug", slug), "listings": remaining},
+                               ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "staged": load_staged(reg, slug, pool)}
 
 
 def graph_index(reg: Registry) -> list[dict]:
@@ -1580,6 +1808,13 @@ def state(reg: Registry) -> dict:
         # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
         "known_targets": sorted(loader.KNOWN_TARGETS),
+        # The Mitos-owned prompt placeholders, for the one-shot copy flow: `user_tokens`
+        # are auto-substituted at copy time (the operator is never asked to type their own
+        # name), `machine_tokens` are left literal (a copied prompt goes to a chat app, not
+        # a machine deploy — no machine's paths apply). Every OTHER {{token}} in a prompt is
+        # a fillable input the copy modal asks for. See render.user_token_map.
+        "user_tokens": render.user_token_map(reg),
+        "machine_tokens": render.machine_token_names(),
         # only machines with an Agent-MD folder tree — the Org tab's folder-view picker
         "agents_md_machines": sorted(
             m for m, cfg in reg.machines.items() if "agents-md" in cfg.get("targets", [])),
@@ -1745,6 +1980,9 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
         def do_POST(self):
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
                                   "/api/graph/dismiss", "/api/graph/restore",
+                                  "/api/graph/purge", "/api/graph/refresh",
+                                  "/api/graph/unwatch",
+                                  "/api/reload",
                                   "/api/prompts/favorite", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
                                   "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
@@ -1766,6 +2004,19 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 return self._json(500, {"ok": False, "error": f"internal error: {e}"})
 
         def _dispatch_post(self, body):
+            if self.path == "/api/reload":
+                # The explicit "Reload from disk" button. GET /api/state deliberately
+                # serves the cached registry (it is polled), so this is the ONLY path that
+                # re-reads registry/ + registry/local/ mid-session.
+                try:
+                    reloaded = loader.load(holder["reg"].root)
+                except Exception as e:
+                    # A half-saved YAML in registry/local/ is the common case here. Keep the
+                    # last good registry — the console stays usable (and drafts survive)
+                    # while the operator fixes the file — and report what broke.
+                    return self._json(400, {"ok": False, "error": str(e)})
+                holder["reg"] = reloaded
+                return self._json(200, {"ok": True, "state": state(reloaded)})
             if self.path == "/api/ops/compile":
                 target = body.get("target") or None
                 result = run_compile(holder["reg"], str(target) if target else None)
@@ -1838,7 +2089,36 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 result = dismiss_docs(
                     holder["reg"], str(body.get("slug", "")),
                     docs if isinstance(docs, list) else [],
+                    str(body.get("pool", "") or ""),
+                    permanent=bool(body.get("permanent")))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/purge":
+                # Recovery's "Clear missing" — drop rows the current listings prove are
+                # gone from every watched scope. Server re-checks in_scope; the client
+                # can't force it.
+                ids = body.get("ids")
+                result = purge_dismissed(
+                    holder["reg"], str(body.get("slug", "")),
+                    ids if isinstance(ids, list) else [],
                     str(body.get("pool", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/refresh":
+                # "↻ Refresh folder" — replay one watched listing's enumeration via a
+                # mitos.py subprocess. scope_key picks which listing when a project
+                # watches more than one; refresh_staging defaults to the sole listing
+                # when there's exactly one and scope_key is omitted.
+                result = refresh_staging(
+                    holder["reg"], str(body.get("slug", "")),
+                    str(body.get("pool", "") or ""),
+                    str(body.get("scope_key", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/unwatch":
+                # "Remove watch" — drop one listing from the staging file. Pure file edit,
+                # no connector involved, console-only (no CLI counterpart).
+                result = remove_watch(
+                    holder["reg"], str(body.get("slug", "")),
+                    str(body.get("pool", "") or ""),
+                    str(body.get("scope_key", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/restore":
                 # Recovery tab's Restore action — the doc reappears in Discovery

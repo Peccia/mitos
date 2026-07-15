@@ -196,8 +196,11 @@ def _cmd_connect(args) -> int:
 
     A project bound to MORE THAN ONE store (`document_store:` is a list) loops all of
     them, one enumeration + one candidate per store (`--store <name>` narrows to just
-    one). `--stage` doesn't support looping multiple stores yet — pass `--store` to pick
-    one when staging a multi-store project.
+    one) — `--stage` loops the same way, one LISTING per store, all written into the same
+    inbox/staging/<slug>.json (see build/agentic/staging.py). A project can also watch
+    more than one scope WITHIN one store: re-staging the same store/folder/query/recursive
+    combination replaces that listing, a different one appends alongside it. Overlapping
+    watches are reported (`note: N documents also appear in watch ...`) but never blocked.
 
     If ``--project`` is omitted the command runs in *unassigned* mode: documents are staged
     to ``inbox/staging/unassigned.json`` without being bound to any project. Open the
@@ -257,11 +260,6 @@ def _cmd_connect(args) -> int:
                   f"document_store entries ({', '.join(stores)})", file=sys.stderr)
             return 2
         stores = [args.store]
-    if args.stage and len(stores) > 1:
-        print("error: --stage doesn't support multiple stores yet — pass --store <name> "
-              "to pick one (stage the others in separate runs).", file=sys.stderr)
-        return 2
-
     if args.backend or len(stores) <= 1:
         # Prefer the resolved project/unassigned store (for its exclude_folders config)
         # even under a --backend override; args.backend is only the last-resort fallback,
@@ -307,9 +305,18 @@ def _connect_one(reg, args, slug: str, proj: dict | None, resolved_store: str | 
         if args.stage:
             result = stage_listing(reg, connector, slug,
                                    folder_id=folder_id, query=args.query,
-                                   exclude_folders=exclude_folders, recursive=recursive)
+                                   exclude_folders=exclude_folders, recursive=recursive,
+                                   store=resolved_store or "")
             if result.get("ok"):
                 print(f"staged {result['count']} document(s) to {result['path']}.")
+                # Warn-only (see stage_listing/staging.overlapping_listings): an operator
+                # watching two scopes that happen to share a document isn't an error —
+                # both listings are written and either one's refresh keeps it visible.
+                from agentic import staging as _staging
+                for ov in result.get("overlap") or []:
+                    print(f"note: {ov['count']} document(s) also appear in watch "
+                          f"{_staging.scope_label(ov['scope'])!r} — refreshing either "
+                          f"keeps them visible.", file=sys.stderr)
                 print("Open `python build/compile.py review` → Knowledge Graph, pick the ones "
                       "you want, and Propose selected.")
                 return 0

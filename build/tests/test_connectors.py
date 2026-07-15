@@ -439,8 +439,60 @@ def test_connect_loops_multi_store_one_candidate_per_store():
         assert ids == [meta["store"].upper() + "1"]
     assert stores_seen == {"gws", "fake2"}
 
+def test_connect_stage_loops_multi_store_one_listing_per_store():
+    """`--stage` on a multi-store project used to refuse outright; it now loops the same
+    way the non-stage path does — one LISTING per store, all in the same
+    inbox/staging/<slug>.json (not one candidate each, since --stage never proposes)."""
+    import argparse
+    import importlib
+    import json as _json
+    import yaml as _y
+    import agentic.connectors as connectors_pkg
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    mitos = importlib.import_module("mitos")
+
+    treg, tmp = _temp_registry()
+    pfile = tmp / "registry" / "projects" / "example-project.yaml"
+    data = _y.safe_load(pfile.read_text(encoding="utf-8"))
+    data["document_store"] = ["gws", "fake2"]
+    pfile.write_text(_y.safe_dump(data), encoding="utf-8")
+    conn_file = tmp / "connections" / "servers.yaml"
+    conn_data = _y.safe_load(conn_file.read_text(encoding="utf-8"))
+    conn_data["servers"]["fake2"] = {"description": "Second store — for tests."}
+    conn_file.write_text(_y.safe_dump(conn_data), encoding="utf-8")
+
+    def fake_connector_for_store(reg2, store, root=None):
+        from agentic.connectors.mock import MockConnector
+        return MockConnector(files=[
+            {"id": f"{store.upper()}1", "name": f"{store} doc q"}])
+
+    orig_connector_for_store = connectors_pkg.connector_for_store
+    orig_repo_root = mitos.REPO_ROOT
+    connectors_pkg.connector_for_store = fake_connector_for_store
+    mitos.REPO_ROOT = tmp
+    try:
+        args = argparse.Namespace(project="example-project", backend=None,
+                                  folder_id=None, recursive=False, query="q",
+                                  stage=True, store=None)
+        rc = mitos._cmd_connect(args)
+    finally:
+        connectors_pkg.connector_for_store = orig_connector_for_store
+        mitos.REPO_ROOT = orig_repo_root
+
+    assert rc == 0
+    data = _json.loads((_inbox(tmp) / "staging" / "example-project.json")
+                       .read_text(encoding="utf-8"))
+    assert len(data["listings"]) == 2
+    stores_seen = {l["scope"]["store"] for l in data["listings"]}
+    assert stores_seen == {"gws", "fake2"}
+    ids_by_store = {l["scope"]["store"]: [d["id"] for d in l["documents"]] for l in data["listings"]}
+    assert ids_by_store == {"gws": ["GWS1"], "fake2": ["FAKE21"]}
+    # no kind:graph candidates — --stage never proposes, only writes staging/
+    from agentic import review
+    assert [c for c in review.load_candidates(loader.load(tmp)) if c["kind"] == "graph"] == []
+
 def test_stage_listing_writes_artifact_with_weburl():
-    """stage_listing writes inbox/staging/<slug>.json and keeps webUrl."""
+    """stage_listing writes inbox/staging/<slug>.json as one listing and keeps webUrl."""
     import json as _json
     from agentic.connectors.bootstrap import stage_listing
     from agentic.connectors.mock import MockConnector
@@ -449,15 +501,77 @@ def test_stage_listing_writes_artifact_with_weburl():
         {"id": "DRV1", "name": "Forecast Spec", "dateModified": "2026-06-18",
          "webUrl": "https://example.com/drive/1"}])
     out = stage_listing(treg, mock, "example-project", query="forecast")
-    assert out["ok"] and out["count"] == 1
+    assert out["ok"] and out["count"] == 1 and out["overlap"] == []
     artifact = _inbox(tmp) / "staging" / "example-project.json"
     assert artifact.is_file()
     data = _json.loads(artifact.read_text(encoding="utf-8"))
     assert data["slug"] == "example-project"
-    assert data["scope"]["query"] == "forecast"
-    d = data["documents"][0]
+    assert len(data["listings"]) == 1
+    listing = data["listings"][0]
+    assert listing["scope"]["query"] == "forecast"
+    d = listing["documents"][0]
     assert all(k in d for k in ("id", "name", "dateModified", "webUrl"))
     assert d["webUrl"] == "https://example.com/drive/1"
+
+
+def test_stage_listing_replaces_same_scope_appends_new_scope():
+    """Re-staging the SAME scope (store/folder_id/query/recursive) replaces its listing in
+    place; a different scope is appended alongside it — the "watch more than one folder"
+    story. exclude_folders is deliberately NOT part of scope identity."""
+    import json as _json
+    from agentic.connectors.bootstrap import stage_listing
+    from agentic.connectors.mock import MockConnector
+    treg, tmp = _temp_registry()
+    artifact = _inbox(tmp) / "staging" / "example-project.json"
+
+    out1 = stage_listing(treg, MockConnector(files=[{"id": "A", "name": "q1 Alpha"}]),
+                         "example-project", query="q1")
+    assert out1["ok"], out1
+    data1 = _json.loads(artifact.read_text(encoding="utf-8"))
+    assert len(data1["listings"]) == 1
+
+    # same scope (query="q1"), different exclude_folders, different result set — REPLACES
+    out2 = stage_listing(treg, MockConnector(files=[{"id": "B", "name": "q1 Beta"}]),
+                         "example-project", query="q1", exclude_folders=["Archive"])
+    assert out2["ok"], out2
+    data2 = _json.loads(artifact.read_text(encoding="utf-8"))
+    assert len(data2["listings"]) == 1
+    assert data2["listings"][0]["documents"][0]["id"] == "B"
+    assert data2["listings"][0]["scope"]["exclude_folders"] == ["Archive"]
+
+    # a genuinely different scope (query="q2") APPENDS a second listing
+    out3 = stage_listing(treg, MockConnector(files=[{"id": "C", "name": "q2 Gamma"}]),
+                         "example-project", query="q2")
+    assert out3["ok"], out3
+    data3 = _json.loads(artifact.read_text(encoding="utf-8"))
+    assert len(data3["listings"]) == 2
+    ids_by_listing = {tuple(sorted(d["id"] for d in l["documents"])) for l in data3["listings"]}
+    assert ids_by_listing == {("B",), ("C",)}
+
+
+def test_stage_listing_reports_overlap_with_sibling_listings():
+    """Two watched scopes that share a document report the overlap — warn-only, both
+    listings are written and both keep the shared document."""
+    import json as _json
+    from agentic.connectors.bootstrap import stage_listing
+    from agentic.connectors.mock import MockConnector
+    treg, tmp = _temp_registry()
+
+    out1 = stage_listing(treg, MockConnector(files=[
+        {"id": "SHARED", "name": "q1 Shared"}, {"id": "ONLY1", "name": "q1 Only One"}]),
+        "example-project", query="q1")
+    assert out1["ok"] and out1["overlap"] == [], out1
+
+    out2 = stage_listing(treg, MockConnector(files=[
+        {"id": "SHARED", "name": "q2 Shared"}, {"id": "ONLY2", "name": "q2 Only Two"}]),
+        "example-project", query="q2")
+    assert out2["ok"], out2
+    assert len(out2["overlap"]) == 1
+    assert out2["overlap"][0]["count"] == 1
+
+    artifact = _inbox(tmp) / "staging" / "example-project.json"
+    data = _json.loads(artifact.read_text(encoding="utf-8"))
+    assert len(data["listings"]) == 2   # both kept — overlap never blocks a write
 
 def test_stage_listing_empty_scope_is_reported():
     """stage_listing with no matching files returns ok=False and writes nothing."""
@@ -478,7 +592,8 @@ def test_stage_listing_unknown_project_rejected():
     assert out["ok"] is False
 
 def test_load_staged_reads_artifact():
-    """load_staged returns ok=True and the documents from an existing staging file."""
+    """load_staged returns ok=True and the documents from an existing (legacy single-
+    listing shape) staging file — the pre-multi-scope file must keep reading forever."""
     import json as _json
     from agentic import review
     treg, tmp = _temp_registry()
@@ -492,8 +607,9 @@ def test_load_staged_reads_artifact():
     }
     (staging_dir / "example-project.json").write_text(_json.dumps(payload), encoding="utf-8")
     result = review.load_staged(treg, "example-project")
-    assert result["ok"] and result["staged_at"] == "2026-06-23T1430Z"
+    assert result["ok"]
     assert len(result["documents"]) == 1 and result["documents"][0]["id"] == "D1"
+    assert len(result["listings"]) == 1 and result["listings"][0]["staged_at"] == "2026-06-23T1430Z"
 
 def test_load_staged_absent_is_empty_not_error():
     """Absent staging file → ok=True with empty documents; traversal slug → ok=False."""
@@ -534,9 +650,10 @@ def test_staged_endpoint_serves_listing():
     treg, tmp = _temp_registry()
     staging_dir = _inbox(tmp) / "staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
-    payload = {"slug": "example-project", "staged_at": "T", "connector": "mock", "scope": {},
-               "documents": [{"id": "D1", "name": "N", "dateModified": "2026",
-                               "webUrl": "", "description": ""}]}
+    payload = {"slug": "example-project", "listings": [
+        {"scope_key": "k1", "staged_at": "T", "connector": "mock", "scope": {},
+         "documents": [{"id": "D1", "name": "N", "dateModified": "2026",
+                        "webUrl": "", "description": ""}]}]}
     (staging_dir / "example-project.json").write_text(_json.dumps(payload), encoding="utf-8")
     server = review.make_server(treg, 0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -558,6 +675,41 @@ def test_staged_endpoint_serves_listing():
         r = conn.getresponse()
         data = _json.loads(r.read())
         assert r.status == 200 and data["ok"] and data["documents"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+def test_unwatch_endpoint_removes_one_listing():
+    """POST /api/graph/unwatch drops the named listing; the other watch is untouched."""
+    import http.client
+    import json as _json
+    import threading
+    from agentic import review
+    treg, tmp = _temp_registry()
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"slug": "example-project", "listings": [
+        {"scope_key": "keep", "staged_at": "T", "connector": "mock",
+         "scope": {"folder_id": "F1"}, "documents": [{"id": "A", "name": "A"}]},
+        {"scope_key": "drop", "staged_at": "T", "connector": "mock",
+         "scope": {"folder_id": "F2"}, "documents": [{"id": "B", "name": "B"}]},
+    ]}
+    (staging_dir / "example-project.json").write_text(_json.dumps(payload), encoding="utf-8")
+    server = review.make_server(treg, 0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+        body = _json.dumps({"slug": "example-project", "scope_key": "drop"})
+        conn.request("POST", "/api/graph/unwatch", body, {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        out = _json.loads(r.read())
+        assert r.status == 200 and out["ok"]
+        assert [l["scope_key"] for l in out["staged"]["listings"]] == ["keep"]
+        # unknown scope_key on the second call → 400
+        conn.request("POST", "/api/graph/unwatch", body, {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        assert r.status == 400
     finally:
         server.shutdown()
         server.server_close()
@@ -683,7 +835,7 @@ def test_unassigned_stage_listing_and_fallback():
     assert dest.is_file(), "inbox/staging/unassigned.json should have been created"
     data = _json.loads(dest.read_text(encoding="utf-8"))
     assert data["slug"] == "unassigned"
-    assert len(data["documents"]) > 0
+    assert len(data["listings"]) == 1 and len(data["listings"][0]["documents"]) > 0
     # load_staged for example-project (no project-specific file) falls back to unassigned
     result = review.load_staged(treg, "example-project")
     assert result["ok"], f"load_staged returned error: {result.get('error')}"
@@ -691,9 +843,10 @@ def test_unassigned_stage_listing_and_fallback():
     assert len(result["documents"]) > 0
     # Once a project-specific file exists, it takes precedence over the unassigned pool
     project_staging = _inbox(tmp) / "staging" / "example-project.json"
-    project_payload = {"slug": "example-project", "staged_at": "T", "connector": "mock",
-                       "scope": {}, "documents": [{"id": "PROJ1", "name": "Proj Doc",
-                                                   "dateModified": "2026", "webUrl": "", "description": ""}]}
+    project_payload = {"slug": "example-project", "listings": [
+        {"scope_key": "k1", "staged_at": "T", "connector": "mock", "scope": {},
+         "documents": [{"id": "PROJ1", "name": "Proj Doc",
+                        "dateModified": "2026", "webUrl": "", "description": ""}]}]}
     project_staging.parent.mkdir(parents=True, exist_ok=True)
     project_staging.write_text(_json.dumps(project_payload), encoding="utf-8")
     result2 = review.load_staged(treg, "example-project")

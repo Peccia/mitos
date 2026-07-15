@@ -71,6 +71,36 @@ Mitos resolves the folder's full subtree, queries it in batches, and dedupes fil
 under more than one folder. Any folder you exclude (see below) is removed from the subtree —
 exclusion wins over the recursive scope. `--recursive` has no effect without `--folder-id`.
 
+## Watching more than one folder or query
+
+`--stage` doesn't have to point at just one scope. A project's staging file
+(`inbox/staging/<slug>.json`) holds a **list of watched listings**, one per distinct
+`(store, folder_id, query, recursive)` combination:
+
+```sh
+python build/mitos.py connect --project <slug> --stage --folder-id <A>            # watch A
+python build/mitos.py connect --project <slug> --stage --query "campaign"         # watch B, alongside A
+```
+
+Re-staging the **same** scope replaces just that listing (so re-running the first command above
+refreshes watch A without touching watch B). A genuinely different scope is appended, not
+clobbered — every prior watch stays intact. The operator console's Knowledge Graph → Discovery
+pane shows a **watched-scopes strip**, one row per listing, each with its own **↻ Refresh**
+(replays that listing's enumeration in place) and **Remove watch** (drops it — the documents
+already mapped into the graph are unaffected). Discovery itself shows the union of every watched
+listing's documents, deduped by id; a document reachable through more than one watch is tagged
+with a small "N watches" chip rather than appearing twice.
+
+Watching two scopes that happen to overlap is not an error — `--stage` prints a note
+(`N document(s) also appear in watch ...`) and stages both anyway. A document present in *any*
+current listing is never treated as "missing" from Recovery, even if it briefly drops out of one
+particular watch — see the `review` row in
+[managing-state.md](../managing-state.md#the-reconciliation-toolbox) for the absence rule
+(`in_scope`) this powers.
+
+A project bound to **more than one store** (`document_store:` is a list) loops `--stage` once per
+store, same as the non-staging path — pass `--store <name>` to stage just one.
+
 ## Staging without assigning to a project
 
 You can sync a store *before* deciding which documents belong to which project:

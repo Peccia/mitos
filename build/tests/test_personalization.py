@@ -94,6 +94,50 @@ def test_expand_leaves_placeholder_with_no_value_untouched():
     assert out == "Hi {{user_given_name}}"   # never silently drops to an empty string
 
 
+# ── the console's one-shot copy: which tokens are Mitos-owned ────────────────
+
+def test_user_token_map_resolves_configured_tokens_only():
+    """The console auto-substitutes these on copy (never asking the operator to type their
+    own name) and treats every OTHER {{token}} as a fillable input. An unset token is
+    omitted — it stays literal on copy, exactly as expand_placeholders leaves it."""
+    user = {"given_name": "Paul", "full_name": "Paul Peccia",
+            "email": "example@domain.com", "location": ""}
+    out = render.user_token_map(_FakeReg(user))
+    assert out == {"user_given_name": "Paul", "users_given_name": "Paul's",
+                   "user_full_name": "Paul Peccia", "user_email": "example@domain.com"}
+    assert "user_location" not in out       # unset → omitted → literal
+
+
+def test_user_token_map_agrees_with_expand_placeholders():
+    """The map must never drift from the real expansion: substituting it by hand has to
+    produce exactly what a deploy would write."""
+    user = {"given_name": "Chris", "full_name": "Chris Smith",
+            "email": "c@example.com", "location": "Buffalo, NY"}
+    reg_ = _FakeReg(user)
+    text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
+            "{{user_email}} / {{user_location}}")
+    tokens = render.user_token_map(reg_)
+    by_hand = text
+    for tok, val in tokens.items():
+        by_hand = by_hand.replace("{{" + tok + "}}", val)
+    assert by_hand == render.expand_placeholders(reg_, text)
+
+
+def test_machine_token_names_are_the_machine_scoped_tokens():
+    """The console leaves these literal rather than prompting: a copied prompt goes to a
+    chat app, not a machine deploy, so no machine's paths apply."""
+    assert set(render.machine_token_names()) == {"project_root", "skills_root"}
+
+
+def test_state_exposes_both_token_sets():
+    from agentic.review import state
+    treg, _tmp = _temp_registry()
+    st = state(treg)
+    assert set(st["machine_tokens"]) == {"project_root", "skills_root"}
+    # every advertised user token must carry a real value — the console substitutes blind
+    assert all(v for v in st["user_tokens"].values())
+
+
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}

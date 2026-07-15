@@ -579,6 +579,54 @@ def test_review_http_smoke():
         server.shutdown()
         server.server_close()
 
+def test_review_reload_endpoint_rereads_disk_and_survives_a_broken_registry():
+    """The "Reload from disk" button. GET /api/state answers from the cached registry (it's
+    polled); POST /api/reload is the only path that re-runs loader.load(). A broken overlay
+    must NOT take the console down with it — the last good registry stays live."""
+    import http.client
+    import json as _json
+    import threading
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    server = review.make_server(treg, 0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+
+        # A skill added to the overlay AFTER startup is invisible to the cached state...
+        skill_dir = tmp / "registry" / "local" / "skills" / "late-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: late-skill\ndescription: added after startup\n"
+            "version: 0.1.0\ncategory: general\ntargets: [hermes]\n---\n\nBody.\n",
+            encoding="utf-8")
+        conn.request("GET", "/api/state")
+        cached = _json.loads(conn.getresponse().read())
+        assert not any(s["name"] == "late-skill" for s in cached["prompts"]["skills"])
+
+        # ...until the explicit reload, which re-reads registry/ + registry/local/.
+        conn.request("POST", "/api/reload", "{}", {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        out = _json.loads(r.read())
+        assert r.status == 200 and out["ok"]
+        assert any(s["name"] == "late-skill" for s in out["state"]["prompts"]["skills"])
+
+        # A half-saved YAML answers 400 and leaves the server on its last good registry.
+        (skill_dir / "SKILL.md").write_text("---\nname: [unclosed\n", encoding="utf-8")
+        conn.request("POST", "/api/reload", "{}", {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        bad = _json.loads(r.read())
+        assert r.status == 400 and bad["ok"] is False and bad["error"]
+        conn.request("GET", "/api/state")
+        still = _json.loads(conn.getresponse().read())
+        assert any(s["name"] == "late-skill" for s in still["prompts"]["skills"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_deploy_refuses_example_template_but_allows_sandbox():
     from agentic.commands import cmd_deploy
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-ex-deploy-"))
