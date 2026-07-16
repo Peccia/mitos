@@ -152,6 +152,30 @@ def _user_value(user: dict, key: str) -> str | None:
     return None
 
 
+_USER_TOKENS = ("user_given_name", "users_given_name", "user_full_name",
+                "user_email", "user_location")
+
+
+def user_token_map(reg: Registry) -> dict[str, str]:
+    """The reserved personalization tokens that resolve to a value, as {token: value}.
+
+    The console's one-shot prompt copy reads this to auto-substitute Mitos-owned tokens
+    (so the operator is never asked to type their own name) and to tell the remaining
+    `{{tokens}}` apart as fillable inputs. Tokens with no configured value are omitted —
+    they stay literal on copy, exactly as `expand_placeholders` leaves them at deploy."""
+    return {tok: val for tok in _USER_TOKENS
+            if (val := _user_value(reg.user, tok)) is not None}
+
+
+def machine_token_names() -> list[str]:
+    """The machine-scoped token names (`_MACHINE_TOKENS`), for callers outside this module.
+
+    The console treats these as reserved-but-unresolvable: a copied prompt is destined for
+    a chat app, not a machine deploy, so there is no machine whose paths could fill them.
+    They are neither auto-substituted nor prompted for — they stay literal."""
+    return list(_MACHINE_TOKENS)
+
+
 def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None) -> str:
     """Substitute the fixed personalization tokens with `reg.user` values, plus the
     machine-scoped tokens (`_MACHINE_TOKENS`) resolved from the deploying machine's

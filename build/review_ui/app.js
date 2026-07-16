@@ -115,10 +115,100 @@ async function copyText(text, label) {
   }
 }
 
+// ── one-shot prompt inputs ───────────────────────────────────────────────────
+// A prompt body may carry {{tokens}}. They split three ways, and the split is what keeps
+// this feature from fighting Mitos's own placeholder vocabulary:
+//
+//   user_*      (STATE.user_tokens)     — Mitos-owned, resolved from registry user.yaml.
+//                                         Substituted silently: never ask an operator to
+//                                         type their own name.
+//   machine_*   (STATE.machine_tokens)  — Mitos-owned but machine-scoped. A copied prompt
+//                                         goes to a chat app, not a deploy, so no machine's
+//                                         paths apply. Left literal, never prompted.
+//   everything else                     — the operator's own fillable inputs.
+//
+// Mirrors render.expand_placeholders' token syntax exactly (\w+ inside {{…}}), so a prompt
+// reads the same here as it does at deploy.
+const PROMPT_TOKEN_RE = /\{\{(\w+)\}\}/g;
+
+function promptTokens(text) {
+  const userTok = (STATE && STATE.user_tokens) || {};
+  const machineTok = new Set((STATE && STATE.machine_tokens) || []);
+  const inputs = [];
+  for (const m of String(text || "").matchAll(PROMPT_TOKEN_RE)) {
+    const tok = m[1];
+    if (tok in userTok || machineTok.has(tok)) continue;
+    if (!inputs.includes(tok)) inputs.push(tok);   // dedupe, keep first-seen order
+  }
+  return inputs;
+}
+
+// Substitute the reserved user tokens + whatever the operator filled in. A token with no
+// value (blank field) stays literal — the copied prompt is then visibly incomplete rather
+// than silently missing a word.
+function fillPrompt(text, values) {
+  const userTok = (STATE && STATE.user_tokens) || {};
+  return String(text || "").replace(PROMPT_TOKEN_RE, (whole, tok) => {
+    if (tok in userTok) return userTok[tok];
+    const v = values && values[tok];
+    return v ? v : whole;
+  });
+}
+
+// The single entry point for copying a prompt/skill body anywhere in the console.
+function copyPrompt(p) {
+  const body = currentBody(p);
+  const inputs = promptTokens(body);
+  if (!inputs.length) { copyText(fillPrompt(body, {}), p.name); return; }
+  openPromptInputs(p, body, inputs);
+}
+
+function closePromptInputs() {
+  const m = $("prompt-input-modal");
+  if (m) m.hidden = true;
+}
+
+function openPromptInputs(p, body, inputs) {
+  const modal = $("prompt-input-modal");
+  const fields = $("prompt-input-fields");
+  if (!modal || !fields) { copyText(fillPrompt(body, {}), p.name); return; }
+  $("prompt-input-sub").textContent =
+    `${p.name} — ${inputs.length} input${inputs.length === 1 ? "" : "s"}. `
+    + "Leave one blank to keep its {{token}} literal.";
+  fields.replaceChildren();
+  const boxes = {};
+  for (const tok of inputs) {
+    const row = el("div", "prompt-input-row");
+    const lab = el("label", "prompt-input-label", tok);
+    lab.htmlFor = "pi-" + tok;
+    const inp = el("input", "prompt-input-field");
+    inp.id = "pi-" + tok; inp.type = "text"; inp.autocomplete = "off";
+    inp.placeholder = `{{${tok}}}`;
+    inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+    boxes[tok] = inp;
+    row.append(lab, inp);
+    fields.append(row);
+  }
+  const go = () => {
+    const values = {};
+    for (const tok of inputs) values[tok] = boxes[tok].value.trim();
+    closePromptInputs();
+    copyText(fillPrompt(body, values), p.name);
+  };
+  $("prompt-input-copy").onclick = go;
+  $("prompt-input-cancel").onclick = closePromptInputs;
+  modal.onclick = (e) => { if (e.target === modal) closePromptInputs(); };
+  modal.hidden = false;
+  boxes[inputs[0]].focus();
+}
+
 // ── data ─────────────────────────────────────────────────────────────────────
-async function refresh() {
-  const res = await fetch("/api/state");
-  STATE = await res.json();
+// refresh() serves the server's CACHED registry — cheap, and safe to call after every
+// accept/propose. It does NOT re-read registry/ from disk: that's reloadFromDisk(),
+// wired to the explicit header button. `pre` lets a caller that already has fresh state
+// (reloadFromDisk) reuse it instead of issuing a second fetch.
+async function refresh(pre) {
+  STATE = pre || await (await fetch("/api/state")).json();
   // orgData feeds both the Graph tab's effort editor and the Skills tab's org expansion.
   // Load eagerly on every refresh if not yet cached so the Skills tab doesn't need a
   // separate trigger; fall back to empty object so joins against it are always safe.
@@ -144,6 +234,28 @@ async function refresh() {
 }
 
 
+
+// The header "Reload from disk" button. GET /api/state answers from the server's cached
+// registry, so edits made to registry/local/ after the console started were invisible until
+// a restart — this POSTs the reload that actually re-runs loader.load(), then renders the
+// state it returns. A loader error (half-saved YAML) leaves the server on its last good
+// registry: the console stays up, in-memory drafts survive, and the error is surfaced.
+async function reloadFromDisk() {
+  let r;
+  try {
+    r = await (await fetch("/api/reload", { method: "POST" })).json();
+  } catch (e) {
+    toast(`Reload failed: ${e}`, 6000);
+    return;
+  }
+  if (!r.ok) { toast(`Reload failed — ${r.error}`, 8000); return; }
+  // Staged/dismissed panes are fetched separately and may now be stale too; drop the
+  // caches so the Knowledge Graph tab refetches them for the selected project.
+  stagedData = null; dismissedData = null;
+  await refresh(r.state);
+  if (graphSlug) { loadStaged(graphSlug); loadDismissed(graphSlug); }
+  toast("Reloaded from disk.");
+}
 
 function safeRender(box, fn) {
   try {
@@ -661,9 +773,10 @@ function stagedVisible(g) {
     ((STATE && STATE.graphs) || []).forEach((gr) =>
       (gr.documents || []).forEach((d) => mappedIds.add(d.id)));
   }
+  // all_ids, not documents: the Recovery list hides permanently-dismissed rows, but
+  // Discovery must still filter their ids out — that's what "permanent" means.
   const dismissedIds = new Set(
-    ((dismissedData && dismissedData.slug === g.slug && dismissedData.documents) || [])
-      .map((d) => d.id));
+    (dismissedData && dismissedData.slug === g.slug && dismissedData.all_ids) || []);
   const all = (stagedData.documents || [])
     .filter((d) => !mappedIds.has(d.id) && !dismissedIds.has(d.id));
   const q = stagedFilter.trim().toLowerCase();
@@ -690,14 +803,24 @@ function buildDiscoveryPane(container, g) {
   head.append(toggle);
   container.append(head);
 
-  if (!stagedData || !stagedData.ok || stagedData.slug !== graphSlug) {
-    const hint = stagedPool === "unassigned"
-      ? "Run `mitos connect --stage` (no project) to fill the shared unassigned pool."
-      : "Run `mitos connect --project " + g.slug + " --stage [--query TEXT]` to stage"
-        + " documents for this project.";
-    container.append(el("div", "muted pane-hint", hint));
+  // `listings` empty is the "no staging file at all (or nothing left after removing every
+  // watch)" case: load_staged answers ok:true with an empty list there, so testing .ok
+  // alone would only catch an UNREADABLE file and leave the common never-staged-yet case
+  // without guidance.
+  if (!stagedData || !stagedData.ok || stagedData.slug !== graphSlug
+      || !(stagedData.listings && stagedData.listings.length)) {
+    // No listing yet — the first stage of a folder happens in a terminal (it may need an
+    // interactive OAuth consent, which has no business behind a web button). Hand over the
+    // exact command; every refresh after that is the one-click button in the watched-scopes
+    // strip below, once at least one watch exists.
+    if (stagedData && !stagedData.ok && stagedData.error) {
+      container.append(el("div", "muted pane-hint", stagedData.error));
+    }
+    container.append(stageCommandCard(g));
     return;
   }
+
+  container.append(renderWatchedScopes(g));
 
   const sbar = el("div", "staged-bar");
   const search = el("input", "staged-search");
@@ -731,6 +854,190 @@ function buildDiscoveryPane(container, g) {
   setTimeout(() => renderStagedRows(g), 0);
 }
 
+// Short human label for a scope — mirrors staging.scope_label (build/agentic/staging.py)
+// exactly; presentation-only, so a small duplication here is fine (no correctness risk).
+function scopeLabel(scope) {
+  scope = scope || {};
+  if (scope.folder_id) return "folder " + scope.folder_id + (scope.recursive ? " (recursive)" : "");
+  if (scope.query) return `query "${scope.query}"`;
+  return "unscoped";
+}
+
+// What to call a watch in prose (confirms, tooltips, toasts) — the operator's name when
+// they've set one, else the derived scope. Mirrors staging.listing_label server-side.
+function watchName(l) {
+  return (l && l.label) || scopeLabel(l && l.scope);
+}
+
+// The "watch more than one folder" story made visible: one row per watched listing (a
+// project can stage several disjoint — or overlapping — scopes at once, see
+// staging.merge_documents). Each row's own ↻ Refresh replays JUST that scope
+// (POST /api/graph/refresh with its scope_key); Remove watch drops it from the file
+// entirely. A listing staged before scopes carried folder_id/query has neither — Refresh
+// is simply omitted for it, same as the old single-listing fallback.
+function renderWatchedScopes(g) {
+  const box = el("div", "watched-scopes");
+  const listings = (stagedData && stagedData.listings) || [];
+  for (const l of listings) {
+    const row = el("div", "watched-scope-row");
+    const info = el("div", "watched-scope-info");
+    // A named watch leads with its name; the raw scope drops to the meta line so the
+    // identity the system actually refreshes on is never hidden, only de-emphasized.
+    const named = !!l.label;
+    const scopeText = scopeLabel(l.scope);
+    info.append(el("span", "watched-scope-label" + (named ? "" : " untitled"),
+      named ? l.label : scopeText));
+    const bits = [`${l.count} doc${l.count === 1 ? "" : "s"}`];
+    if (named) bits.push(scopeText);
+    if (l.staged_at) bits.push(l.staged_at);
+    if (l.connector) bits.push(l.connector);
+    if (l.scope && l.scope.store) bits.push(l.scope.store);
+    info.append(el("span", "muted watched-scope-meta", bits.join(" · ")));
+    row.append(info);
+
+    const actions = el("span", "row-actions");
+    const rename = el("button", "ghost tiny", "Rename");
+    rename.title = named
+      ? "Rename this watch. The folder it watches doesn't change."
+      : "Give this watch a human-readable name. The folder it watches doesn't change.";
+    rename.onclick = () => renameWatch(g, l);
+    actions.append(rename);
+    if (l.scope && (l.scope.folder_id || l.scope.query)) {
+      const rescan = el("button", "ghost tiny", "↻ Refresh");
+      rescan.title = "Re-enumerate " + watchName(l) + " and surface any new documents";
+      rescan.onclick = () => refreshStaging(g, rescan, l.scope_key);
+      actions.append(rescan);
+    }
+    const remove = el("button", "ghost tiny danger", "Remove watch");
+    remove.title = "Stop watching this scope. Its documents leave Discovery — anything "
+      + "already mapped into the graph is unaffected. Re-stage it later from the CLI to "
+      + "watch it again.";
+    remove.onclick = () => unwatchScope(g, l.scope_key, watchName(l));
+    actions.append(remove);
+    row.append(actions);
+    box.append(row);
+  }
+  return box;
+}
+
+// "Rename" — POST /api/graph/rename-watch. Cosmetic only: the scope_key the server
+// refreshes and dedupes on is untouched, so this is safe to do freely and needs no confirm
+// (unlike Remove watch). Submitting an empty name clears the label and the row falls back
+// to its derived scope — that's the undo.
+async function renameWatch(g, l) {
+  const next = prompt(`Name this watch\n\n${scopeLabel(l.scope)}\n\n`
+    + "Renaming affects this label only — the folder being watched and its refresh are "
+    + "unchanged. Leave blank to go back to the folder id.", l.label || "");
+  if (next === null || next === (l.label || "")) return;
+  try {
+    const r = await fetch("/api/graph/rename-watch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, scope_key: l.scope_key, label: next,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Rename failed.", 6000); return; }
+    stagedData = out.staged && out.staged.ok ? out.staged : stagedData;
+    renderGraph();
+    toast(next.trim() ? "Watch renamed." : "Name cleared.");
+  } catch (e) {
+    toast("Rename failed — server unreachable.");
+  }
+}
+
+// "Remove watch" — POST /api/graph/unwatch. Confirmed first: unlike a refresh, this can't
+// be undone from the console (re-staging the scope from the CLI is the only way back).
+async function unwatchScope(g, scopeKey, label) {
+  if (!confirm(`Stop watching ${label}?\n\n`
+    + "Its documents leave Discovery. Anything already mapped into the graph stays there — "
+    + "this only affects what's offered for mapping.")) return;
+  try {
+    const r = await fetch("/api/graph/unwatch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, scope_key: scopeKey,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Remove watch failed.", 6000); return; }
+    stagedData = out.staged && out.staged.ok ? out.staged : stagedData;
+    // in_scope flags are derived from the listings that just changed — force a refetch.
+    dismissedData = null;
+    loadDismissed(g.slug);
+    renderGraph();
+    toast("Watch removed.");
+  } catch (e) {
+    toast("Remove watch failed — server unreachable.");
+  }
+}
+
+// The empty-Discovery card: the copyable command that stages a folder for the first time.
+// Deliberately NOT a button — a store's first enumeration can need an interactive OAuth
+// consent, which belongs in a terminal. Once it has run once, the recorded scope powers the
+// one-click "↻ Refresh folder" above.
+function stageCommandCard(g) {
+  const box = el("div", "stage-cmd-card");
+  box.append(el("div", "stage-cmd-title", stagedPool === "unassigned"
+    ? "Stage documents into the shared unassigned pool"
+    : `Stage documents for ${g.slug}`));
+  const cmd = stagedPool === "unassigned"
+    ? "python build/mitos.py connect --stage"
+    : `python build/mitos.py connect --project ${g.slug} --stage`;
+  const hint = cmd + " [--store NAME] [--folder-id ID [--recursive]] [--query TEXT]";
+  const pre = el("pre", "stage-cmd-line", hint);
+  box.append(pre);
+  box.append(el("div", "muted stage-cmd-hint",
+    "Run it once in a terminal — it records the folder scope, and this pane then refreshes "
+    + "it on a click. Omit --folder-id to pick a folder interactively."));
+  const bar = el("div", "stage-cmd-actions");
+  const copy = el("button", "ghost tiny", "Copy command");
+  copy.onclick = () => copyText(cmd, "connect command");
+  const again = el("button", "ghost tiny", "↻ Check for staged");
+  again.title = "Re-read the staging file after running the command";
+  again.onclick = () => loadStaged(g.slug);
+  bar.append(copy, again);
+  box.append(bar);
+  return box;
+}
+
+// Replay ONE watched listing's enumeration server-side (POST /api/graph/refresh → a
+// mitos.py subprocess). `scopeKey` picks which listing — omit it only when there's
+// exactly one (refresh_staging's single-listing convenience); the watched-scopes strip
+// always passes its own row's key. New files land in Discovery; the button is disabled
+// for the duration since a connector round-trip is not instant.
+async function refreshStaging(g, btn, scopeKey) {
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Refreshing…";
+  try {
+    const r = await fetch("/api/graph/refresh", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, pool: stagedPool === "unassigned" ? "unassigned" : "",
+        scope_key: scopeKey || "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Refresh failed.", 8000); return; }
+    const before = new Set(((stagedData && stagedData.documents) || []).map((d) => d.id));
+    stagedData = out.staged && out.staged.ok ? out.staged : stagedData;
+    const added = ((stagedData && stagedData.documents) || [])
+      .filter((d) => !before.has(d.id)).length;
+    // Recovery's in_scope flags are derived from the listings, so they're stale now.
+    dismissedData = null;
+    loadDismissed(g.slug);
+    renderGraph();
+    toast(added ? `Refreshed — ${added} new document(s) in Discovery.`
+                : "Refreshed — no new documents.");
+  } catch (e) {
+    toast("Refresh failed — server unreachable.");
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
 // Rebuild ONLY the staged rows (and the counter/add button). Never touches the search box.
 function renderStagedRows(g) {
   const rows = document.querySelector("#graph-workspace .staged-rows");
@@ -740,6 +1047,10 @@ function renderStagedRows(g) {
   const draft = draftFor(g.slug);
   for (const id of [...curStagedSel()]) if (pending.has(id) || draft.add[id]) curStagedSel().delete(id);
   const { all, filtered } = stagedVisible(g);
+  const listings = (stagedData && stagedData.listings) || [];
+  // Built once per render pass, not per row — nameByKey.get(key) below replaces an
+  // O(listings) filter+map that used to rerun for every staged document.
+  const nameByKey = new Map(listings.map((l) => [l.scope_key, watchName(l)]));
 
   rows.replaceChildren();
   if (all.length === 0) {
@@ -769,6 +1080,19 @@ function renderStagedRows(g) {
       nameLine.append(el("span", "staged-name", d.name));
       if (isPending) nameLine.append(el("span", "badge pending", "Pending"));
       if (inDraft) nameLine.append(el("span", "badge draft", "In draft"));
+      // Only worth showing once there's more than one watched listing to distinguish —
+      // with a single watch every row trivially belongs to it, so the chip is pure noise.
+      if (listings.length > 1 && d.scope_keys && d.scope_keys.length) {
+        const chip = el("span", "badge scope-count",
+          d.scope_keys.length > 1 ? `${d.scope_keys.length} watches` : "1 watch");
+        // Naming the watches is the whole point of labels — an operator with several
+        // folders staged can tell WHICH ones a document came from, not just how many.
+        const names = d.scope_keys.map((k) => nameByKey.get(k)).filter(Boolean).join(", ");
+        chip.title = (d.scope_keys.length > 1
+          ? "Seen in more than one watched scope — removing one watch won't drop it from here"
+          : "Seen in one watched scope") + (names ? ":\n" + names : "");
+        nameLine.append(chip);
+      }
       body.append(nameLine);
       const meta = el("div", "staged-meta");
       if (d.dateModified) meta.append(el("span", "muted staged-mod", d.dateModified));
@@ -817,9 +1141,10 @@ function updateStagedMeta(g) {
   const info = document.querySelector("#graph-workspace .staged-info");
   const add = document.querySelector("#graph-workspace .staged-add");
   const { all } = stagedVisible(g);
+  // Per-listing staged_at now lives in the watched-scopes strip above these rows — this
+  // line stays a plain count.
   if (info) {
-    info.textContent = `${all.length} staged · ${curStagedSel().size} selected`
-      + (stagedData.staged_at ? ` · ${stagedData.staged_at}` : "");
+    info.textContent = `${all.length} staged · ${curStagedSel().size} selected`;
   }
   if (add) {
     add.textContent = `Add selected (${curStagedSel().size})`;
@@ -869,6 +1194,17 @@ function buildRecoveryPane(container, g) {
   search.type = "search"; search.placeholder = "Filter recovered…"; search.value = recoverFilter;
   search.oninput = () => { recoverFilter = search.value; renderRecoveryRows(g); };
   head.append(search);
+  // "Clear missing" — only offered when the current listings actually prove some rows are
+  // gone from every watched scope (in_scope === false). The server re-checks that before
+  // deleting anything, so a stale tab can't clear a document still live in some watch.
+  const missing = ((dismissedData && dismissedData.slug === g.slug
+    && dismissedData.documents) || []).filter((d) => d.in_scope === false);
+  if (missing.length) {
+    const clear = el("button", "ghost tiny danger", `Clear missing (${missing.length})`);
+    clear.title = "Stop tracking the documents that are no longer in any watched scope";
+    clear.onclick = () => purgeMissing(g, missing.map((d) => d.id));
+    head.append(clear);
+  }
   container.append(head);
   container.append(el("div", "recover-rows"));
   setTimeout(() => renderRecoveryRows(g), 0);
@@ -902,14 +1238,38 @@ function renderRecoveryRows(g) {
     const isRemoval = d.source === "removal";
     nameLine.append(el("span", "badge " + (isRemoval ? "removed" : "dismissed"),
       isRemoval ? "Removed" : "Dismissed"));
+    // in_scope: false means it's gone from every current watched listing that could speak
+    // for it (a full listing, or its own recorded watch — see _in_scope_flags). null = no
+    // listing can prove absence yet: no badge then — no claim beats a false claim.
+    const gone = d.in_scope === false;
+    if (gone) {
+      const b = el("span", "badge missing", "Not in any watched scope");
+      b.title = "Absent from every listing that could prove it — it looks gone at the source";
+      nameLine.append(b);
+    }
     body.append(nameLine);
     const meta = el("div", "staged-meta");
     if (d.dismissed_at) meta.append(el("span", "muted staged-mod", d.dismissed_at));
     const actions = el("span", "row-actions");
-    const restore = el("button", "ghost tiny", "Restore");
-    restore.title = "Move back to Discovery so it can be mapped again";
-    restore.onclick = () => restoreDoc(g, d.id);
-    actions.append(restore);
+    // A doc that's gone from every watched scope can't be restored into Discovery
+    // (Discovery only ever shows staged documents), so offer the honest action instead:
+    // stop tracking it.
+    if (gone) {
+      const drop = el("button", "ghost tiny danger", "Remove");
+      drop.title = "Stop tracking this document — it's no longer in any watched scope";
+      drop.onclick = () => purgeMissing(g, [d.id]);
+      actions.append(drop);
+    } else {
+      const restore = el("button", "ghost tiny", "Restore");
+      restore.title = "Move back to Discovery so it can be mapped again";
+      restore.onclick = () => restoreDoc(g, d.id);
+      actions.append(restore);
+      const perm = el("button", "ghost tiny danger", "Permanently dismiss");
+      perm.title = "Hide for good — it will never reappear in Discovery or Recovery. "
+        + "Nothing is deleted from the store; undo means editing the .dismissed.json sidecar.";
+      perm.onclick = () => permanentlyDismiss(g, d);
+      actions.append(perm);
+    }
     meta.append(actions);
     if (d.webUrl) {
       const a = el("a", "staged-link", "Open");
@@ -939,6 +1299,54 @@ async function restoreDoc(g, id) {
     loadDismissed(g.slug);
   } catch (e) {
     toast("Restore failed — server unreachable.");
+  }
+}
+
+// Re-dismiss the doc with permanent:true — the sidecar keeps the record (so Discovery goes
+// on filtering the id out) while Recovery stops listing it. Confirmed first: it's the one
+// action here with no in-console undo.
+async function permanentlyDismiss(g, d) {
+  if (!confirm(`Permanently dismiss "${d.name || d.id}"?\n\n`
+    + "It won't appear in Discovery or Recovery again. Nothing is deleted from the store, "
+    + "but undoing this means editing the .dismissed.json sidecar by hand.")) return;
+  try {
+    const r = await fetch("/api/graph/dismiss", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, documents: [d], permanent: true,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Permanent dismiss failed."); return; }
+    dismissedData = null;
+    toast("Permanently dismissed.");
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Permanent dismiss failed — server unreachable.");
+  }
+}
+
+// "Clear missing" / per-row "Remove": drop Recovery rows the current listings proved are
+// gone from every watched scope. The server re-verifies in_scope before deleting, so this
+// can only ever remove what's genuinely absent.
+async function purgeMissing(g, ids) {
+  if (!ids.length) return;
+  try {
+    const r = await fetch("/api/graph/purge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: g.slug, ids,
+        pool: stagedPool === "unassigned" ? "unassigned" : "",
+      }),
+    });
+    const out = await r.json();
+    if (!out.ok) { toast(out.error || "Clear failed.", 6000); return; }
+    dismissedData = null;
+    toast(`Cleared ${out.cleared.length} document(s) no longer in any watched scope.`);
+    loadDismissed(g.slug);
+  } catch (e) {
+    toast("Clear failed — server unreachable.");
   }
 }
 
@@ -1693,7 +2101,7 @@ function listRow(p, isFavSection = false) {
     rowCopy.title = "Copy prompt body";
     rowCopy.onclick = (e) => {
       e.stopPropagation();
-      copyText(currentBody(p), p.name);
+      copyPrompt(p);
       pushRecent(p.key);
     };
     row.append(rowCopy);
@@ -2311,7 +2719,7 @@ function renderDetail() {
   const actions = el("div", "detail-actions");
   const left = el("span", "action-group");
   const copy = el("button", "", "Copy");
-  copy.onclick = () => { copyText(currentBody(p), p.name); pushRecent(p.key); };
+  copy.onclick = () => { copyPrompt(p); pushRecent(p.key); };
   const inComp = compose.items.includes(p.key);
   const comp = el("button", "ghost", inComp ? "Remove from compose" : "Add to compose");
   comp.onclick = () => toggleCompose(p.key);
@@ -2388,6 +2796,9 @@ function renderSkills() {
   const box = $("view-skills");
   box.replaceChildren();
 
+  // The create forms replace the grid entirely — the drawer must not hang over them.
+  // (These return early, before the drawer-sync tail at the end of this function.)
+  if (newSkillOpen || newOrgDomainOpen) closeSkillDrawer();
   if (newSkillOpen)     { box.append(newSkillForm());      return; }
   if (newOrgDomainOpen) { box.append(newOrgDomainForm()); return; }
 
@@ -2452,103 +2863,140 @@ function renderSkills() {
 
   const list = el("div", "skills-list");
   for (const s of visible) {
-    list.append(skillRow(s, orgDomainBySkill[s.name] || null));
+    list.append(skillCard(s, orgDomainBySkill[s.name] || null));
   }
   box.append(list);
+
+  // The drawer lives outside #view-skills (it's a fixed overlay), so re-rendering the grid
+  // doesn't touch it. Keep it in sync with the freshly-rendered data: if its skill is gone
+  // (filtered out is fine — deleted is not), close rather than show stale detail.
+  if (expandedSkillName) {
+    const s = skills.find((x) => x.name === expandedSkillName);
+    if (s) renderSkillDrawer(s, orgDomainBySkill[s.name] || null);
+    else closeSkillDrawer();
+  }
 }
 
-// ── skillRow: collapsible accordion row showing static skill properties ──────
-// The property grid is read-only — SKILL.md's body and frontmatter are edited in the
-// Prompt Library via the existing editorOrigin return-bar flow. Supporting files
-// (examples/, scripts/) are a separate concern — additional content uploaded alongside
-// SKILL.md, not part of it — so they're editable right here (renderSkillFilesSection).
-function skillRow(s, domain) {
+// ── skillCard: the grid tile ─────────────────────────────────────────────────
+// Every skill carries the same property set, so an accordion made each row re-render the
+// same shapes inline and pushed the actual content down the page. The card face now carries
+// only what distinguishes one skill from another (identity, category, org/scope, targets,
+// draft state); the uniform detail — Version/Author/License/Platforms, supporting files,
+// extension, scope — lives in ONE reusable drawer (#skill-edit-drawer).
+function skillCard(s, domain) {
   const isOpen = expandedSkillName === s.name;
-  const row = el("div", "skill-row" + (isOpen ? " open" : ""));
+  const card = el("div", "skill-card" + (isOpen ? " active" : ""));
 
-  // ── collapsed header ─────────────────────────────────────────────────────
-  const header = el("div", "skill-row-header");
-  // Chevron always renders "▸" — the open/closed rotation is a pure CSS transition
-  // on transform, driven by the .skill-row.open ancestor class.
-  header.append(el("span", "skill-chevron", "▸"));
-  header.append(el("strong", "", s.name));
+  const head = el("div", "skill-card-head");
+  head.append(el("strong", "skill-card-name", s.name));
   const catBadge = el("span", "badge kind", s.category || "general");
   catBadge.dataset.category = s.category || "general";
-  header.append(catBadge);
-  if (domain) header.append(el("span", "skill-org-badge", "org: " + domain));
-  // scope: project is the noteworthy state (global is the silent default) — surface it
-  // in the collapsed header so it's visible without expanding the row.
+  head.append(catBadge);
+  card.append(head);
+
+  const badges = el("div", "skill-card-badges");
+  if (domain) badges.append(el("span", "skill-org-badge", "org: " + domain));
+  // scope: project is the noteworthy state (global is the silent default) — surface it on
+  // the card face so it's visible without opening anything.
   const draftScope = (metaDrafts[`skill:${s.name}`] || {}).scope;
   if ((draftScope || s.frontmatter.scope) === "project") {
-    header.append(el("span", "skill-org-badge", "scope: project"));
+    badges.append(el("span", "skill-org-badge", "scope: project"));
   }
-  if (s.description) header.append(el("span", "muted skill-row-desc", s.description));
+  // Same drafts/draftBase state the Prompt Library row reads, so the card can never
+  // disagree with it about whether an edit is pending.
+  for (const badge of draftStateBadges(`skill:${s.name}`, s.body)) badges.append(badge);
+  if (badges.children.length) card.append(badges);
 
-  // right-aligned cluster: draft-state badges (if this skill's SKILL.md has a pending
-  // Prompt Library edit — same drafts/draftBase state, so the card can never disagree
-  // with the Prompt Library row) followed by target chips, sharing one right-alignment.
-  const rightBox = el("div", "doc-tags skill-row-targets");
-  for (const badge of draftStateBadges(`skill:${s.name}`, s.body)) rightBox.append(badge);
+  if (s.description) {
+    card.append(el("div", "muted skill-card-desc", truncate(s.description, 150)));
+  }
+
   if (s.targets && s.targets.length) {
+    const chips = el("div", "doc-tags skill-card-targets");
     for (const t of s.targets) {
       const chip = el("span", "tag-chip", t);
       chip.dataset.target = t;
-      rightBox.append(chip);
+      chips.append(chip);
     }
-  }
-  if (rightBox.children.length) header.append(rightBox);
-
-  header.onclick = () => {
-    expandedSkillName = isOpen ? null : s.name;
-    renderSkills();
-  };
-  row.append(header);
-
-  // ── expanded body ────────────────────────────────────────────────────────
-  if (isOpen) {
-    const body = el("div", "skill-row-body");
-
-    // Static property grid — read-only; editing happens in the Prompt Library
-    const props = el("div", "skill-props");
-    const prop = (label, val) => {
-      const r = el("div", "skill-prop-card");
-      r.append(el("span", "skill-prop-label muted", label));
-      r.append(el("span", "skill-prop-value", String(val || "—")));
-      return r;
-    };
-    props.append(prop("Version",   s.frontmatter.version   || "—"));
-    props.append(prop("Author",    s.frontmatter.author    || "—"));
-    props.append(prop("License",   s.frontmatter.license   || "—"));
-    props.append(prop("Targets",   (s.targets || []).join(", ") || "—"));
-    props.append(prop("Platforms", (s.frontmatter.platforms || []).join(", ") || "—"));
-    body.append(props);
-
-    // Action: navigate to Prompt Library with return-bar back to Skills
-    const actBar = el("div", "skill-actions-bar");
-    const editBtn = el("button", "", "Edit prompt →");
-    editBtn.title = "Open in Prompt Library to edit body and metadata";
-    editBtn.onclick = () =>
-      openContextualEditor({ kind: "skill", ident: s.name, returnTab: "skills" });
-    actBar.append(editBtn);
-    body.append(actBar);
-
-    const detailGrid = el("div", "skill-detail-grid");
-    detailGrid.append(renderSkillFilesSection(s));
-    const detailCol = el("div", "skill-detail-col");
-    detailCol.append(renderSkillExtensionSection(s));
-    detailCol.append(renderSkillScopeSection(s));
-    detailGrid.append(detailCol);
-    body.append(detailGrid);
-
-    // Org structure panel — only for org-domain skills
-    if (domain && orgData && orgData[domain]) {
-      body.append(renderSkillOrgSection(s.name, domain));
-    }
-
-    row.append(body);
+    card.append(chips);
   }
 
-  return row;
+  const acts = el("div", "skill-card-actions");
+  const editBtn = el("button", "ghost tiny", "Edit prompt →");
+  editBtn.title = "Open in Prompt Library to edit body and metadata";
+  editBtn.onclick = () =>
+    openContextualEditor({ kind: "skill", ident: s.name, returnTab: "skills" });
+  const propBtn = el("button", "ghost tiny", "Properties");
+  propBtn.title = "Open metadata, supporting files, extension and scope";
+  propBtn.onclick = () => openSkillDrawer(s, domain);
+  acts.append(editBtn, propBtn);
+  card.append(acts);
+
+  return card;
+}
+
+// ── the reusable skill drawer ────────────────────────────────────────────────
+// One panel, populated per skill. `expandedSkillName` (unchanged name, new meaning) is the
+// active skill. The sections below are the SAME functions the accordion used — but their
+// post-save callbacks re-render through renderSkills(), which would previously have rebuilt
+// the row they lived in. Now they live in a fixed overlay outside #view-skills, so
+// renderSkills() re-renders the drawer explicitly (see the tail of renderSkills) instead of
+// the drawer vanishing mid-edit.
+function openSkillDrawer(s, domain) {
+  expandedSkillName = s.name;
+  renderSkillDrawer(s, domain);
+  renderSkills();   // repaint the grid so the active card shows as selected
+}
+
+function closeSkillDrawer() {
+  expandedSkillName = null;
+  const d = $("skill-edit-drawer");
+  if (d) { d.classList.remove("open"); d.hidden = true; }
+}
+
+function renderSkillDrawer(s, domain) {
+  const drawer = $("skill-edit-drawer");
+  const body = $("skill-edit-drawer-body");
+  if (!drawer || !body) return;
+  $("skill-edit-drawer-title").textContent = s.name;
+  body.replaceChildren();
+
+  // Version/Author/License/Platforms: one compact muted line, not a grid of cards. They're
+  // rarely-consulted provenance — they shouldn't out-weigh the content they describe.
+  const metaBits = [
+    ["v", s.frontmatter.version],
+    ["by", s.frontmatter.author],
+    ["©", s.frontmatter.license],
+    ["platforms", (s.frontmatter.platforms || []).join(", ")],
+  ].filter(([, v]) => v);
+  const metaLine = el("div", "muted skill-drawer-meta");
+  if (metaBits.length) {
+    metaLine.textContent = metaBits.map(([k, v]) => `${k} ${v}`).join("  ·  ");
+  } else {
+    metaLine.textContent = "no version/author/license set";
+  }
+  body.append(metaLine);
+
+  const actBar = el("div", "skill-actions-bar");
+  const editBtn = el("button", "", "Edit prompt →");
+  editBtn.title = "Open in Prompt Library to edit body and metadata";
+  editBtn.onclick = () =>
+    openContextualEditor({ kind: "skill", ident: s.name, returnTab: "skills" });
+  actBar.append(editBtn);
+  body.append(actBar);
+
+  body.append(renderSkillFilesSection(s));
+  body.append(renderSkillExtensionSection(s));
+  body.append(renderSkillScopeSection(s));
+
+  // Org structure panel — only for org-domain skills
+  if (domain && orgData && orgData[domain]) {
+    body.append(renderSkillOrgSection(s.name, domain));
+  }
+
+  drawer.hidden = false;
+  // Next frame, so the transform transition has a start state to animate from.
+  requestAnimationFrame(() => drawer.classList.add("open"));
 }
 
 // ── skill-row supporting files: examples/, scripts/ live here directly, independent
@@ -3424,7 +3872,7 @@ $("cmdk-input").addEventListener("keydown", (e) => {
     // the palette stays open so the user can keep browsing.
     e.preventDefault();
     const p = paletteResults[paletteIdx];
-    if (p) { copyText(currentBody(p), p.name); pushRecent(p.key); }
+    if (p) { copyPrompt(p); pushRecent(p.key); }
   }
   else if (e.key === "Enter") { e.preventDefault(); selectPaletteResult(paletteIdx); }
   else if (e.key === "Escape") { e.preventDefault(); closePalette(); }
@@ -3436,6 +3884,19 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     openPalette();
+    return;
+  }
+  // Checked before deploy-confirm: the input modal sits above it in the z-ramp, so if
+  // both were somehow open, Escape must dismiss the topmost one first.
+  if (e.key === "Escape" && !$("prompt-input-modal").hidden) {
+    e.preventDefault();
+    closePromptInputs();
+    return;
+  }
+  if (e.key === "Escape" && !$("skill-edit-drawer").hidden) {
+    e.preventDefault();
+    closeSkillDrawer();
+    renderSkills();
     return;
   }
   if (e.key === "Escape" && !$("deploy-confirm").hidden) {
@@ -3452,7 +3913,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowUp") { e.preventDefault(); moveSelection(-1); }
   else if (e.key === "Enter" && selectedKey) {
     const p = PMAP.get(selectedKey);
-    if (p) { e.preventDefault(); copyText(currentBody(p), p.name); pushRecent(p.key); }
+    if (p) { e.preventDefault(); copyPrompt(p); pushRecent(p.key); }
   } else if (e.key === "/" && t.id !== "search") {
     e.preventDefault(); $("search").focus();
   }
@@ -3655,7 +4116,7 @@ $("graph-dock-reason").addEventListener("keydown", (e) => {
 });
 $("graph-dock-propose-accept").onclick = () => proposeGraphDraft(graphSlug, null, true);
 $("graph-dock-discard").onclick = () => discardGraphDraft();
-$("refresh").onclick = () => refresh().then(() => toast("Reloaded from disk."));
+$("refresh").onclick = () => reloadFromDisk();
 $("nav-compile").onclick = () => runCompile();
 $("nav-deploy").onclick = () => openDeployConfirm();
 $("ops-machine").onchange = () => {
@@ -3668,6 +4129,7 @@ $("ops-drawer-toggle").onclick = () => {
   $("ops-drawer-toggle").textContent = body.hidden ? "▸" : "▾";
 };
 $("ops-drawer-dismiss").onclick = () => { $("ops-drawer").hidden = true; };
+$("skill-edit-drawer-close").onclick = () => { closeSkillDrawer(); renderSkills(); };
 $("deploy-confirm-cancel").onclick = () => closeDeployConfirm();
 $("deploy-confirm-go").onclick = () => confirmDeploy();
 $("deploy-confirm").onclick = (e) => { if (e.target.id === "deploy-confirm") closeDeployConfirm(); };

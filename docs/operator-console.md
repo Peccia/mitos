@@ -103,6 +103,51 @@ Discovery and can be mapped again. Dismissals live in `inbox/staging/<slug>.dism
 `unassigned.dismissed.json`), mirroring the same project/unassigned pool fallback as staging
 itself.
 
+**Permanently dismiss** (Recovery, per row) hides a document for good: the sidecar record stays
+(so Discovery keeps filtering the id out) but the row leaves the Recovery list, and there is no
+in-console undo — reversing it means editing the `.dismissed.json` sidecar by hand. Nothing is
+ever deleted from the document store; the console is not a filesystem actor.
+
+**Watching more than one folder or query.** A project isn't limited to one staged scope —
+`inbox/staging/<slug>.json` holds a *list* of watched listings, each its own
+`(store, folder_id, query, recursive)`. Discovery shows a **watched-scopes strip** above the
+staged rows, one entry per listing (its scope, staged-at timestamp, doc count), each with its own
+**Rename**, **↻ Refresh** and **Remove watch**. Refresh replays that ONE listing's enumeration — it runs
+`build/mitos.py` as a *subprocess*, so the connector never enters the console's own import graph
+(invariant #11). Remove watch drops the listing from the file; anything already mapped into the
+graph is unaffected, only what Discovery *offers* changes. The first stage of a scope still
+happens in a terminal (it may need an interactive OAuth consent); until at least one watch
+exists, Discovery shows the copyable command instead. A document reachable through more than one
+watch appears once in Discovery, tagged with a small "N watches" chip (hover it to see which
+watches by name) — watching two overlapping scopes is never an error, `--stage` just notes the
+overlap and stages both.
+
+**Naming a watch.** A raw `folder 1u7GX8M9UZDJlMn7m-2-arxO_QQRPYV8n` says nothing about what's in
+it, and several of them side by side say even less. **Rename** gives a listing a human name
+(`label` on the listing, ≤60 chars), which then leads its row with the scope demoted to the meta
+line beneath — the identifier the system acts on is never hidden, just no longer the headline. The
+label is **cosmetic**: identity stays the derived `scope_key` (`store`/`folder_id`/`query`/
+`recursive` — `staging.scope_key`), so renaming can't change which documents a watch holds, can't
+disturb a sibling watch, and a later Refresh replays the same scope and keeps the name
+(`bootstrap.stage_listing` carries the label across a re-stage). Names are free text and not
+unique-checked. Submitting an empty name clears the label and the row falls back to its derived
+scope — that's the undo. Like Remove watch, it's console-only (`POST /api/graph/rename-watch` →
+`review.rename_watch`) — a pure file edit with no connector involved, so a CLI verb would just be
+a second way to write the same line.
+
+**Documents that left the store.** Recovery cross-checks its rows against every CURRENT watched
+listing and badges any doc absent from all of them as **Not in any watched scope**, offering
+**Remove** (per row) and **Clear missing** (bulk) to stop tracking them. This is deliberately
+*not* automatic: deletion stays an explicit click (invariant #9), and the check only speaks when
+it can prove something. Absence is provable two ways — a FULL (unscoped) listing exists and
+doesn't contain the doc (its silence is conclusive, it enumerates everything), or a SCOPED
+listing exists that is itself the one this doc's own recorded provenance says produced it, and it
+no longer contains the doc (that specific watch lost it). A doc still reachable through *any*
+other current listing is never flagged, even if it just dropped out of the watch that first
+surfaced it — presence anywhere always wins over absence from one scope. The server re-verifies
+this before clearing anything, so a stale browser tab can never purge a document that's still
+live in some watch.
+
 ### 🎭 Org domains on efforts
 
 One structured field in this tab drives the org model — the **effort `Org domain` select**: it tags an effort (Work grouping) with the org domain that governs it — e.g. a `Steam Launch` effort tagged `marketing` inside an otherwise software-heavy project. The tag compiles into an org routing line under that effort's heading in the generated files, which is how a session knows to load `org-marketing` for that work and `org-software` for the rest. **Projects themselves are never bound to one org** — the manifest has no `org:` field; the association lives on the work.
@@ -113,21 +158,24 @@ One structured field in this tab drives the org model — the **effort `Org doma
 
 The **Skills & Orgs** tab is a card grid over every skill in your registry — one card per skill,
 with its description, target chips (which tools it deploys to), and — for org-domain skills — an
-`org: <domain>` badge. Expanding an org-domain skill's card also reveals its **org structure**
-below the static properties (see below); a plain skill's card stops at properties + actions.
+`org: <domain>` badge. The card face carries only what *distinguishes* one skill from another;
+every skill's uniform detail lives in one reusable **properties drawer** that slides in from the
+right (**Properties**, or Esc to close). Version/author/license/platforms are rarely-consulted
+provenance, so they sit there as a single compact line rather than a grid of cards.
 
-- **Edit prompt →**: Opens the skill's body and its authoring metadata — description, version,
-  category, and target checkboxes — in the Contextual Editor (Prompt Library). Saving proposes a
-  `kind: drift` candidate into the Inbox. A skill's *structural* placement — its supporting files
-  and its org-role extension — is edited on the card itself (below), not here.
-- **Supporting Files**: On the expanded card, a skill's `examples/` and `scripts/` files
+- **Edit prompt →** (card or drawer): Opens the skill's body and its authoring metadata —
+  description, version, category, and target checkboxes — in the Contextual Editor (Prompt
+  Library). Saving proposes a `kind: drift` candidate into the Inbox. A skill's *structural*
+  placement — its supporting files and its org-role extension — is edited in the drawer (below),
+  not here.
+- **Supporting Files**: In the drawer, a skill's `examples/` and `scripts/` files
   (deployed alongside `SKILL.md` and bundled into claude.ai zips) are listed inline, each
   editable or deletable, with an **Upload file(s)** button that reads one or more UTF-8 text
   files and auto-routes each to `scripts/` (`.py`/`.js`/`.sh`/`.ps1`) or `examples/` (everything
   else); binary files are rejected with a warning. This section proposes the **full replacement
   set** on save — leave it untouched to propose no change to existing files; explicitly clear
   every entry to delete them all on accept.
-- **Extension**: On the expanded card, two dropdowns set `extends_skill`/`extends_role` (see
+- **Extension**: In the drawer, two dropdowns set `extends_skill`/`extends_role` (see
   **Extending a role** below). The skill picker lists only skills eligible to be extended (those
   carrying an `## Extended C-suite Roles` section); choosing one populates the role picker from
   that parent's roles. Setting both turns the skill into an extension; clearing both makes it a
@@ -175,5 +223,6 @@ The **Prompt Library** acts as a scratchpad and library for one-shot chat sessio
 - **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Filter chips reflect the categories actually present in your registry. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
 - **Find anything (Ctrl/⌘K)**: Opens a command palette that searches every skill, prompt, and partial at once, from any tab — pick a result to jump straight to it in the Prompt Library.
 - **Favorites**: Toggle the star icon to pin a skill or prompt to your favorites list (drag to reorder, or use **Manage** for batch-unpin). Pins persist to `registry/local/prompt-favorites.yaml` and sync across sessions/devices.
+- **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal.
 - **Contextual Editor**: Select an item to edit it — a line-numbered textarea with a markdown toolbar (Bold/Italic/Code/Link/Heading/List) and a sanitized live preview toggle.
 - **Save to inbox**: If you refine a prompt and want to save it as a permanent registry asset, type a short reasoning note and click **Save to inbox**. It will land in the **Inbox** tab as a new candidate for review.
