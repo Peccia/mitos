@@ -346,13 +346,16 @@ def _capture_to_inbox(reg: Registry, machine: str, s: Status, lock: dict,
 
 # ── repo auto-clone (the deployed project-tree design) ───────────────────────────
 def _git_clone(repo: str, dest: Path) -> tuple[int, str]:
-    """Shallow-clone `repo` into `dest`. Non-interactive (GIT_TERMINAL_PROMPT=0) so a
-    private repo without ambient credentials FAILS fast instead of prompting for one.
+    """Clone `repo` into `dest`. A FULL clone, not shallow: these are working checkouts,
+    and a `--depth 1` clone is implicitly single-branch (fetch refspec pinned to the
+    default branch), which silently breaks `git checkout <other-branch>` later.
+    Non-interactive (GIT_TERMINAL_PROMPT=0) so a private repo without ambient
+    credentials FAILS fast instead of prompting for one.
     Returns (returncode, error-tail). Module-level so tests can substitute it."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        proc = subprocess.run(["git", "clone", "--depth", "1", repo, str(dest)],
+        proc = subprocess.run(["git", "clone", repo, str(dest)],
                               capture_output=True, text=True, timeout=600, env=env)
     except FileNotFoundError:
         return 1, "git not found on PATH"
