@@ -6,7 +6,9 @@
    9  #ops-drawer
    10 #sidebar
    12 #toast
+   40 #skill-edit-drawer (side panel — under the modals, over the page)
    50 #deploy-confirm
+   51 #prompt-input-modal (over deploy-confirm if both ever open)
    100 #cmdk (command palette — always wins over the deploy modal)          */
 body { isolation: isolate; }
 
@@ -525,6 +527,9 @@ select:focus, textarea:focus {
 .badge.pending { background: var(--warn-bg); color: var(--warn); }
 .badge.removed { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
 .badge.dismissed { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
+/* "Not in store" — the document is absent from the latest full enumeration. Warning
+   colour, not error: nothing is broken, the source simply no longer has it. */
+.badge.missing { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
 .badge.compiled { background: var(--ok-bg); color: var(--ok); text-transform: none; letter-spacing: 0; }
 .badge.blocked { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
 
@@ -1265,6 +1270,66 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   padding: .7rem 1.1rem;
   border-top: 1px solid var(--line);
 }
+
+/* ── One-shot prompt input modal ───────────────────────────────────────────
+   Mirrors #deploy-confirm's structure; one step up the z-ramp so it always wins. */
+#prompt-input-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8vh;
+  z-index: 51;
+}
+#prompt-input-panel {
+  width: min(520px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.28);
+  overflow: hidden;
+}
+#prompt-input-header {
+  padding: .8rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+#prompt-input-header h3 { margin: 0; font-size: 1rem; }
+#prompt-input-sub { margin: .25rem 0 0; font-size: .8rem; }
+#prompt-input-fields {
+  padding: .7rem 1.1rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+}
+.prompt-input-row { display: flex; flex-direction: column; gap: .2rem; }
+.prompt-input-label {
+  font-family: var(--mono);
+  font-size: .76rem;
+  color: var(--muted);
+}
+.prompt-input-field {
+  padding: .35rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  font: inherit;
+  font-size: .85rem;
+}
+.prompt-input-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#prompt-input-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: .5rem;
+  padding: .7rem 1.1rem;
+  border-top: 1px solid var(--line);
+}
+
 /* ── Knowledge Graph tab ─────────────────────────────────────────────────── */
 .graph-help { margin: .2rem 0 .9rem; }
 
@@ -1386,6 +1451,72 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   background: var(--bg); color: var(--ink);
 }
 .staged-info { flex: 1; font-size: .76rem; }
+
+/* ── Watched scopes strip ─────────────────────────────────────────────────
+   One row per staged listing — a project can watch more than one folder/query at once
+   (build/agentic/staging.py). Sits above the staged-rows table; replaces what used to be
+   a single "Staged <timestamp>" line + one Refresh button. */
+.watched-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  margin-bottom: .6rem;
+}
+.watched-scope-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .4rem .6rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: .82rem;
+}
+.watched-scope-info {
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  min-width: 0;
+}
+/* A named watch reads as prose; an unnamed one is still a raw folder id/query, so it keeps
+   the mono face that makes those legible. */
+.watched-scope-label {
+  font-weight: 600;
+  word-break: break-word;
+}
+.watched-scope-label.untitled { font-family: var(--mono); }
+.watched-scope-meta { font-size: .74rem; }
+
+/* Scope-count chip on a staged row — only rendered when more than one listing exists. */
+.badge.scope-count {
+  background: var(--chg-bg); color: var(--accent);
+  text-transform: none; letter-spacing: 0;
+}
+
+/* The empty-Discovery card: the command that stages a folder for the first time. */
+.stage-cmd-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: .8rem .9rem;
+}
+.stage-cmd-title { font-weight: 600; font-size: .88rem; margin-bottom: .45rem; }
+.stage-cmd-line {
+  margin: 0 0 .45rem;
+  padding: .5rem .6rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: .76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: all;
+}
+.stage-cmd-hint { font-size: .78rem; line-height: 1.45; }
+.stage-cmd-actions { display: flex; gap: .4rem; margin-top: .6rem; }
 .staged-row, .registry-row {
   display: flex; align-items: flex-start; gap: .55rem;
   padding: .45rem 0;
@@ -1446,52 +1577,48 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .skill-filter-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
 .skill-toolbar-btns { display: flex; gap: .5rem; flex: none; }
 
+/* Card grid, not an accordion: every skill has the same property set, so expanding one
+   in place just pushed the rest down to show identical shapes. The uniform detail lives
+   in #skill-edit-drawer instead; the card face carries only what differentiates. */
 .skills-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: .7rem;
+  align-items: start;
+}
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  padding: .75rem .85rem;
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  overflow: hidden;
-  background: var(--panel);
+  transition: box-shadow .15s ease, border-color .15s ease;
 }
-.skill-row {
-  border-bottom: 1px solid var(--line);
-  transition: box-shadow .15s ease;
+.skill-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.07); }
+.skill-card.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), 0 2px 10px rgba(0,0,0,.07);
 }
-.skill-row:last-child { border-bottom: none; }
-.skill-row.open {
-  box-shadow: inset 3px 0 0 var(--accent), 0 1px 8px rgba(0,0,0,.05);
-}
-.skill-row-header {
+.skill-card-head {
   display: flex;
   align-items: center;
-  gap: .55rem;
-  padding: .7rem .9rem;
-  cursor: pointer;
-  background: var(--panel);
-  user-select: none;
+  gap: .4rem;
   flex-wrap: wrap;
-  transition: background .12s ease;
 }
-.skill-row-header:hover { background: var(--bg); }
-.skill-row.open > .skill-row-header { background: var(--bg); font-weight: 600; }
-.skill-chevron {
-  color: var(--muted);
-  font-size: .75rem;
-  flex: none;
-  width: 1ch;
-  display: inline-block;
-  transition: transform .18s ease, color .15s ease;
-  transform-origin: center;
+.skill-card-name { word-break: break-word; }
+.skill-card-badges { display: flex; flex-wrap: wrap; gap: .3rem; }
+.skill-card-desc { font-size: .82rem; line-height: 1.4; }
+.skill-card-targets { display: flex; flex-wrap: wrap; gap: .25rem; }
+/* margin-top:auto pins the actions to the card's bottom edge, so a grid row of cards with
+   different description lengths still lines its buttons up. */
+.skill-card-actions {
+  display: flex;
+  gap: .4rem;
+  margin-top: auto;
+  padding-top: .35rem;
 }
-.skill-row.open .skill-chevron { transform: rotate(90deg); color: var(--accent); }
-.skill-row-desc {
-  font-size: .82rem;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-row-targets { flex: none; margin-left: auto; }
 .skill-org-badge {
   font-size: .74rem;
   padding: .1rem .45rem;
@@ -1502,49 +1629,55 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   flex: none;
 }
 
-.skill-row-body {
-  padding: .9rem 1.2rem 1.1rem;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-  animation: skill-body-in .16s ease;
-}
-@keyframes skill-body-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ── Static property grid → metadata card grid ───────────────────────────── */
-.skill-props {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
-  gap: .6rem;
-  margin-bottom: .9rem;
-}
-.skill-prop-card {
+/* ── Skill properties drawer ─────────────────────────────────────────────────
+   One reusable panel for every skill's uniform detail. Fixed overlay, so re-rendering
+   the grid underneath never disturbs it (renderSkills repaints it explicitly). */
+#skill-edit-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(480px, 90vw);
+  z-index: 40;
   display: flex;
   flex-direction: column;
-  gap: .2rem;
-  padding: .55rem .7rem;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: .84rem;
-  transition: border-color .15s ease, box-shadow .15s ease, transform .12s ease;
+  border-left: 1px solid var(--line);
+  box-shadow: -6px 0 24px rgba(0,0,0,.12);
+  transform: translateX(100%);
+  transition: transform .22s ease;
 }
-.skill-prop-card:hover {
-  border-color: var(--accent);
-  box-shadow: 0 3px 10px rgba(0,0,0,.06);
-  transform: translateY(-1px);
+#skill-edit-drawer.open { transform: none; }
+#skill-edit-drawer-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .7rem 1rem;
+  border-bottom: 1px solid var(--line);
 }
-.skill-prop-label {
+#skill-edit-drawer-title {
   font-weight: 600;
-  font-size: .72rem;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-  color: var(--muted);
-  white-space: nowrap;
+  word-break: break-word;
 }
-.skill-prop-value { word-break: break-word; }
+#skill-edit-drawer-close { margin-left: auto; flex: none; }
+#skill-edit-drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: .9rem 1rem 1.4rem;
+  background: var(--bg);
+}
+#skill-edit-drawer-body > * + * { margin-top: .9rem; }
+/* Version/author/license/platforms: provenance, rarely consulted — one muted line, not
+   the grid of cards that used to out-weigh the content it describes. */
+.skill-drawer-meta {
+  font-size: .78rem;
+  font-family: var(--mono);
+  word-break: break-word;
+}
+@media (prefers-reduced-motion: reduce) {
+  #skill-edit-drawer { transition: none; }
+}
 
 /* ── Category badge coloring (.badge.kind[data-category]) ────────────────── */
 .badge.kind[data-category] { text-transform: capitalize; letter-spacing: 0; }
@@ -1599,14 +1732,6 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   text-transform: uppercase;
   letter-spacing: .04em;
 }
-
-.skill-detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  align-items: start;
-}
-@media (max-width: 860px) { .skill-detail-grid { grid-template-columns: 1fr; } }
 
 /* New-skill form: full card styling (mirrors .inline-editor) but without the
    max-height/overflow cap so the form grows to its natural height and the
@@ -1795,6 +1920,12 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .graph-field input.date { color-scheme: light dark; }
 .graph-field input.ro { opacity: .7; cursor: not-allowed; }
+.graph-field textarea {
+  padding: .35rem .5rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font: inherit;
+  resize: vertical; min-height: 3.5rem;
+}
 .inline-actions { display: flex; gap: .4rem; margin-top: .1rem; }
 
 /* ── Graph proposal dock ─────────────────────────────────────────────────── */

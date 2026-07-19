@@ -110,6 +110,82 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     assert "widget-helper" in reloaded.skills
 
 
+def test_propose_new_prompt_creates_kind_new_candidate_and_accepts_cleanly():
+    """propose_new_prompt mirrors skill creation but targets the simpler prompts schema."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, load_candidates, propose_new_prompt
+
+    treg, tmp = _temp_registry()
+    out = propose_new_prompt(
+        treg, "my-prompt",
+        {"description": "A test prompt.", "targets": ["hermes"], "category": "devops"},
+        "Prompt body text.", "")
+    assert out["ok"], out
+    assert out["registry_path"] == "local/prompts/my-prompt.md"
+
+    candidates = load_candidates(treg)
+    mine = next(c for c in candidates if c["id"] == out["id"])
+    assert mine["kind"] == "new"
+    assert mine["acceptable"]
+
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    written = tmp / "registry" / "local" / "prompts" / "my-prompt.md"
+    assert written.is_file()
+    text = written.read_text(encoding="utf-8")
+    assert "name: my-prompt" in text
+    assert "Prompt body text." in text
+
+    # the new prompt is now loadable from disk
+    reloaded = loadermod.load(tmp)
+    assert "my-prompt" in reloaded.prompts
+
+
+def test_propose_new_prompt_rejects_duplicate_name():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "example-prompt", {"description": "A test prompt.", "targets": []}, "Body")
+    assert not out["ok"]
+    assert "already exists" in out["error"]
+
+
+def test_propose_new_prompt_rejects_invalid_name():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "Bad Name!", {"description": "A test prompt.", "targets": []}, "Body")
+    assert not out["ok"]
+    assert "lowercase alphanumerics" in out["error"]
+
+
+def test_propose_new_prompt_rejects_empty_body():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": []}, "   \n")
+    assert not out["ok"]
+    assert "body is required" in out["error"]
+
+
+def test_propose_new_prompt_rejects_unknown_targets():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": ["not-a-target"]}, "Body")
+    assert not out["ok"]
+    assert "unknown target" in out["error"]
+
+
+def test_propose_new_prompt_console_only_no_targets():
+    """Omitting targets entirely is valid for prompts (means console-only)."""
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": []}, "Body")
+    assert out["ok"]
+
+
 def test_dismiss_and_restore_roundtrip():
     """dismiss_docs moves a doc into the Recovery list; load_dismissed surfaces it;
     restore_docs removes it again."""
@@ -140,6 +216,404 @@ def test_dismiss_and_restore_roundtrip():
     assert restored["ok"], restored
     recovered3 = review.load_dismissed(treg, "example-project")
     assert recovered3["documents"] == []
+
+
+def _scope_key(scope):
+    from agentic import staging
+    return staging.scope_key(scope)
+
+
+def _stage(tmp, docs, *, slug="example-project", scope=None, staged_at="2026-07-15T1200Z"):
+    """Write a ONE-listing staging file (the current, canonical multi-listing shape with a
+    single entry) — the store's truth snapshot the Recovery in_scope check compares
+    against. `scope=None` means a full, unscoped listing (the only kind that alone can
+    prove a document's absence, regardless of provenance). Use _stage_listings for
+    multiple concurrent watches."""
+    scope = scope or {"folder_id": None, "query": None,
+                      "exclude_folders": [], "recursive": False, "store": ""}
+    _stage_listings(tmp, [(docs, scope, staged_at)], slug=slug)
+
+
+def _stage_listings(tmp, listings, *, slug="example-project"):
+    """Write a MULTI-listing staging file. `listings` is [(docs, scope, staged_at), ...] —
+    one entry per watched scope, scope_key computed the same way stage_listing does."""
+    import json as _json
+    staging_dir = _inbox(tmp) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"slug": slug, "listings": [
+        {"scope_key": _scope_key(scope), "staged_at": staged_at, "connector": "mock",
+         "scope": scope, "documents": docs}
+        for docs, scope, staged_at in listings]}
+    (staging_dir / f"{slug}.json").write_text(_json.dumps(payload), encoding="utf-8")
+
+
+def test_permanent_dismiss_hides_from_recovery_but_stays_in_all_ids():
+    """A permanent dismissal leaves Recovery (no undo in the console) while its id stays in
+    all_ids — Discovery filters on that set, so the doc can never resurface there."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [])
+
+    review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc One"}])
+    review.dismiss_docs(treg, "example-project", [{"id": "D2", "name": "Doc Two"}],
+                        permanent=True)
+
+    out = review.load_dismissed(treg, "example-project")
+    assert [d["id"] for d in out["documents"]] == ["D1"]
+    assert sorted(out["all_ids"]) == ["D1", "D2"]
+
+
+def test_permanent_flag_survives_an_ordinary_redismiss():
+    """permanent=False is every ordinary dismissal's default, NOT an instruction to
+    un-permanent an existing record — only a hand edit of the sidecar reverses it."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [])
+    doc = {"id": "D1", "name": "Doc One"}
+    review.dismiss_docs(treg, "example-project", [doc], permanent=True)
+    review.dismiss_docs(treg, "example-project", [doc])          # default permanent=False
+    out = review.load_dismissed(treg, "example-project")
+    assert out["documents"] == [] and out["all_ids"] == ["D1"]
+
+
+def test_in_scope_flags_from_full_enumeration():
+    """A full listing proves presence/absence: a dismissed doc still listed is in_scope
+    True; one the store no longer lists is False."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc One"}])
+    review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc One"}])
+    review.dismiss_docs(treg, "example-project", [{"id": "GONE", "name": "Deleted Doc"}])
+
+    flags = {d["id"]: d["in_scope"] for d in
+             review.load_dismissed(treg, "example-project")["documents"]}
+    assert flags == {"D1": True, "GONE": False}
+
+
+def test_in_scope_is_none_for_scoped_or_absent_enumerations():
+    """The critical guard: a SCOPED enumeration (one folder/query) says nothing about
+    documents outside that scope, so nothing may be flagged missing from it. Same when no
+    listing exists at all. None = no claim, and purge refuses to act on it."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+
+    # no staging file at all
+    review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc One"}])
+    out = review.load_dismissed(treg, "example-project")
+    assert out["documents"][0]["in_scope"] is None
+
+    # a folder-scoped listing that doesn't include D1
+    _stage(tmp, [{"id": "OTHER", "name": "Other"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": ""})
+    review.dismiss_docs(treg, "example-project", [{"id": "D1", "name": "Doc One"}])
+    out2 = review.load_dismissed(treg, "example-project")
+    assert out2["documents"][0]["in_scope"] is None
+    # and it therefore cannot be purged
+    assert review.purge_dismissed(treg, "example-project", ["D1"])["ok"] is False
+
+
+def test_in_scope_present_in_any_listing_wins_over_own_scope_absence():
+    """THE critical correctness test for multi-scope watching. Two overlapping watches
+    both once produced doc SHARED. Watch A's next refresh drops it (SHARED left that
+    folder), but watch B's listing still has it. The doc must read in_scope=True — it's
+    still reachable through B — even though it is now absent from A, the very listing that
+    (per its own recorded scope_keys) originally produced the dismissal. If presence-in-
+    any-listing didn't take precedence over own-scope absence, this would wrongly flag
+    (and let the operator purge) a document that's still live."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    scope_a = {"folder_id": "FOLDER_A", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    scope_b = {"folder_id": "FOLDER_B", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    key_a = _scope_key(scope_a)
+
+    # SHARED is staged under BOTH watches — dismiss it while it's still in both, so the
+    # recorded provenance (scope_keys) includes watch A.
+    _stage_listings(tmp, [
+        ([{"id": "SHARED", "name": "Shared"}], scope_a, "2026-07-15T1000Z"),
+        ([{"id": "SHARED", "name": "Shared"}], scope_b, "2026-07-15T1000Z"),
+    ])
+    staged = review.load_staged(treg, "example-project")
+    shared_doc = next(d for d in staged["documents"] if d["id"] == "SHARED")
+    assert sorted(shared_doc["scope_keys"]) == sorted([key_a, _scope_key(scope_b)])
+    review.dismiss_docs(treg, "example-project", [shared_doc])
+
+    # Watch A refreshes and no longer has SHARED (it left that folder). Watch B is
+    # untouched and still has it.
+    _stage_listings(tmp, [
+        ([{"id": "OTHER_A", "name": "Other A"}], scope_a, "2026-07-15T1100Z"),
+        ([{"id": "SHARED", "name": "Shared"}], scope_b, "2026-07-15T1000Z"),
+    ])
+    out = review.load_dismissed(treg, "example-project")
+    flags = {d["id"]: d["in_scope"] for d in out["documents"]}
+    assert flags["SHARED"] is True   # still reachable via watch B — must not be "missing"
+    assert review.purge_dismissed(treg, "example-project", ["SHARED"])["ok"] is False
+
+    # Now B ALSO drops it — no listing has it anywhere, and A's own recorded provenance
+    # proves it: in_scope flips to False and purge succeeds.
+    _stage_listings(tmp, [
+        ([{"id": "OTHER_A", "name": "Other A"}], scope_a, "2026-07-15T1200Z"),
+        ([{"id": "OTHER_B", "name": "Other B"}], scope_b, "2026-07-15T1200Z"),
+    ])
+    out2 = review.load_dismissed(treg, "example-project")
+    assert {d["id"]: d["in_scope"] for d in out2["documents"]}["SHARED"] is False
+    result = review.purge_dismissed(treg, "example-project", ["SHARED"])
+    assert result["ok"] and result["cleared"] == ["SHARED"]
+
+
+def test_in_scope_unrelated_scoped_listing_cannot_prove_absence():
+    """A doc dismissed with no recorded provenance (legacy, or a "removal" auto-dismissal)
+    must stay None even when SOME scoped listing exists — only a FULL listing, or that
+    doc's own recorded scope, can prove absence. This is the guard that kept your real
+    7-document mitos Recovery list untouched against a query-scoped listing."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    # A scoped listing exists but has NOTHING to do with this doc's provenance. Staged
+    # BEFORE the dismissal so the dismissal lands in this project's own dismissed file
+    # (see _dismiss_file's pool fallback), not the shared unassigned one.
+    _stage(tmp, [{"id": "UNRELATED", "name": "Unrelated"}],
+           scope={"folder_id": "SOME_OTHER_FOLDER", "query": None,
+                  "exclude_folders": [], "recursive": False, "store": ""})
+    # A doc with no scope_keys provenance (dict has no "scope_keys" key at all)
+    review.dismiss_docs(treg, "example-project", [{"id": "LEGACY", "name": "Legacy Doc"}])
+    out = review.load_dismissed(treg, "example-project")
+    assert out["documents"][0]["in_scope"] is None
+    assert review.purge_dismissed(treg, "example-project", ["LEGACY"])["ok"] is False
+
+
+def test_purge_dismissed_only_clears_what_the_store_lost():
+    """purge re-checks in_scope server-side: a stale tab asking to clear a live document
+    is refused, and only the genuinely-missing id leaves the sidecar."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "LIVE", "name": "Still There"}])
+    review.dismiss_docs(treg, "example-project", [{"id": "LIVE", "name": "Still There"}])
+    review.dismiss_docs(treg, "example-project", [{"id": "GONE", "name": "Deleted"}])
+
+    # asking for both clears only GONE
+    out = review.purge_dismissed(treg, "example-project", ["LIVE", "GONE"])
+    assert out["ok"] and out["cleared"] == ["GONE"]
+    assert [d["id"] for d in review.load_dismissed(treg, "example-project")["documents"]] \
+        == ["LIVE"]
+
+    # asking for a live doc alone is refused outright
+    assert review.purge_dismissed(treg, "example-project", ["LIVE"])["ok"] is False
+    # the purged rows carry no in_scope key back onto disk (it's derived, not stored)
+    import json as _json
+    raw = _json.loads((_inbox(tmp) / "staging" / "example-project.dismissed.json")
+                      .read_text(encoding="utf-8"))
+    assert all("in_scope" not in d for d in raw["documents"])
+
+
+def test_purge_and_refresh_reject_invalid_slug():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    for bad in ("../etc", "", ".", ".."):
+        assert review.purge_dismissed(treg, bad, ["X"])["ok"] is False
+        assert review.refresh_staging(treg, bad)["ok"] is False
+
+
+def test_refresh_staging_requires_a_recorded_scope():
+    """Without a recorded folder/query scope there's no enumeration to replay — the console
+    falls back to the copyable CLI command rather than guessing."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    # nothing staged yet
+    assert review.refresh_staging(treg, "example-project")["ok"] is False
+    # staged, but scopeless (a listing written before scopes were recorded)
+    _stage(tmp, [{"id": "D1", "name": "Doc"}],
+           scope={"folder_id": None, "query": None, "exclude_folders": []})
+    out = review.refresh_staging(treg, "example-project")
+    assert out["ok"] is False and "scope" in out["error"]
+
+
+def test_refresh_staging_shells_out_to_mitos_with_the_recorded_scope(monkeypatch):
+    """The connector runs in a mitos.py SUBPROCESS — review.py imports no network code
+    (invariant #11). Assert the replayed command carries the recorded scope verbatim."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}],
+           scope={"folder_id": "F123", "query": None, "exclude_folders": [],
+                  "recursive": True, "store": "gws"})
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "staged 1 document(s)."
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.refresh_staging(treg, "example-project")
+    assert out["ok"], out
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("mitos.py") and "connect" in cmd and "--stage" in cmd
+    assert cmd[cmd.index("--project") + 1] == "example-project"
+    assert cmd[cmd.index("--folder-id") + 1] == "F123"
+    assert cmd[cmd.index("--store") + 1] == "gws"
+    assert "--recursive" in cmd and "--query" not in cmd
+
+
+def test_refresh_staging_surfaces_a_failing_connect(monkeypatch):
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": ""})
+
+    class _Fail:
+        returncode = 1
+        stdout = ""
+        stderr = "connector error: token expired"
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _Fail())
+    out = review.refresh_staging(treg, "example-project")
+    assert out["ok"] is False and "token expired" in out["error"]
+
+
+def test_refresh_staging_with_multiple_listings_requires_scope_key(monkeypatch):
+    """More than one watched listing and no scope_key given → refuse rather than guess
+    which one to refresh; the right scope_key targets exactly that listing and leaves its
+    sibling untouched."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    scope_a = {"folder_id": "FA", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    scope_b = {"folder_id": "FB", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    _stage_listings(tmp, [
+        ([{"id": "A1", "name": "A1"}], scope_a, "2026-07-15T1000Z"),
+        ([{"id": "B1", "name": "B1"}], scope_b, "2026-07-15T1000Z"),
+    ])
+
+    # ambiguous: two listings, no scope_key
+    out = review.refresh_staging(treg, "example-project")
+    assert out["ok"] is False and "watched listings" in out["error"]
+
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "staged 1 document(s)."
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    key_a = _scope_key(scope_a)
+    out2 = review.refresh_staging(treg, "example-project", scope_key=key_a)
+    assert out2["ok"], out2
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--folder-id") + 1] == "FA"   # replayed watch A's scope, not B's
+
+    # unknown scope_key is rejected
+    out3 = review.refresh_staging(treg, "example-project", scope_key="nope")
+    assert out3["ok"] is False
+
+
+def test_remove_watch_drops_one_listing_leaves_the_other():
+    from agentic import review
+    treg, tmp = _temp_registry()
+    scope_a = {"folder_id": "FA", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    scope_b = {"folder_id": "FB", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    _stage_listings(tmp, [
+        ([{"id": "A1", "name": "A1"}], scope_a, "2026-07-15T1000Z"),
+        ([{"id": "B1", "name": "B1"}], scope_b, "2026-07-15T1000Z"),
+    ])
+    key_a = _scope_key(scope_a)
+    out = review.remove_watch(treg, "example-project", scope_key=key_a)
+    assert out["ok"], out
+    staged = review.load_staged(treg, "example-project")
+    assert len(staged["listings"]) == 1
+    assert staged["listings"][0]["scope_key"] == _scope_key(scope_b)
+    assert [d["id"] for d in staged["documents"]] == ["B1"]
+
+    # removing the same key again finds nothing left to remove
+    out2 = review.remove_watch(treg, "example-project", scope_key=key_a)
+    assert out2["ok"] is False
+
+    # removing the last listing leaves an empty (not absent) staging file
+    review.remove_watch(treg, "example-project", scope_key=_scope_key(scope_b))
+    staged2 = review.load_staged(treg, "example-project")
+    assert staged2["ok"] and staged2["listings"] == [] and staged2["documents"] == []
+
+
+def test_remove_watch_rejects_invalid_slug_or_missing_key():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    assert review.remove_watch(treg, "../etc", scope_key="x")["ok"] is False
+    assert review.remove_watch(treg, "example-project", scope_key="")["ok"] is False
+    assert review.remove_watch(treg, "example-project", scope_key="nope")["ok"] is False
+
+
+def test_rename_watch_names_one_listing_without_touching_identity():
+    """A label is cosmetic: the renamed listing keeps its scope_key (so refresh/dedupe are
+    unaffected) and its documents, and the sibling watch is untouched."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    scope_a = {"folder_id": "FA", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    scope_b = {"folder_id": "FB", "query": None, "exclude_folders": [],
+               "recursive": False, "store": ""}
+    _stage_listings(tmp, [
+        ([{"id": "A1", "name": "A1"}], scope_a, "2026-07-15T1000Z"),
+        ([{"id": "B1", "name": "B1"}], scope_b, "2026-07-15T1000Z"),
+    ])
+    key_a = _scope_key(scope_a)
+    out = review.rename_watch(treg, "example-project", scope_key=key_a,
+                              label="Marketing archive")
+    assert out["ok"], out
+    by_key = {l["scope_key"]: l for l in review.load_staged(treg, "example-project")["listings"]}
+    assert by_key[key_a]["label"] == "Marketing archive"
+    assert by_key[key_a]["scope"]["folder_id"] == "FA"
+    assert by_key[key_a]["count"] == 1
+    assert by_key[_scope_key(scope_b)]["label"] == ""
+
+
+def test_rename_watch_cleans_and_clears_the_label():
+    """Whitespace collapses, over-long names are capped, and an empty label clears the
+    name — the console's undo, restoring the derived scope label."""
+    from agentic import review, staging
+    treg, tmp = _temp_registry()
+    scope = {"folder_id": "FA", "query": None, "exclude_folders": [],
+             "recursive": False, "store": ""}
+    _stage_listings(tmp, [([{"id": "A1", "name": "A1"}], scope, "2026-07-15T1000Z")])
+    key = _scope_key(scope)
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="  Docs \n  archive ")
+    assert review.load_staged(treg, "example-project")["listings"][0]["label"] == "Docs archive"
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="x" * 200)
+    assert len(review.load_staged(treg, "example-project")["listings"][0]["label"]) == staging.LABEL_MAX
+
+    review.rename_watch(treg, "example-project", scope_key=key, label="   ")
+    listing = review.load_staged(treg, "example-project")["listings"][0]
+    assert listing["label"] == ""
+    assert staging.listing_label(listing) == "folder FA"
+
+
+def test_rename_watch_rejects_invalid_slug_or_missing_key():
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "A1", "name": "A1"}])
+    assert review.rename_watch(treg, "../etc", scope_key="x", label="n")["ok"] is False
+    assert review.rename_watch(treg, "example-project", scope_key="", label="n")["ok"] is False
+    assert review.rename_watch(treg, "example-project", scope_key="nope", label="n")["ok"] is False
 
 
 def test_dismiss_docs_rejects_invalid_slug():

@@ -11,6 +11,7 @@ import datetime as _dt
 import json as _json
 
 from .. import loader as _loader
+from .. import staging as _staging
 from ..loader import Registry
 from .base import WorkspaceConnector
 
@@ -63,9 +64,14 @@ def _staged_documents(files: list[dict]) -> list[dict]:
 def stage_listing(reg: Registry, connector: WorkspaceConnector, slug: str,
                   folder_id: str | None = None, query: str | None = None,
                   exclude_folders: list[str] | None = None,
-                  recursive: bool = False) -> dict:
-    """Enumerate a scoped folder/query and write inbox/staging/<slug>.json for the console
-    to curate. Returns {ok, slug, count, path} or {ok: False, error}.
+                  recursive: bool = False, store: str = "") -> dict:
+    """Enumerate a scoped folder/query and update inbox/staging/<slug>.json for the console
+    to curate. A project can watch more than one scope at once: re-staging the SAME scope
+    (store/folder_id/query/recursive — see staging.scope_key) replaces just that listing;
+    a new scope is appended alongside the others rather than clobbering them. Returns
+    {ok, slug, count, path, overlap} or {ok: False, error}. `overlap` lists sibling
+    listings that share at least one document with this one — warn-only, nothing here is
+    blocked by it (see staging.overlapping_listings).
 
     The special slug ``"unassigned"`` is accepted so callers can stage without binding to a
     project first — the console will surface these documents in the Knowledge Graph tab as a
@@ -82,17 +88,40 @@ def stage_listing(reg: Registry, connector: WorkspaceConnector, slug: str,
                              exclude_folders=exclude_folders or None, recursive=recursive))
     if not docs:
         return {"ok": False, "error": "connector returned no usable documents in that scope"}
-    payload = {
-        "slug": slug,
+
+    scope = {"folder_id": folder_id, "query": query,
+              "exclude_folders": exclude_folders or [],
+              "recursive": bool(recursive), "store": store or ""}
+    new_key = _staging.scope_key(scope)
+    dest = _loader.inbox_dir(reg) / "staging" / f"{slug}.json"
+    existing_listings: list[dict] = []
+    if dest.is_file():
+        try:
+            existing_listings = _staging.normalize_staging(_json.loads(dest.read_text(encoding="utf-8")))
+        except (ValueError, OSError):
+            existing_listings = []   # an unreadable prior file is replaced outright, not merged
+
+    # A re-stage replaces this listing wholesale, so the operator's name for the watch is
+    # carried across explicitly — a refresh renames nothing (mirrors how a re-proposed
+    # document preserves its store/doc_type tag rather than wiping it).
+    prior_label = next((l.get("label", "") for l in existing_listings
+                        if l["scope_key"] == new_key), "")
+    new_listing = {
+        "scope_key": new_key,
+        "label": prior_label,
         "staged_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ"),
         "connector": getattr(connector, "name", "?"),
-        "scope": {"folder_id": folder_id, "query": query,
-                  "exclude_folders": exclude_folders or []},
+        "scope": scope,
         "documents": docs,
     }
-    dest = _loader.inbox_dir(reg) / "staging" / f"{slug}.json"
+    others = [l for l in existing_listings if l["scope_key"] != new_key]
+    listings = others + [new_listing]
+    overlap = _staging.overlapping_listings(new_key, {d["id"] for d in docs}, others)
+
+    payload = {"slug": slug, "listings": listings}
     _io.write_text(dest, _json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-    return {"ok": True, "slug": slug, "count": len(docs), "path": f"inbox/staging/{slug}.json"}
+    return {"ok": True, "slug": slug, "count": len(docs), "path": f"inbox/staging/{slug}.json",
+            "overlap": overlap}
 
 
 def bootstrap_to_inbox(reg: Registry, connector: WorkspaceConnector, slug: str,

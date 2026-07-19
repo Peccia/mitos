@@ -156,7 +156,10 @@ project manifests and identity. No changes to the public-track repo are needed.
    python build/mitos.py connect --stage
    ```
    This writes `registry/local/inbox/staging/<slug>.json` (or `unassigned.json`) — the Drive file list with IDs,
-   names, dates, and web links. It does **not** propose anything yet.
+   names, dates, and web links. It does **not** propose anything yet. Running `--stage` again
+   with a *different* `--folder-id`/`--query` adds that scope as a second watched listing in the
+   same file rather than replacing the first; re-running the SAME scope refreshes just that one
+   listing. See [connectors/README.md](README.md#watching-more-than-one-folder-or-query).
 
 3. Push the staging file via the overlay so the review PC can pull it:
    ```bash
