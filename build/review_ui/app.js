@@ -1832,6 +1832,112 @@ function discardGraphDraft(slug = graphSlug, after = renderGraph) {
   after();
 }
 
+// ── New prompt form ───────────────────────────────────────────────────────────
+let newPromptOpen = false;
+let newPromptDraftBody = "";
+let newPromptFieldDraft = { name: "", description: "", version: "", category: "", targets: null };
+
+function resetNewPromptDraft() {
+  newPromptOpen = false;
+  newPromptDraftBody = "";
+  newPromptFieldDraft = { name: "", description: "", version: "", category: "", targets: null };
+}
+
+function newPromptForm() {
+  const wrap = el("div", "new-skill-form");
+  wrap.append(el("h3", "", "New prompt"));
+
+  const inputs = {};
+  const field = (key, label, ph) => {
+    const f = el("div", "graph-field");
+    f.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text";
+    if (ph) inp.placeholder = ph;
+    f.append(inp);
+    wrap.append(f);
+    inputs[key] = inp;
+    return inp;
+  };
+  const nameInput = field("name", "Name (slug)", "my-new-prompt");
+  nameInput.value = newPromptFieldDraft.name;
+  nameInput.addEventListener("input", () => { newPromptFieldDraft.name = nameInput.value; });
+  const descInput = field("description", "Description", "One-line summary");
+  descInput.value = newPromptFieldDraft.description;
+  descInput.addEventListener("input", () => { newPromptFieldDraft.description = descInput.value; });
+  const verInput = field("version", "Version", "1.0.0");
+  verInput.value = newPromptFieldDraft.version;
+  verInput.addEventListener("input", () => { newPromptFieldDraft.version = verInput.value; });
+  const catInput = field("category", "Category", "general");
+  catInput.value = newPromptFieldDraft.category;
+  catInput.addEventListener("input", () => { newPromptFieldDraft.category = catInput.value; });
+
+  const focusNext = (next) => (e) => { if (e.key === "Enter") { e.preventDefault(); next.focus(); } };
+  nameInput.addEventListener("keydown", focusNext(descInput));
+  descInput.addEventListener("keydown", focusNext(verInput));
+  verInput.addEventListener("keydown", focusNext(catInput));
+
+  const targetsWrap = el("div", "graph-field");
+  targetsWrap.append(el("label", "", "Targets (optional — leave empty for console-only)"));
+  const targetsRow = el("div", "target-checks");
+  const targetBoxes = {};
+  for (const t of (STATE.known_targets || [])) {
+    const label = el("label", "target-check");
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = t;
+    if (newPromptFieldDraft.targets) cb.checked = newPromptFieldDraft.targets.includes(t);
+    cb.onchange = () => {
+      newPromptFieldDraft.targets = (STATE.known_targets || []).filter((tt) => targetBoxes[tt].checked);
+    };
+    label.append(cb, document.createTextNode(" " + t));
+    targetsRow.append(label);
+    targetBoxes[t] = cb;
+  }
+  targetsWrap.append(targetsRow);
+  wrap.append(targetsWrap);
+
+  const editor = buildContextualEditor({
+    value: newPromptDraftBody,
+    onInput(value) { newPromptDraftBody = value; },
+    statusText(value) { return `${value.length.toLocaleString()} chars · new prompt body`; },
+  });
+  wrap.append(editor.root);
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+  const create = el("button", "accept", "Create prompt");
+  create.onclick = async () => {
+    const targets = (STATE.known_targets || []).filter((t) => targetBoxes[t].checked);
+    const fm = { description: descInput.value.trim(), version: verInput.value.trim(), category: catInput.value.trim(), targets };
+    const res = await fetch("/api/prompts/new", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nameInput.value.trim(),
+        frontmatter: fm,
+        body: editor.textarea.value,
+        reason: reason.value,
+      }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      resetNewPromptDraft();
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  };
+  const cancel = el("button", "ghost", "Cancel");
+  cancel.onclick = () => { resetNewPromptDraft(); renderPrompts(); };
+  actions.append(reason, create, cancel);
+  wrap.append(actions);
+  return wrap;
+}
+
 // ── prompt library: a two-pane master–detail workspace ───────────────────────
 // One flat, uniform prompt model feeds the left list, the detail editor, and the
 // composer. Built fresh each render so it tracks /api/state. Skills and partials are
@@ -1967,6 +2073,16 @@ function renderList() {
   const q = $("search").value.trim().toLowerCase();
   const matches = (p) => (!q || p.search.includes(q)) && chipAllows(p);
   list.replaceChildren();
+
+  const newBtnWrap = el("div", "list-actions-wrap");
+  const newBtn = el("button", "new-skill-btn", "+ New prompt");
+  newBtn.onclick = () => {
+    selectedKey = null;
+    newPromptOpen = true;
+    renderPrompts();
+  };
+  newBtnWrap.append(newBtn);
+  list.append(newBtnWrap);
 
   const pick = (keys) => keys.map((k) => PMAP.get(k)).filter(Boolean).filter(matches);
   const favs = pick(favorites);
@@ -2653,6 +2769,12 @@ function resourcesModified(p) {
 function renderDetail() {
   const box = $("prompt-detail");
   box.replaceChildren();
+
+  if (newPromptOpen) {
+    box.append(newPromptForm());
+    return;
+  }
+
   const p = selectedKey && PMAP.get(selectedKey);
   if (!p) {
     box.append(el("div", "empty-state",
@@ -3774,6 +3896,8 @@ function showTab(which) {
   $("view-graph").hidden  = which !== "graph";
   $("view-skills").hidden = which !== "skills";
   $("view-prompts").hidden = which !== "prompts";
+
+  if (which !== "prompts") resetNewPromptDraft();
 
   // sidebar active state
   const activeNav = { inbox: "nav-inbox", graph: "nav-graph",

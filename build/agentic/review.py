@@ -1139,6 +1139,62 @@ def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict
     return propose_new_skill(reg, name, fields, body, reason=reason, org_domain=domain)
 
 
+def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
+                       body: str, reason: str = "") -> dict:
+    """Propose a brand-new first-class prompt as a `kind: new` inbox candidate. The
+    console never writes registry/ directly (invariant #3) — accept routes through
+    route_into_registry(), which writes the file verbatim since the target path
+    doesn't exist yet. Always lands in the user's private overlay
+    (registry/local/prompts/<name>.md), never core.
+
+    Prompts are simpler than skills: no author/license/platforms/scope/extends/resources.
+    `targets` is optional — omitting it (or passing []) means console-only (not an error).
+    Returns {ok, id, registry_path} or {ok: False, error}.
+    """
+    name = str(name).strip()
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    if not _SKILL_NAME_RE.match(name):
+        return {"ok": False, "error": "name must be lowercase alphanumerics and hyphens "
+                                      "(matches the existing slug convention)"}
+    if name in reg.prompts:
+        return {"ok": False, "error": f"prompt {name!r} already exists"}
+    if not str(body).strip():
+        return {"ok": False, "error": "body is required"}
+    targets = frontmatter_fields.get("targets") or []
+    if not isinstance(targets, list):
+        return {"ok": False, "error": "targets must be a list (may be empty for console-only)"}
+    bad = set(targets) - loader.KNOWN_TARGETS
+    if bad:
+        return {"ok": False, "error": f"unknown target(s) {sorted(bad)}"}
+    meta_fm = {
+        "name": name,
+        "description": str(frontmatter_fields.get("description", "")),
+        "version": str(frontmatter_fields.get("version", "") or "1.0.0"),
+        "category": str(frontmatter_fields.get("category", "") or "general"),
+        "targets": targets,
+    }
+    registry_path = f"local/prompts/{name}.md"
+    payload = ("---\n" + yaml.safe_dump(meta_fm, sort_keys=False, allow_unicode=True)
+              + "---\n\n" + str(body).rstrip("\n") + "\n")
+    meta = {
+        "registry_path": registry_path,
+        "kind": "new",
+        "source": {"machine": socket.gethostname() or "console", "tool": "console"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": _now(),
+        "note": "new prompt created in the operator console",
+    }
+    if reason:
+        meta["reason"] = reason
+    try:
+        cid = _write_candidate(reg, _slug_path(registry_path), meta, f"{name}.md", payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
 # ── prompt library ───────────────────────────────────────────────────────────
 _FAVORITES_FILE = "registry/local/prompt-favorites.yaml"
 
@@ -2034,7 +2090,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/graph/purge", "/api/graph/refresh",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
                                   "/api/reload",
-                                  "/api/prompts/favorite", "/api/skills/new",
+                                  "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
                                   "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
                 return self._json(404, {"ok": False, "error": "not found"})
@@ -2085,6 +2141,14 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     return self._json(400, {"ok": False, "error": "name required"})
                 updated = toggle_favorite(holder["reg"].root, name)
                 return self._json(200, {"ok": True, "favorites": updated})
+            if self.path == "/api/prompts/new":
+                # propose a brand-new prompt — only ever writes inbox/ (kind: new)
+                fm = body.get("frontmatter")
+                result = propose_new_prompt(
+                    holder["reg"], str(body.get("name", "")),
+                    fm if isinstance(fm, dict) else {},
+                    str(body.get("body", "")), str(body.get("reason", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/propose":
                 # save an edited prompt as an inbox candidate — only ever writes inbox/.
                 # skill/prompt edits carry structured metadata fields (propose_meta_edit

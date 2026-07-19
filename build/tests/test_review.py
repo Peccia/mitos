@@ -110,6 +110,82 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     assert "widget-helper" in reloaded.skills
 
 
+def test_propose_new_prompt_creates_kind_new_candidate_and_accepts_cleanly():
+    """propose_new_prompt mirrors skill creation but targets the simpler prompts schema."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, load_candidates, propose_new_prompt
+
+    treg, tmp = _temp_registry()
+    out = propose_new_prompt(
+        treg, "my-prompt",
+        {"description": "A test prompt.", "targets": ["hermes"], "category": "devops"},
+        "Prompt body text.", "")
+    assert out["ok"], out
+    assert out["registry_path"] == "local/prompts/my-prompt.md"
+
+    candidates = load_candidates(treg)
+    mine = next(c for c in candidates if c["id"] == out["id"])
+    assert mine["kind"] == "new"
+    assert mine["acceptable"]
+
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    written = tmp / "registry" / "local" / "prompts" / "my-prompt.md"
+    assert written.is_file()
+    text = written.read_text(encoding="utf-8")
+    assert "name: my-prompt" in text
+    assert "Prompt body text." in text
+
+    # the new prompt is now loadable from disk
+    reloaded = loadermod.load(tmp)
+    assert "my-prompt" in reloaded.prompts
+
+
+def test_propose_new_prompt_rejects_duplicate_name():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "example-prompt", {"description": "A test prompt.", "targets": []}, "Body")
+    assert not out["ok"]
+    assert "already exists" in out["error"]
+
+
+def test_propose_new_prompt_rejects_invalid_name():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "Bad Name!", {"description": "A test prompt.", "targets": []}, "Body")
+    assert not out["ok"]
+    assert "lowercase alphanumerics" in out["error"]
+
+
+def test_propose_new_prompt_rejects_empty_body():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": []}, "   \n")
+    assert not out["ok"]
+    assert "body is required" in out["error"]
+
+
+def test_propose_new_prompt_rejects_unknown_targets():
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": ["not-a-target"]}, "Body")
+    assert not out["ok"]
+    assert "unknown target" in out["error"]
+
+
+def test_propose_new_prompt_console_only_no_targets():
+    """Omitting targets entirely is valid for prompts (means console-only)."""
+    from agentic.review import propose_new_prompt
+    treg, _ = _temp_registry()
+    out = propose_new_prompt(
+        treg, "new-prompt", {"description": "A test prompt.", "targets": []}, "Body")
+    assert out["ok"]
+
+
 def test_dismiss_and_restore_roundtrip():
     """dismiss_docs moves a doc into the Recovery list; load_dismissed surfaces it;
     restore_docs removes it again."""
