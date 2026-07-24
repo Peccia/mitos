@@ -899,6 +899,24 @@ def test_effort_domain_line_renders_in_all_three_markdown_views():
         assert "runs under the `marketing` org" in out
         assert "`org-marketing`" in out
 
+def test_effort_domain_line_suppressed_when_org_routing_false():
+    """project_full_markdown's org_routing=False (the non-hermes claude-code workstation
+    path, planner._plan_claude_code) omits the org routing line entirely — org skills
+    target hermes only, so a claude-code-only checkout must never be told to load one
+    that was never deployed there. The goal line and everything else still renders."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="")
+    eff = graph.CreativeWork(id="launch", name="Launch", description="",
+                             is_part_of=pg.iri, org_domain="marketing", goal="Ship it")
+    pg = graph.upsert_effort(pg, eff)
+    d = graph.Document(drive_id="D1", name="Doc One", description="x",
+                       date_modified="2026-01-01", is_part_of=eff.iri)
+    pg = graph.upsert_document(pg, d)
+    out = graph.project_full_markdown(pg, org_routing=False)
+    assert "org-marketing" not in out
+    assert "runs under" not in out
+    assert "**Goal:** Ship it" in out
+
 def test_propose_graph_change_round_trips_effort_org_domain():
     """An effort's orgDomain survives propose → accept; editing an unrelated effort field
     without resending orgDomain is the caller's responsibility (the console rounds it

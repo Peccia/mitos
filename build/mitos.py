@@ -91,7 +91,6 @@ def _init_dispatch() -> int:
 
 
 def _init_scaffold_fresh(initmod, has_local: bool) -> int:
-    templates = initmod.org_templates(REPO_ROOT)
     given = _ask("Given (first) name: ")
     family = _ask("Family (last) name: ")
     default_addr = given or family or "your name"
@@ -99,15 +98,31 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         or given or family
     email = _ask("Your email: ")
     location = _ask("Location (optional): ")
-    print(f"\nOrg routing (optional):")
-    print(f"  blank (recommended) — dynamic multi-org router: all three domain orgs are")
-    print(f"    available and the correct one activates per-project via each project's")
-    print(f"    org: field. Best for mixed-domain work.")
-    print(f"  a template name — locks the assistant to one domain's delegation chain")
-    print(f"    for all project work, regardless of the project's org: field.")
-    print(f"  Available templates: {', '.join(templates) or '(none found)'}")
-    org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
-    org = org_raw if org_raw else None
+
+    # Use case gates everything below it: org routing is meaningless outside the hermes
+    # use case (org skills declare targets: [hermes] only — see MACHINE_USE_CASES), so
+    # asking it unconditionally is what previously left claude-code/antigravity-only users
+    # with a machine profile that never asked "do you even want orgs?" in the first place.
+    print("\nHow will you run Mitos on this machine?")
+    print("  [1] Coding harnesses only (Claude Code / Antigravity / Claude Desktop) — skills")
+    print("      and prompts inside your existing editor. No org routing, no agentic tree.")
+    print("  [2] Full agentic assistant (Hermes) — the standalone agentic harness, with the")
+    print("      operating tree (assistant_root) and the org-domain routing model.")
+    use_choice = _ask("Choice [1]: ") or "1"
+    is_hermes = use_choice == "2"
+
+    org = None
+    if is_hermes:
+        templates = initmod.org_templates(REPO_ROOT)
+        print("\nOrg routing (optional):")
+        print("  blank (recommended) — dynamic multi-org router: all three domain orgs are")
+        print("    available and the correct one activates per-project via each project's")
+        print("    org: field. Best for mixed-domain work.")
+        print("  a template name — locks the assistant to one domain's delegation chain")
+        print("    for all project work, regardless of the project's org: field.")
+        print(f"  Available templates: {', '.join(templates) or '(none found)'}")
+        org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
+        org = org_raw if org_raw else None
     backend = _ask("Workspace backend [gws]: ") or "gws"
     try:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,
@@ -123,10 +138,43 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
             print(f"  registry/{p}")
     if has_local:
         print("\nKept all your existing files; only the missing pieces above were added.")
+
+    # Machine profile — the file that actually decides what deploy() materializes (init
+    # alone never did; targets came only from copying a machines/example-*.yaml template
+    # by hand, which is how a coding-only checkout could end up with agents-md/hermes).
+    from agentic.commands import _local_os
+    print("\nNow let's set up this machine's profile (registry/local/machines/<name>.yaml) — "
+          "the file that decides what actually deploys here.")
+    if is_hermes:
+        use_case = "hermes"
+        print("Full agentic assistant selected — this profile will target [hermes, agents-md].")
+    else:
+        print("  [1] Claude Code only")
+        print("  [2] Claude Code + Antigravity + Claude Desktop (all coding harnesses)")
+        sub_choice = _ask("Which coding harnesses? [2]: ") or "2"
+        use_case = "workstation" if sub_choice == "1" else "coding"
+    default_name = "my-machine"
+    machine_name = _ask(f"A short name for this machine [{default_name}]: ") or default_name
+    default_os = _local_os()
+    os_name = _ask(f"OS (windows/linux/macos) [{default_os}]: ") or default_os
+    try:
+        machine_written = initmod.scaffold_machine(REPO_ROOT, name=machine_name,
+                                                    os_name=os_name, use_case=use_case)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if machine_written:
+        print(f"\nCreated: registry/{machine_written}")
+        print(f"Edit registry/{machine_written} to point `paths:` at your real directories.")
+    else:
+        print(f"\nregistry/local/machines/{machine_name}.yaml already exists — left untouched.")
+
     if backend and backend != "mock":
         print(f"\nNext: stand up the {backend} MCP server (see docs/connectors/), point the "
               f"`{backend}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
+    print(f"\nThen: python build/compile.py compile && "
+          f"python build/compile.py deploy --machine {machine_name} --dry-run")
     return 0
 
 

@@ -520,11 +520,17 @@ def _concise_entry(d: Document) -> str:
     return line
 
 
-def _effort_domain_line(e: CreativeWork) -> list[str]:
+def _effort_domain_line(e: CreativeWork, *, org_routing: bool = True) -> list[str]:
     """The routing line under a tagged effort's heading: names the org-* skill that
     governs work on this effort. This — not any project-level field — is how a session
-    knows which org to load; untagged efforts route by the nature of the request."""
-    if not e.org_domain:
+    knows which org to load; untagged efforts route by the nature of the request.
+
+    Org skills declare `targets: [hermes]` only, so this line is meaningful exclusively
+    on the agents-md/hermes tree, where those skills are actually deployed. `org_routing`
+    is the caller's declaration of whether that's true for the surface being rendered —
+    `project_full_markdown` (the non-hermes claude-code workstation path) passes False so
+    a claude-code-only checkout is never told to load a skill that was never deployed."""
+    if not e.org_domain or not org_routing:
         return []
     return [f"_Work in this effort runs under the `{e.org_domain}` org — load the "
             f"`org-{e.org_domain}` skill._", ""]
@@ -559,7 +565,8 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
 
 
 def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool,
-               intro: str, entry_fn, include_effort_desc: bool) -> str:
+               intro: str, entry_fn, include_effort_desc: bool,
+               org_routing: bool = True) -> str:
     """Shared renderer for all three document blocks — the connection-section grammar.
 
     The connection heading (`<Name> (`key`)`) is emitted at `level` (`#` for the standalone
@@ -587,7 +594,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
         for e in sorted(pg.efforts, key=lambda e: (e.name.lower(), e.id)):
             docs_in_effort = groups.get(e.iri, [])
             lines += [f"{gh} {e.name}", ""]
-            lines += _effort_domain_line(e)
+            lines += _effort_domain_line(e, org_routing=org_routing)
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
@@ -599,7 +606,8 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
 
 
 def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
-                           level: int = 2, emit_heading: bool = True) -> str:
+                           level: int = 2, emit_heading: bool = True,
+                           org_routing: bool = True) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block: the LIGHTWEIGHT index the
     harness auto-loads on every request — titles only, grouped by effort. Full descriptions,
     document IDs, links, and tags live in the on-demand `AGENTS_DETAILS.md`.
@@ -608,7 +616,12 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
     prose H1). When the project's prose already opened that section (curated store-folder
     paths), the planner passes `emit_heading=False` and the titles attach beneath it. When
     the file is wholly generated (no prose H1), the planner passes `level=1` so the
-    connection section is the file's own identity."""
+    connection section is the file's own identity.
+
+    `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`) —
+    callers pass `"hermes" in machine.targets` (org skills deploy only on a hermes machine;
+    `agents-md` alone, e.g. a claude-code workstation with an `agentic_context_root` mount,
+    is not sufficient)."""
     intro = ("Document titles from the knowledge graph. Full details (document IDs, links, "
              f"descriptions, tags) are in [`{DETAILS_FILENAME}`]({DETAILS_FILENAME}). To "
              f"change this list, edit `registry/graph/{pg.slug}.jsonld` and redeploy.")
@@ -623,11 +636,11 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
 
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
-                      include_effort_desc=False)
+                      include_effort_desc=False, org_routing=org_routing)
 
 
 def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
-                             level: int = 1) -> str:
+                             level: int = 1, org_routing: bool = True) -> str:
     """A project's `Projects/<slug>/AGENTS_DETAILS.md`: the DETAILED reference, read on
     demand — the full, UNCAPPED document set (title, document ID, modified date, plus
     description and tags when present; no URL), grouped by effort. Generated and
@@ -638,7 +651,9 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
     under it. A multi-store project's planner loop passes `level=2` for every store past
     the first (`planner._project_doc_block`) so the file still has exactly one H1 overall
     — the first store's heading stays the file's identity, later stores nest as sibling
-    H2 sections, same shape every other multi-section tree node already uses."""
+    H2 sections, same shape every other multi-section tree node already uses.
+
+    `org_routing` — see `project_index_markdown`."""
     intro = "Full document reference for `AGENTS.md`. Resolve a document by its ID."
 
     def entry_fn(docs: list[Document]) -> list[str]:
@@ -646,13 +661,15 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
 
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=True, intro=intro, entry_fn=entry_fn,
+                      org_routing=org_routing,
                       include_effort_desc=True)
 
 
 def project_full_markdown(pg: ProjectGraph,
                           repos: list[tuple[str, str]] | None = None,
                           heading: str | None = None, *,
-                          level: int = 2, emit_heading: bool = True) -> str:
+                          level: int = 2, emit_heading: bool = True,
+                          org_routing: bool = True) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block for the agentic-harness tree
     (Antigravity / Claude Code / Claude Desktop): the FULL document context inline — per
     document the description, Drive ID, modified date, and tags (concise, one line each),
@@ -663,6 +680,11 @@ def project_full_markdown(pg: ProjectGraph,
     `repos` is a list of (url, dirname) pairs — one per cloned checkout; None/omitted when
     the project has no repo. Rendered as the `## <Name> (`key`)` connection section (H2)
     unless `emit_heading=False` (the project's prose already opened it).
+
+    `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`).
+    This renderer is also used by non-hermes claude-code workstations (`planner._plan_claude_code`),
+    which pass `org_routing=False` since org skills never deploy there — the agents-md/hermes
+    tree keeps the default `True`.
 
     Returns only the GENERATED block; a project's human-authored prose is prepended by the
     planner as a separate, protected section."""
@@ -691,7 +713,7 @@ def project_full_markdown(pg: ProjectGraph,
 
     block = _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                        emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
-                       include_effort_desc=True)
+                       include_effort_desc=True, org_routing=org_routing)
     if prefix:
         return "\n".join(prefix).rstrip("\n") + "\n\n" + block
     return block

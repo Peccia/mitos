@@ -1,0 +1,12 @@
+# Example: Use case 1 — Claude Code only, on any OS (a lightweight coding-harness box).
+# Skills and prompts land in your existing Claude Code checkout; nothing agentic, no
+# orgs. Compare with example-windows-secondary.yaml (use case 2 — all coding harnesses)
+# and example-linux.yaml (use case 3 — the full agentic assistant). Copy to
+# registry/local/machines/ and customize for your setup.
+name: example-workstation
+example: true   # template — copy into registry/local/machines/ and rename; not a live machine
+os: windows
+targets: [claude-code]
+paths:
+  projects_root: "C:/Projects"
+  claude_code_skills: "~/.claude/skills"

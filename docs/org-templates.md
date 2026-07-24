@@ -46,6 +46,17 @@ skill; when no tagged effort matches, it classifies the request itself
 (building/refactoring → `org-software`; visual/brand → `org-design`; positioning/launch/content
 → `org-marketing`):
 
+> [!NOTE]
+> Orgs are a **hermes-machine feature specifically** — not an `agents-md` feature. The
+> three org skills declare `targets: [hermes]` only, so they deploy exclusively on a
+> machine whose `targets:` literally include `hermes`. `agents-md` alone (a plain
+> claude-code/antigravity workstation using `agentic_context_root` or a project's
+> `agentic_tree:` mount — see [`README.md`](../README.md#core-concepts)) never gets the
+> org-domain table, never gets a per-effort routing line, and never gets the org skill
+> files, even for an effort tagged `orgDomain`. Tagging an effort doesn't force org
+> content into a workstation's context; it only takes effect once that project's tree
+> renders on an actual hermes machine.
+
 | Domain | Skill | Primary chain |
 |---|---|---|
 | `software` | `org-software` | CEO → VP Engineering → Assistant |

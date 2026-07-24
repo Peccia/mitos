@@ -401,6 +401,11 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
             dist_rel=f"agentic-graph/{safe_rel(deploy_path)}",
             content=content, drift_policy="generated", sources=[])
 
+    # This tree fires on ANY claude-code machine that sets agentic_context_root, whether
+    # or not agents-md/hermes is also present (the gate above is claude-code + the path
+    # key alone — see the docstring). Org skills deploy only when `hermes` is literally
+    # a target, so the org routing line must key off that, not off reaching this tree.
+    org_routing = "hermes" in machine.get("targets", [])
     outputs: list[Output] = [
         _generated(f"{root}/AGENTS.md",
                    graphmod.roster_markdown(list(active_graphs.values())))]
@@ -414,7 +419,8 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
         gen_body = _project_doc_block(
             reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
             level=2 if prose_src else 1,
-            emit_heading=_connection_emit(proj, prose))
+            emit_heading=_connection_emit(proj, prose),
+            org_routing=org_routing)
         if prose_src:
             # prose header (protected) + generated doc block in one AGENTS.md
             outputs.append(_mixed_doc_output(
@@ -708,6 +714,12 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
     machine = reg.machines[machine_name]
     outputs: list[Output] = []
     policy = tree.get("drift_policy", "protect")
+    # This tree renders whenever agents-md is a target (the machine-wide assistant_root
+    # mount) or a project opts into agentic_tree: (workstation mount, independent of
+    # agents-md) — neither requires `hermes`. Org skills deploy only when `hermes` is
+    # literally a target, so both the org-domain table and every per-effort routing line
+    # below must key off that, not off reaching this tree.
+    org_routing = "hermes" in machine.get("targets", [])
 
     # Dynamic branches (the dynamic-branches design): any partial matching
     # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch — the
@@ -760,7 +772,8 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
         # always reflect the active registry.
         if rel_file == "Projects/AGENTS.md":
             gen_parts = []
-            org_block = render.org_domain_table(list(reg.skills.values()))
+            org_block = (render.org_domain_table(list(reg.skills.values()))
+                        if org_routing else "")
             if org_block:
                 gen_parts.append(org_block.rstrip("\n"))
             roster_block = render.project_roster_block(roster)
@@ -879,7 +892,8 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                     "agents-md", deploy_path, prose_body,
                     _project_doc_block(
                         reg, proj, pg, graphmod.project_index_markdown, level=2,
-                        emit_heading=_connection_emit(proj, prose_body)),
+                        emit_heading=_connection_emit(proj, prose_body),
+                        org_routing=org_routing),
                     src_rel, policy))
             else:
                 outputs.append(Output(
@@ -896,7 +910,8 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                     target="agents-md", kind="text", deploy_path=details_path,
                     dist_rel=f"agents-md/{safe_rel(details_path)}",
                     content=_project_doc_block(
-                        reg, proj, pg, graphmod.project_details_markdown, level=1),
+                        reg, proj, pg, graphmod.project_details_markdown, level=1,
+                        org_routing=org_routing),
                     drift_policy="generated", sources=[],
                 ))
     return outputs
@@ -913,6 +928,10 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     hermes_selected_skills = (
         _selected_skills(reg, hermes_sk_spec, machine)
         if "hermes" in machine.get("targets", []) and hermes_sk_spec else [])
+    # Org skills deploy only when `hermes` is literally a target — agents-md alone
+    # (this whole function's gate) is not sufficient. Threaded into the builder-context
+    # branch below; _emit_tree computes its own copy for the tree branch above.
+    org_routing = "hermes" in machine.get("targets", [])
     # tree: assistant — the machine mount (root_key resolves in this machine's paths).
     # Project mounts (agentic_tree: on a project manifest) are a SEPARATE, unconditional
     # call site (_plan_agentic_tree_mounts, below) — deliberately not gated on "agents-md"
@@ -965,7 +984,8 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 prose_body = render.plain_document(sections).rstrip("\n")
                 gen_body = _project_doc_block(
                     reg, proj, pg, graphmod.project_index_markdown, level=2,
-                    emit_heading=_connection_emit(proj, prose_body))
+                    emit_heading=_connection_emit(proj, prose_body),
+                    org_routing=org_routing)
                 if at_subdir:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
@@ -982,7 +1002,8 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                     target="agents-md", kind="text", deploy_path=details_path,
                     dist_rel=f"agents-md/{safe_rel(details_path)}",
                     content=_project_doc_block(
-                        reg, proj, pg, graphmod.project_details_markdown, level=1),
+                        reg, proj, pg, graphmod.project_details_markdown, level=1,
+                        org_routing=org_routing),
                     drift_policy="generated", sources=[],
                 ))
                 continue
@@ -1108,7 +1129,11 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             gen_body = _project_doc_block(
                 reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
                 level=2 if prose_src else 1,
-                emit_heading=_connection_emit(proj, prose))
+                emit_heading=_connection_emit(proj, prose),
+                # Org skills target hermes only (never claude-code) — a non-hermes
+                # workstation checkout must not tell the agent to load one that was
+                # never deployed here.
+                org_routing=False)
             # A project may ALSO have an agentic_tree mount — two AGENTS.md-shaped files
             # then legitimately coexist (this one: the doc/repo index; the mount: a full
             # operating tree). Name the split rather than leave a reader to guess.

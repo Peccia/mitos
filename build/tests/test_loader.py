@@ -206,6 +206,31 @@ def test_machine_role_agents_md_alone_is_not_a_coding_harness():
     rig.machines["example-linux"]["targets"] = ["hermes", "agents-md"]
     _validate(rig)  # must not raise
 
+def test_agents_md_without_hermes_never_leaks_org_routing():
+    """The actual bug this exists to prevent: `agents-md` alone (no `hermes` target) is a
+    valid, common shape — example-windows.yaml ships exactly this (claude-code +
+    antigravity + claude-app + agents-md) — but org skills declare `targets: [hermes]`
+    only, so they never deploy there. Both org-rendering surfaces (the agentic-graph
+    reference mount via agentic_context_root, and the org-domain table on the
+    agents-md/assistant tree) must therefore omit orgs entirely on such a machine, even
+    though example-project's 'Launch Prep' effort IS tagged orgDomain: marketing.
+    A real hermes machine (example-linux) must still carry both."""
+    rig = _full_windows_rig()  # agents-md, no hermes — mirrors example-windows.yaml exactly
+    outs = planner.plan_machine(rig, "example-windows")
+    graph_tree = [o for o in outs if o.target == "agentic-graph"]
+    assert graph_tree, "agentic_context_root must still materialize the reference mount"
+    for o in graph_tree:
+        assert "org-marketing" not in o.content
+        assert "runs under the `marketing` org" not in o.content
+
+    hermes_outs = planner.plan_machine(reg, "example-linux")
+    projects_agents = next(o for o in hermes_outs
+                           if o.deploy_path.endswith("Projects/AGENTS.md"))
+    assert "org-marketing" in projects_agents.content        # org-domain table present
+    example_agents = next(o for o in hermes_outs
+                          if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
+    assert "runs under the `marketing` org" in example_agents.content
+
 def test_agentic_tree_valid():
     import copy
     from agentic.loader import _validate
@@ -358,6 +383,58 @@ def test_init_scaffolds_overlay_and_org_template_reaches_soul():
     # an unknown template is refused without writing
     try:
         initmod.scaffold_overlay(tmp, given_name="x", email="y", org_template="no-such")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
+    """scaffold_machine writes a registry/local/machines/<name>.yaml whose `targets:` list
+    matches the chosen use case, and — since org skills target hermes only and the
+    org-domain table/routing lines render exclusively on the agents-md/hermes tree — only
+    the 'hermes' use case's plan carries orgs or an agents-md tree. 'workstation' and
+    'coding' must never deploy either, matching what a claude-code/antigravity-only user
+    expects (the bug this wizard exists to prevent)."""
+    from agentic import init as initmod
+
+    for use_case, expected_targets in initmod.MACHINE_USE_CASES.items():
+        treg, tmp = _temp_registry()
+        written = initmod.scaffold_machine(tmp, name="box", os_name="windows",
+                                           use_case=use_case)
+        assert written == "local/machines/box.yaml"
+        profile_path = tmp / "registry" / "local" / "machines" / "box.yaml"
+        assert profile_path.exists()
+        reg2 = loader.load(tmp)
+        assert reg2.machines["box"]["targets"] == expected_targets
+        outputs = planner.plan_machine(reg2, "box")
+        skill_paths = [o.deploy_path for o in outputs if "SKILL.md" in o.deploy_path]
+        agents_md_tree = [o for o in outputs if o.target == "agents-md"]
+        if use_case == "hermes":
+            assert any("org-software" in p for p in skill_paths)
+            assert agents_md_tree
+        else:
+            assert not any("org-" in p for p in skill_paths)
+            assert not agents_md_tree
+
+def test_scaffold_machine_never_clobbers_existing_profile():
+    from agentic import init as initmod
+    treg, tmp = _temp_registry()
+    written = initmod.scaffold_machine(tmp, name="box", os_name="linux",
+                                       use_case="workstation")
+    assert written == "local/machines/box.yaml"
+    original = (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8")
+    again = initmod.scaffold_machine(tmp, name="box", os_name="linux", use_case="hermes")
+    assert again is None
+    assert (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8") == original
+    forced = initmod.scaffold_machine(tmp, name="box", os_name="linux",
+                                      use_case="hermes", overwrite=True)
+    assert forced == "local/machines/box.yaml"
+    assert "hermes" in (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8")
+
+def test_scaffold_machine_rejects_unknown_use_case():
+    from agentic import init as initmod
+    treg, tmp = _temp_registry()
+    try:
+        initmod.scaffold_machine(tmp, name="box", os_name="linux", use_case="no-such")
         raise AssertionError("expected ValueError")
     except ValueError:
         pass

@@ -122,6 +122,29 @@ build/.venv/Scripts/python.exe build/compile.py review
 For indexing documents and setting up external document stores (like Google Workspace), see the **[Knowledge Graph & Connectors Guide](docs/connectors/README.md)**.
 
 
+## Choosing your setup
+
+`python build/mitos.py init` asks which of these you're setting up and writes the matching
+`registry/local/machines/<name>.yaml` for you — the file that actually decides what `deploy`
+materializes. The three shapes:
+
+| Use case | `targets:` | What deploys | Orgs? | Shipped template |
+|---|---|---|---|---|
+| **1. Claude Code only** | `[claude-code]` | Skills + prompts into your existing checkout(s). No agentic tree. | No | [`machines/example-workstation.yaml`](machines/example-workstation.yaml) |
+| **2. Coding harnesses** | `[antigravity, claude-app, claude-code]` | Skills across Claude Code, Antigravity, and Claude Desktop/web. No agentic tree. | No | [`machines/example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) |
+| **3. Full agentic assistant (Hermes)** | `[hermes, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** | [`machines/example-linux.yaml`](machines/example-linux.yaml) |
+
+**Orgs (`org-software`/`org-design`/`org-marketing`) require `hermes` literally in
+`targets:`.** They never deploy on use cases 1 or 2 — the three org skills declare
+`targets: [hermes]` only, and the org-domain table + per-effort routing lines render
+exclusively on the hermes/agents-md tree. `agents-md` by itself (e.g. a workstation using
+`agentic_context_root` or a project's `agentic_tree:` mount) is a context-format choice,
+not an org trigger — see [`docs/org-templates.md`](docs/org-templates.md). Mixing `hermes`
+with a coding-harness target on one machine is rejected at compile time (see **machine**
+under [Core concepts](#core-concepts)) — use case 3 is a dedicated machine, not an add-on
+to 1 or 2.
+
+
 ## Make it yours
 
 `mitos init` scaffolds your overlay's identity and org, but your **machine profiles are yours to
