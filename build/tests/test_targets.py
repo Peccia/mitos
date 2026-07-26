@@ -708,7 +708,7 @@ def test_plan_clones_gated_on_claude_code_env_and_repo():
     assert c.dest.endswith("MitosAgent/Projects/mitos/mitos")
     assert c.repo == "git@github.com:Peccia/mitos.git"
 
-def test_clone_is_idempotent_and_nondestructive(monkeypatch=None):
+def test_clone_is_idempotent_and_nondestructive():
     from agentic import commands
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel

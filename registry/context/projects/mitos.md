@@ -192,6 +192,14 @@ placeholders" section and `build/tests/test_personalization.py`.
    over plain dicts), `test_personalization.py` (user.yaml,
    `{{user_*}}` expansion/reversal, the generated Connections/Skills sections); shared
    helpers in `conftest.py`).
+   **CI runs the stdlib runner, not pytest** (`python build/tests/test_compiler.py`) — so a
+   green `pytest` locally is not proof. Run the runner too before pushing. Fixture
+   parameters (`monkeypatch`, `tmp_path`) work under both: the runner resolves each one
+   through `conftest.make_fixture` by signature inspection (params WITH a default are not
+   fixtures, matching pytest's own rule). A fixture the runner can't supply fails loudly
+   rather than passing `None` — add it to `make_fixture` instead of hand-rolling a
+   workaround in the test. Pinned by `test_runner.py`, which also scans the whole suite for
+   unsupported fixture names.
 3. `python build/compile.py deploy --machine <m> --dry-run` — read the action list
    before any real deploy.
 

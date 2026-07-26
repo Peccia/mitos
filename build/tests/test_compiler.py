@@ -9,6 +9,7 @@ the suite runnable from a bare `requirements.txt` install.
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
 import traceback
 from pathlib import Path
@@ -25,6 +26,22 @@ def _modules() -> list[str]:
     return sorted(p.stem for p in HERE.glob("test_*.py") if p.stem != "test_compiler")
 
 
+def _fixtures(fn) -> tuple[dict, list]:
+    """Resolve a test's pytest-fixture parameters via conftest stand-ins.
+
+    Only parameters WITHOUT a default are fixtures — that matches pytest's own rule, so a
+    test signature means the same thing under both runners."""
+    kwargs, teardowns = {}, []
+    sig = inspect.signature(fn)
+    for pname, param in sig.parameters.items():
+        if param.default is not inspect.Parameter.empty:
+            continue
+        value, teardown = conftest.make_fixture(pname)
+        kwargs[pname] = value
+        teardowns.append(teardown)
+    return kwargs, teardowns
+
+
 def main() -> int:
     total = failed = 0
     for mod_name in _modules():
@@ -35,7 +52,12 @@ def main() -> int:
                 continue
             total += 1
             try:
-                fn()
+                kwargs, teardowns = _fixtures(fn)
+                try:
+                    fn(**kwargs)
+                finally:
+                    for teardown in reversed(teardowns):
+                        teardown()
             except AssertionError as e:
                 failed += 1
                 print(f"FAIL  {mod_name}.{name}: {e}")
