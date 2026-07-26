@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-07-26
+
+### Added
+- Feature: Generate repo roster inside `## Navigation` section of project nodes with manifest `repo_notes:` field.
+- Feature: End-to-end editable project properties (`propose_project_edit` + `kind:project` inbox candidates and console Project panel).
+- Feature: Multi-region carve and rejoin support in `split_live_sections` for ordered partial sections.
+
+### Changed
+- UI: Unified design system tokens, CSS container queries, WCAG 2.5.8 control sizing, ARIA roles, and collapsible project identity header in operator console.
+
+### Fixed
+- Fix: Gate org content on `hermes` target rather than `agents-md` to avoid leaking org lines to non-Hermes setups.
+- Fix: Stdlib test runner now handles pytest fixture parameters (`monkeypatch`, `tmp_path`) via a test runner shim (`conftest.py`).
+- Fix: Operator console layout issues, dock z-index positioning, and invisible stage badges.
+
 ## [0.1.3] - 2026-07-18
 
 ### Added
