@@ -58,6 +58,9 @@ let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left c
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
 let recoverFilter = "";    // client-side search text for the recovery list
 let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified,keywords}, lockId }
+let projectEditOpen = false;   // is the Project panel's identity/repo editor open, for graphSlug
+let projectEditVals = null;    // { name, description, stage, repos:[{url,description}] } while editing
+let projectConfigOpen = false; // is the Project panel's read-only "View config" detail expanded
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
 //   add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}},
@@ -670,7 +673,9 @@ function renderGraph() {
 // ── left: searchable project sidebar (scales to 100s–1000s of projects) ───────
 function buildGraphSidebar(graphs) {
   const aside = el("aside"); aside.id = "graph-sidebar";
-  const search = el("input", "graph-proj-search");
+  aside.append(el("h2", "sr-only", "Projects"));
+  const search = el("input", "field graph-proj-search");
+  search.setAttribute("aria-label", "Filter projects");
   search.type = "search"; search.placeholder = "Filter projects…"; search.value = graphProjFilter;
   // Only the rows re-render on a keystroke — this input survives, so focus is never lost.
   search.oninput = () => { graphProjFilter = search.value; renderProjRows(); };
@@ -715,22 +720,208 @@ function selectProject(slug) {
   stagedFilter = ""; stagedPool = "project";
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
+  projectEditOpen = false; projectEditVals = null; projectConfigOpen = false;
   renderGraph();
   loadStaged(slug);
   loadDismissed(slug);
 }
 
+// ── Project panel: identity (name/description/stage) + repos, the Knowledge Graph
+// tab's first step toward a full Project view. Edits propose a `kind: project` inbox
+// candidate (POST /api/project/edit) — reviewed and Accepted in the Inbox tab like
+// everything else; nothing here writes the registry directly.
+//
+// Resting state is a single summary line (F1 of the console usability audit): the repo
+// roster and description used to render in full on every visit, costing 340–560px of
+// vertical space and pushing the first document below the fold at common viewport
+// heights. "View config" now discloses that read-only detail on demand; "Edit
+// properties" opens the existing inline editor exactly as before.
+function buildProjectPanel(container, g) {
+  const card = el("div", "card project-panel");
+  if (projectEditOpen && projectEditVals) {
+    card.append(projectEditorCard(g));
+    container.append(card);
+    return;
+  }
+  const repoCount = (g.repo || []).length;
+  const docCount = (g.documents || []).length;
+
+  const head = el("div", "card-head");
+  head.append(el("h1", "project-panel-title", g.name), el("code", "", g.slug));
+  if (g.stage) head.append(el("span", "badge stage", g.stage));
+  if (g.is_local) head.append(el("span", "badge overlay", "overlay"));
+  head.append(el("span", "muted", `${docCount} mapped`));
+  if (repoCount) head.append(el("span", "muted", `${repoCount} repo${repoCount === 1 ? "" : "s"}`));
+
+  const actions = el("span", "push-right project-panel-actions");
+  const configBtn = el("button", "tiny ghost", projectConfigOpen ? "Hide config" : "View config");
+  configBtn.setAttribute("aria-expanded", String(projectConfigOpen));
+  configBtn.onclick = () => { projectConfigOpen = !projectConfigOpen; renderGraph(); };
+  const editBtn = el("button", "tiny", "Edit properties");
+  editBtn.onclick = () => {
+    projectEditVals = {
+      name: g.name || "", description: g.description || "", stage: g.stage || "",
+      repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
+    };
+    projectEditOpen = true;
+    renderGraph();
+  };
+  actions.append(configBtn, editBtn);
+  head.append(actions);
+  card.append(head);
+
+  if (projectConfigOpen) {
+    const detail = el("div", "project-config-detail");
+    if (g.description) detail.append(el("p", "card-note muted", g.description));
+    if (repoCount) {
+      const list = el("div", "card-note project-repo-list");
+      for (const url of g.repo) {
+        const bn = repoBasename(url);
+        const desc = (g.repo_notes || {})[bn] || "";
+        const row = el("div", "project-repo-view-row");
+        row.append(el("code", "", bn + "/"));
+        if (desc) row.append(el("span", "muted", desc));
+        row.append(el("span", "muted repo-url", url));
+        list.append(row);
+      }
+      detail.append(list);
+    }
+    if (!g.description && !repoCount) detail.append(el("p", "card-note muted", "No description or repos set."));
+    card.append(detail);
+  }
+  container.append(card);
+}
+
+// Last path segment of a git URL, minus a trailing .git — mirrors loader._repo_basename
+// client-side (the server is the source of truth; this is purely for display grouping,
+// matching repo URLs in g.repo to their g.repo_notes description).
+function repoBasename(url) {
+  let s = (url || "").trim().replace(/\/+$/, "");
+  if (s.endsWith(".git")) s = s.slice(0, -4);
+  const parts = s.replace(/:/g, "/").split("/");
+  return parts[parts.length - 1] || "repo";
+}
+
+function projectEditorCard(g) {
+  const card = el("div", "inline-editor");
+  const vals = projectEditVals;
+  const inputs = {};
+  const field = (key, label, ph) => {
+    const wrap = el("div", "graph-field");
+    wrap.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text"; inp.value = vals[key] || "";
+    if (ph) inp.placeholder = ph;
+    wrap.append(inp); card.append(wrap); inputs[key] = inp;
+    return inp;
+  };
+  field("name", "Name", "Project name");
+  const descWrap = el("div", "graph-field");
+  descWrap.append(el("label", "", "Description"));
+  const descArea = el("textarea");
+  descArea.value = vals.description || "";
+  descArea.placeholder = "one-line summary shown on the generated Project Roster";
+  descArea.rows = 2;
+  descWrap.append(descArea); card.append(descWrap); inputs.description = descArea;
+
+  const stageWrap = el("div", "graph-field");
+  stageWrap.append(el("label", "", "Stage"));
+  const stageSel = el("select", "graph-select");
+  for (const s of ["ideation", "speccing", "build", "maintain"]) {
+    const opt = el("option", "", s); opt.value = s;
+    if (vals.stage === s) opt.selected = true;
+    stageSel.append(opt);
+  }
+  stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
+
+  // Repos — url + one-line description per row (repo_notes, keyed by checkout basename
+  // server-side); add/remove rows freely, order doesn't matter to the manifest.
+  const reposWrap = el("div", "graph-field");
+  reposWrap.append(el("label", "", "Repositories"));
+  const rows = el("div", "project-repo-rows");
+  const rowInputs = [];
+  const addRow = (url, description) => {
+    const row = el("div", "project-repo-row");
+    const urlInp = el("input"); urlInp.type = "text"; urlInp.placeholder = "git@github.com:owner/name.git";
+    urlInp.value = url || "";
+    const descInp = el("input"); descInp.type = "text"; descInp.placeholder = "description (optional)";
+    descInp.value = description || "";
+    const rm = el("button", "tiny danger", "×");
+    rm.type = "button";
+    rm.onclick = () => { row.remove(); const i = rowInputs.indexOf(entry); if (i >= 0) rowInputs.splice(i, 1); };
+    row.append(urlInp, descInp, rm);
+    rows.append(row);
+    const entry = { urlInp, descInp };
+    rowInputs.push(entry);
+  };
+  for (const r of vals.repos || []) addRow(r.url, r.description);
+  reposWrap.append(rows);
+  const addBtn = el("button", "tiny ghost", "+ Add repo");
+  addBtn.type = "button";
+  addBtn.onclick = () => addRow("", "");
+  reposWrap.append(addBtn);
+  card.append(reposWrap);
+
+  inputs.name.focus();
+
+  const actions = el("div", "inline-actions");
+  const save = el("button", "accept tiny", "Save");
+  save.onclick = async () => {
+    const name = inputs.name.value.trim();
+    if (!name) { toast("Name is required."); return; }
+    const repos = rowInputs
+      .map((r) => ({ url: r.urlInp.value.trim(), description: r.descInp.value.trim() }))
+      .filter((r) => r.url);
+    const seen = new Set();
+    for (const r of repos) {
+      if (seen.has(r.url)) { toast(`Duplicate repo URL: ${r.url}`); return; }
+      seen.add(r.url);
+    }
+    const repoNotes = {};
+    for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
+    const fields = {
+      name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      repo: repos.map((r) => r.url), repo_notes: repoNotes,
+    };
+    save.disabled = true;
+    try {
+      const res = await fetch("/api/project/edit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: g.slug, fields }),
+      });
+      const out = await res.json();
+      if (!out.ok) { toast(`Error: ${out.error}`, 6000); save.disabled = false; return; }
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      projectEditOpen = false; projectEditVals = null;
+      await refresh();
+    } catch (e) {
+      toast(`Error: ${e}`, 5000);
+      save.disabled = false;
+    }
+  };
+  const cancel = el("button", "ghost tiny", "Cancel");
+  cancel.onclick = () => { projectEditOpen = false; projectEditVals = null; renderGraph(); };
+  actions.append(save, cancel);
+  card.append(actions);
+  scrollCardIntoView(card);
+  return card;
+}
+
 // ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
+// #graph-workspace is the scroll container (F4 of the console usability audit — the
+// Knowledge Graph tab used to scroll as one 3,000–4,800px document; now the project
+// sidebar and this pane's own head stay put while its body scrolls). The head — project
+// identity + the one-line usage hint — is sticky at the top of that scroll so the
+// operator always knows which project they're editing, however far down the registry
+// they've scrolled.
 function buildGraphWorkspace(g) {
   const ws = el("section"); ws.id = "graph-workspace";
-  const head = el("div", "graph-ws-head");
-  head.append(el("strong", "graph-ws-title", g.name));
-  head.append(el("code", "graph-ws-slug", g.slug));
-  head.append(el("span", "muted", `${g.documents.length} mapped`));
-  ws.append(head);
-  ws.append(el("p", "graph-help muted",
+  const sticky = el("div", "graph-ws-sticky");
+  buildProjectPanel(sticky, g);
+  sticky.append(el("p", "graph-help muted",
     "Map, edit, and remove documents below — changes collect in the dock and submit as one "
     + "kind:graph candidate to Accept in the Inbox. Nothing writes the registry directly."));
+  ws.append(sticky);
 
   const panes = el("div", "graph-panes");
   const discovery = el("div", "graph-pane");
@@ -746,8 +937,12 @@ function buildGraphWorkspace(g) {
 // dismissed from Discovery, or auto-dismissed when removed from the registry).
 function buildLeftPane(container, g) {
   const tabs = el("div", "left-pane-tabs");
+  tabs.setAttribute("role", "tablist");
   for (const [val, label] of [["discovery", "Discovery"], ["recovery", "Recovery"]]) {
-    const b = el("button", "left-tab" + (leftTab === val ? " active" : ""), label);
+    const isActive = leftTab === val;
+    const b = el("button", "left-tab" + (isActive ? " active" : ""), label);
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(isActive));
     b.onclick = () => {
       if (leftTab === val) return;
       leftTab = val;
@@ -791,6 +986,7 @@ function buildDiscoveryPane(container, g) {
   const toggle = el("div", "pool-toggle");
   for (const [val, label] of [["project", "Staged"], ["unassigned", "Unassigned"]]) {
     const b = el("button", "pool-opt" + (stagedPool === val ? " active" : ""), label);
+    b.setAttribute("aria-pressed", String(stagedPool === val));
     b.onclick = () => {
       if (stagedPool === val) return;
       // selection is per-pool (stagedSel[val]) — switching pools must not touch it
@@ -823,7 +1019,7 @@ function buildDiscoveryPane(container, g) {
   container.append(renderWatchedScopes(g));
 
   const sbar = el("div", "staged-bar");
-  const search = el("input", "staged-search");
+  const search = el("input", "field staged-search");
   search.type = "search"; search.placeholder = "Filter staged…"; search.value = stagedFilter;
   search.oninput = () => { stagedFilter = search.value; renderStagedRows(g); };
   const info = el("span", "muted staged-info");
@@ -869,6 +1065,14 @@ function watchName(l) {
   return (l && l.label) || scopeLabel(l && l.scope);
 }
 
+// "2026-07-15T2309Z" → "2026-07-15". The staging timestamp is written by
+// connectors/bootstrap.py; only its date is worth a column-constrained meta line, and
+// the full value stays in the row's title attribute.
+function shortStagedAt(s) {
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(s || ""));
+  return m ? m[1] : String(s || "");
+}
+
 // The "watch more than one folder" story made visible: one row per watched listing (a
 // project can stage several disjoint — or overlapping — scopes at once, see
 // staging.merge_documents). Each row's own ↻ Refresh replays JUST that scope
@@ -887,12 +1091,22 @@ function renderWatchedScopes(g) {
     const scopeText = scopeLabel(l.scope);
     info.append(el("span", "watched-scope-label" + (named ? "" : " untitled"),
       named ? l.label : scopeText));
+    // A named watch's raw scope (a 33-char folder id, or a query string) is redundant
+    // noise on the visible line — the name IS the identity the operator recognises. It
+    // moves to the row's tooltip, alongside the full timestamp. An UNNAMED watch keeps
+    // it in the label above, because there it's the only identity there is.
     const bits = [`${l.count} doc${l.count === 1 ? "" : "s"}`];
-    if (named) bits.push(scopeText);
-    if (l.staged_at) bits.push(l.staged_at);
+    if (l.staged_at) bits.push(shortStagedAt(l.staged_at));
     if (l.connector) bits.push(l.connector);
     if (l.scope && l.scope.store) bits.push(l.scope.store);
-    info.append(el("span", "muted watched-scope-meta", bits.join(" · ")));
+    const meta = el("span", "muted watched-scope-meta", bits.join(" · "));
+    const fullBits = [`${l.count} doc${l.count === 1 ? "" : "s"}`];
+    if (named) fullBits.push(scopeText);
+    if (l.staged_at) fullBits.push(l.staged_at);
+    if (l.connector) fullBits.push(l.connector);
+    if (l.scope && l.scope.store) fullBits.push(l.scope.store);
+    meta.title = fullBits.join(" · ");
+    info.append(meta);
     row.append(info);
 
     const actions = el("span", "row-actions");
@@ -1190,7 +1404,7 @@ async function dismissStaged(g, docs) {
 // ── left pane (Recovery tab): docs dismissed from Discovery or dropped by a removal ──
 function buildRecoveryPane(container, g) {
   const head = el("div", "pane-head");
-  const search = el("input", "staged-search");
+  const search = el("input", "field staged-search");
   search.type = "search"; search.placeholder = "Filter recovered…"; search.value = recoverFilter;
   search.oninput = () => { recoverFilter = search.value; renderRecoveryRows(g); };
   head.append(search);
@@ -1353,7 +1567,7 @@ async function purgeMissing(g, ids) {
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
 function buildRegistryPane(container, g) {
   const head = el("div", "pane-head");
-  head.append(el("strong", "", "Registry"));
+  head.append(el("h2", "pane-head-title", "Registry"));
   const addDocBtn = el("button", "ghost tiny", "+ Doc");
   addDocBtn.title = "Map a document by hand (e.g. a Drive ID that isn't staged)";
   addDocBtn.onclick = () => {
@@ -1370,6 +1584,7 @@ function buildRegistryPane(container, g) {
   };
   head.append(addDocBtn, addEffortBtn);
   container.append(head);
+  container.append(registryHeaderRow());
   container.append(el("div", "registry-rows"));
   setTimeout(() => renderRegistryRows(g), 0);
 }
@@ -1510,34 +1725,48 @@ function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, 
   }
 }
 
+// F5 of the console usability audit: the registry used to be a flex column of
+// variable-height blocks with no shared column edges — an ID and three buttons could
+// end up wrapped onto their own line. It's a grid now (registryHeaderRow below defines
+// the matching header), four cells per row: name, description, date, id+actions.
 function registryRow(g, doc, status, pending) {
   const isPending = pending.has(doc.id);
   const row = el("div", "registry-row " + status + (isPending ? " pending" : ""));
-  const body = el("div", "staged-body");
-  const nameLine = el("div", "staged-nameline");
-  const name = el("span", "staged-name" + (status === "remove" ? " struck" : ""), doc.name);
-  nameLine.append(name);
-  const badge = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
-  if (badge) nameLine.append(el("span", "badge draft", badge));
-  if (isPending) nameLine.append(el("span", "badge pending", "Awaiting review"));
-  body.append(nameLine);
 
-  if (doc.description) body.append(el("div", "registry-desc muted", doc.description));
+  const nameCell = el("div", "rrow-cell rrow-name");
+  const name = el("span", "rrow-name-text" + (status === "remove" ? " struck" : ""), doc.name);
+  nameCell.append(name);
+  const badge = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
+  if (badge) nameCell.append(el("span", "badge draft", badge));
+  if (isPending) nameCell.append(el("span", "badge pending", "Awaiting review"));
+
+  const descCell = el("div", "rrow-cell rrow-desc");
+  if (doc.description) descCell.append(el("div", "registry-desc muted", doc.description));
   if (doc.keywords) {
     const chips = el("div", "doc-tags");
     doc.keywords.split(",").forEach((t) => {
       const c = t.trim(); if (c) chips.append(el("span", "tag-chip muted", c));
     });
-    body.append(chips);
+    descCell.append(chips);
   }
-  const meta = el("div", "staged-meta");
-  if (doc.dateModified) meta.append(el("span", "muted staged-mod", doc.dateModified));
-  meta.append(el("span", "muted mono registry-id", doc.id));
 
+  const dateCell = el("div", "rrow-cell rrow-date");
+  if (doc.dateModified) dateCell.append(el("span", "muted num", doc.dateModified));
+
+  // The store's opaque id gets its own column (matching the concept's ID header) rather
+  // than sharing the actions cell — packed in with Open/Edit/Remove it took a full line
+  // to itself and forced every row to ~93px. The container query in style.css drops this
+  // column entirely once the pane is too narrow to seat it.
+  const idCell = el("div", "rrow-cell rrow-id");
+  const idSpan = el("span", "muted mono registry-id", doc.id);
+  idSpan.title = doc.id;
+  idCell.append(idSpan);
+
+  const actionsCell = el("div", "rrow-cell rrow-actions");
   const openUrl = doc.webUrl || `https://drive.google.com/open?id=${doc.id}`;
   const openLink = el("a", "staged-link", "Open");
   openLink.target = "_blank"; openLink.rel = "noopener"; openLink.href = openUrl;
-  meta.append(openLink);
+  actionsCell.append(openLink);
 
   const actions = el("span", "row-actions");
   if (status === "remove" || status === "add" || status === "edit") {
@@ -1562,9 +1791,24 @@ function registryRow(g, doc, status, pending) {
       actions.append(rm);
     }
   }
-  meta.append(actions);
-  body.append(meta);
-  row.append(body);
+  actionsCell.append(actions);
+
+  row.append(nameCell, descCell, dateCell, idCell, actionsCell);
+  return row;
+}
+
+// One shared column header — column widths are defined once on .registry-row /
+// .registry-header-row (style.css) so header and body cells align exactly. The trailing
+// cell labels the actions column, which is intentionally unlabelled visually.
+function registryHeaderRow() {
+  const row = el("div", "registry-header-row");
+  row.append(
+    el("span", "", "Document name"),
+    el("span", "", "Description"),
+    el("span", "", "Date"),
+    el("span", "rrow-id", "ID"),
+    el("span", "sr-only", "Actions"),
+  );
   return row;
 }
 
@@ -1746,6 +1990,22 @@ function openTweak(g, d) {
 }
 
 // ── persistent proposal dock ──────────────────────────────────────────────────
+// #ops-drawer, #graph-dock and #compose all sit fixed at the viewport's bottom edge.
+// graph-dock and compose are mutually exclusive (one per tab), but ops-drawer can open
+// on top of either from the global Compile/Deploy buttons — so it must stack ABOVE
+// whichever of the two is currently showing, never cover it. Called any time a dock's
+// visibility or height changes.
+function repositionOpsDrawer() {
+  const drawer = $("ops-drawer");
+  if (!drawer) return;
+  const graphDock = $("graph-dock");
+  const compose = $("compose");
+  let offset = 0;
+  if (graphDock && !graphDock.hidden) offset = graphDock.getBoundingClientRect().height;
+  else if (compose && !compose.hidden) offset = compose.getBoundingClientRect().height;
+  drawer.style.bottom = offset ? `${offset}px` : "";
+}
+
 function updateGraphDock() {
   const dock = $("graph-dock");
   if (!dock) return;
@@ -1753,7 +2013,7 @@ function updateGraphDock() {
   const c = graphSlug ? draftCounts(graphSlug) : { adds: 0, edits: 0, removes: 0 };
   const total = c.adds + c.edits + c.removes + (c.effortAdds || 0) + (c.effortEdits || 0)
     + (c.effortRemoves || 0);
-  if (!onGraph || !total) { dock.hidden = true; return; }
+  if (!onGraph || !total) { dock.hidden = true; repositionOpsDrawer(); return; }
   dock.hidden = false;
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   const parts = [];
@@ -1764,6 +2024,7 @@ function updateGraphDock() {
   if (c.effortEdits) parts.push(plural(c.effortEdits, "effort edit"));
   if (c.effortRemoves) parts.push(plural(c.effortRemoves, "effort removal"));
   $("graph-dock-summary").textContent = `${graphSlug}: ${parts.join(" · ")}`;
+  repositionOpsDrawer();
 }
 
 async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = false) {
@@ -2940,10 +3201,12 @@ function renderSkills() {
   for (const t of ["all", ...(STATE.known_targets || [])]) {
     const active = (t === "all" ? "" : t) === skillFilterTarget;
     const b = el("button", "pool-opt" + (active ? " active" : ""), t === "all" ? "All" : t);
+    b.setAttribute("aria-pressed", String(active));
     b.onclick = () => { skillFilterTarget = t === "all" ? "" : t; renderSkills(); };
     chipRow.append(b);
   }
   const orgChip = el("button", "pool-opt" + (skillFilterOrg ? " active" : ""), "Orgs only");
+  orgChip.setAttribute("aria-pressed", String(skillFilterOrg));
   orgChip.onclick = () => { skillFilterOrg = !skillFilterOrg; renderSkills(); };
   chipRow.append(orgChip);
   filterBar.append(chipRow);
@@ -3359,6 +3622,7 @@ function renderSkillOrgSection(skillName, domain) {
   const viewToggle = el("div", "pool-toggle");
   for (const [id, label] of [["role", "Role Tree"], ["agentsmd", "Agent-MD Folder"]]) {
     const b = el("button", "pool-opt" + (mode === id ? " active" : ""), label);
+    b.setAttribute("aria-pressed", String(mode === id));
     b.onclick = () => {
       orgSkillViewMode[skillName] = id;
       if (id === "agentsmd" && orgMachine && !orgTreeCache[orgMachine]) {
@@ -3596,6 +3860,7 @@ function renderOrg() {
   for (const d of domains) {
     const b = el("button", "pool-opt" + (d === orgDomain ? " active" : ""),
                  d.charAt(0).toUpperCase() + d.slice(1));
+    b.setAttribute("aria-pressed", String(d === orgDomain));
     b.onclick = () => { orgDomain = d; renderOrg(); };
     switcher.append(b);
   }
@@ -3604,6 +3869,7 @@ function renderOrg() {
   const viewToggle = el("div", "pool-toggle");
   for (const [id, label] of [["role", "Role Tree"], ["agentsmd", "Agent-MD Folder View"]]) {
     const b = el("button", "pool-opt" + (orgViewMode === id ? " active" : ""), label);
+    b.setAttribute("aria-pressed", String(orgViewMode === id));
     b.onclick = () => {
       orgViewMode = id;
       if (id === "agentsmd" && orgMachine && !orgTreeCache[orgMachine]) loadOrgTree(orgMachine);
@@ -3855,7 +4121,7 @@ function removeCompose(idx) {
 function renderCompose() {
   const bar = $("compose");
   const hasText = compose.text != null && compose.text.trim() !== "";
-  if (!compose.items.length && !hasText) { bar.hidden = true; return; }
+  if (!compose.items.length && !hasText) { bar.hidden = true; repositionOpsDrawer(); return; }
   bar.hidden = false;
   const out = composeOutput();
   const edited = compose.text != null ? " · edited" : "";
@@ -3888,6 +4154,7 @@ function renderCompose() {
     $("compose-info").textContent =
       `${compose.items.length} part(s) · edited · ${ta.value.length.toLocaleString()} chars`;
   };
+  repositionOpsDrawer();
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────────
@@ -3903,12 +4170,15 @@ function showTab(which) {
   const activeNav = { inbox: "nav-inbox", graph: "nav-graph",
     skills: "nav-skills", prompts: "nav-prompts" }[which] || "";
   for (const id of ["nav-graph", "nav-skills", "nav-prompts", "nav-inbox"]) {
-    const n = $(id); if (n) n.classList.toggle("active", id === activeNav);
+    const n = $(id); if (!n) continue;
+    const isActive = id === activeNav;
+    n.classList.toggle("active", isActive);
+    if (isActive) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current");
   }
 
   updateGraphDock();
   if (which === "prompts") { renderCompose(); $("search").focus(); }
-  else $("compose").hidden = true;
+  else { $("compose").hidden = true; repositionOpsDrawer(); }
 }
 
 
@@ -4073,6 +4343,7 @@ function openOpsDrawer() {
   $("ops-drawer").hidden = false;
   $("ops-drawer-body").hidden = false;
   $("ops-drawer-toggle").textContent = "▾";
+  repositionOpsDrawer();
 }
 
 function renderOpsSnapshot(snap) {
@@ -4253,6 +4524,7 @@ $("ops-drawer-toggle").onclick = () => {
   $("ops-drawer-toggle").textContent = body.hidden ? "▸" : "▾";
 };
 $("ops-drawer-dismiss").onclick = () => { $("ops-drawer").hidden = true; };
+window.addEventListener("resize", repositionOpsDrawer);
 $("skill-edit-drawer-close").onclick = () => { closeSkillDrawer(); renderSkills(); };
 $("deploy-confirm-cancel").onclick = () => closeDeployConfirm();
 $("deploy-confirm-go").onclick = () => confirmDeploy();
@@ -4269,6 +4541,7 @@ $("compose-toggle").onclick = () => {
   const body = $("compose-body");
   body.hidden = !body.hidden;
   $("compose-toggle").textContent = body.hidden ? "▸" : "▾";
+  repositionOpsDrawer();
 };
 $("compose-rebuild").onclick = () => {
   compose.text = null;

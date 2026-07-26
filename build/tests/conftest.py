@@ -26,6 +26,86 @@ commands._git_clone = _test_safe_git_clone
 
 reg = loader.load(REPO_ROOT, ignore_local=True)
 
+
+class _MonkeyPatch:
+    """Minimal stand-in for pytest's `monkeypatch` fixture, for the stdlib runner.
+
+    The runner (`test_compiler.py`) supplies one of these to any test that declares a
+    `monkeypatch` parameter, so a test written against pytest's fixture runs identically
+    under both. Only the operations the suite actually uses are implemented — anything
+    else should be added here rather than worked around in a test."""
+
+    def __init__(self) -> None:
+        self._undo: list = []
+
+    def setattr(self, target, name, value):
+        old = getattr(target, name)
+        self._undo.append(lambda: setattr(target, name, old))
+        setattr(target, name, value)
+
+    def delattr(self, target, name):
+        old = getattr(target, name)
+        self._undo.append(lambda: setattr(target, name, old))
+        delattr(target, name)
+
+    def setitem(self, mapping, key, value):
+        missing = key not in mapping
+        old = mapping.get(key)
+        self._undo.append(
+            (lambda: mapping.pop(key, None)) if missing
+            else (lambda: mapping.__setitem__(key, old)))
+        mapping[key] = value
+
+    def delitem(self, mapping, key):
+        old = mapping[key]
+        self._undo.append(lambda: mapping.__setitem__(key, old))
+        del mapping[key]
+
+    def setenv(self, name, value):
+        import os
+        self.setitem(os.environ, name, str(value))
+
+    def delenv(self, name, raising: bool = True):
+        import os
+        if name in os.environ:
+            self.delitem(os.environ, name)
+        elif raising:
+            raise KeyError(name)
+
+    def chdir(self, path):
+        import os
+        old = os.getcwd()
+        self._undo.append(lambda: os.chdir(old))
+        os.chdir(str(path))
+
+    def syspath_prepend(self, path):
+        old = list(sys.path)
+        self._undo.append(lambda: sys.path.__setitem__(slice(None), old))
+        sys.path.insert(0, str(path))
+
+    def undo(self) -> None:
+        for fn in reversed(self._undo):
+            fn()
+        self._undo.clear()
+
+
+def make_fixture(name: str):
+    """Build the stdlib-runner stand-in for a pytest fixture, or raise if unsupported.
+
+    Returns `(value, teardown)`. Keep the supported set here in sync with what the suite
+    declares — an unknown fixture name fails loudly (a test that silently received `None`
+    is how the CI/pytest divergence went unnoticed before)."""
+    import tempfile
+    if name == "monkeypatch":
+        mp = _MonkeyPatch()
+        return mp, mp.undo
+    if name == "tmp_path":
+        d = Path(tempfile.mkdtemp(prefix="ae-tmp-path-"))
+        return d, lambda: None          # temp dirs are left for post-mortem, as elsewhere
+    raise LookupError(
+        f"unsupported fixture {name!r} in the stdlib test runner — add it to "
+        f"conftest.make_fixture (build/tests/conftest.py)")
+
 def _inbox(root: Path) -> Path:
     """Mirror of loader.inbox_dir for tests — inbox lives inside the overlay, not at repo root."""
     return root / "registry" / "local" / "inbox"

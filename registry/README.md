@@ -31,8 +31,6 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 │   └── projects/<slug>.md
 ├── skills/                  ← your private or overriding skills
 │   └── org/SKILL.md
-├── agents/                  ← your Claude Code subagents
-│   └── <name>.md
 ├── prompts/                 ← harness-agnostic reusable prompts
 │   └── <name>.md
 ├── projects/                ← project manifests (stage, repo, document_store)
@@ -54,7 +52,6 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
-| `agents/<name>.md` | Claude Code subagents (frontmatter + system prompt) | agent name |
 | `prompts/<name>.md` | Harness-agnostic reusable prompts (the substrate every harness understands) | prompt name |
 | `projects/<slug>.yaml` | Project manifests — stage, repo, document_store, bound skills/agents | project slug |
 | `graph/<slug>.jsonld` | Per-project document maps (where each authoritative doc lives) | project slug |
@@ -171,7 +168,7 @@ but each box deploys only its own with `deploy --machine <name>`.
 
 ```yaml
 name: windows-main            # unique; this is the `deploy --machine` target
-os: windows                   # windows | linux | darwin — deploy REFUSES on a host whose OS differs
+os: windows                   # windows | linux | macos — deploy REFUSES on a host whose OS differs
 targets: [claude-code, antigravity, claude-app, agents-md]   # which adapters emit here
 paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
@@ -204,7 +201,7 @@ sync:                                   # optional — consumed only by `mitos s
 | Field | Required | What it does / how it's validated |
 |---|---|---|
 | `name` | **yes** | Unique host identity and the `deploy --machine` selector. Two files claiming one name are refused (no silent shadowing). |
-| `os` | **yes (in practice)** | `windows` \| `linux` \| `darwin`. A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
+| `os` | **yes (in practice)** | `windows` \| `linux` \| `macos` (matched against `sys.platform` — a Mac reports `macos`, not `darwin`). A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
 | `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `agents-md`, `hermes`); an unknown one aborts compile. |
 | `paths` | **yes** | Map of named locations the targets write to (see the key list below). Values use **forward slashes** even on Windows — an unescaped `\` shows up as a control character and is rejected with a pointed error. |
 | `example` | no | `true` marks a shipped *template* profile (skipped by compile once a real machine exists, refused by a real deploy). Must be a bool if present. Your own profiles omit it. |
@@ -234,6 +231,15 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 |---|---|---|---|
 | **Workstation** | `claude-code` (no `agents-md`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
 | **Hermes** | `claude-code` + `agents-md` | `<agentic_context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<agentic_context_root>/Projects/<slug>/<repo_basename>/` |
+
+> [!NOTE]
+> "Hermes" in this table names the **deploy mode** (lightweight index vs. full inline
+> doc context) — it does not mean the `hermes` target is present. A `claude-code +
+> agents-md` machine with no `hermes` target (e.g. `machines/example-windows.yaml`) is
+> firmly in the "Hermes" row here, but never gets org content: the org skills, the
+> org-domain table, and per-effort org routing lines all require `hermes` literally in
+> `targets:` (see [`docs/org-templates.md`](../docs/org-templates.md)). Don't infer "has
+> orgs" from this table.
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
@@ -292,8 +298,8 @@ servers:
 
 ## Everything here is optional
 
-You commit **only what you personalize.** `mitos init` pre-creates the `identity/`, `projects/`,
-`graph/`, `skills/`, and `agents/` trees, but they can sit empty until you fill them. A perfectly
+You commit **only what you personalize.** `mitos init` pre-creates the `identity/`, `context/`,
+`projects/`, `graph/`, and `skills/` trees, but they can sit empty until you fill them. A perfectly
 valid minimal overlay is just:
 
 ```

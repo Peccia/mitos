@@ -148,37 +148,43 @@ def test_graph_materialization_markdown_split():
     assert f"## {heading}" not in idx_attach
     assert "Forecast Spec" in idx_attach                        # titles still render
 
-def test_project_full_markdown_inlines_docs_repo_and_caps():
+def test_project_full_markdown_inlines_docs_and_caps():
     from agentic import graph
     docs = [_doc(f"id{i:03}", f"Doc {i:03}", f"desc {i}", f"2026-01-{(i % 28) + 1:02}")
             for i in range(graph.INDEX_LIMIT + 5)]
     pg = graph.ProjectGraph(slug="apdict", name="Ascenzio", description="d", documents=docs)
-    full = graph.project_full_markdown(pg, [("git@github.com:Peccia/x.git", "x")])
+    full = graph.project_full_markdown(pg)
     # concise one-line entries: bare document ID inline, no URL (the MCP server resolves by ID)
     assert "`id" in full
     assert "drive.google.com" not in full and "**ID:**" not in full
-    # repo Workspace Layout names the sibling checkout dir + the clone URL
-    assert "## Workspace Layout" in full and "`x/`" in full
-    assert "git@github.com:Peccia/x.git" in full
-    assert "repository is" in full      # singular phrasing
     # curation cap: at most INDEX_LIMIT entries, with an "…and N more" footer
     assert full.count("- **Doc ") == graph.INDEX_LIMIT
     assert "and 5 more documents" in full
-    # no repo section when the project has no repo
-    assert "## Workspace Layout" not in graph.project_full_markdown(pg)
+    # repos are NOT this renderer's business — they are local paths and belong to the
+    # node's generated `## Navigation` (render.navigation_block), spliced in by the planner
+    assert "## Workspace Layout" not in full
 
-def test_project_full_markdown_multi_repo_workspace_layout():
-    from agentic import graph
-    pg = graph.ProjectGraph(slug="multi", name="Multi", description="d", documents=[])
-    repos = [
-        ("git@github.com:you/frontend.git", "frontend"),
-        ("git@github.com:you/backend.git", "backend"),
-    ]
-    full = graph.project_full_markdown(pg, repos)
-    assert "## Workspace Layout" in full
-    assert "repositories are" in full   # plural phrasing
-    assert "`frontend/` — `git@github.com:you/frontend.git`" in full
-    assert "`backend/` — `git@github.com:you/backend.git`" in full
+def test_navigation_block_lists_checkouts_without_clone_urls():
+    from agentic import render
+    repos = [("frontend", "client UI"), ("backend", "")]
+    nav = render.navigation_block(repos)
+    assert nav.startswith("## Navigation")
+    assert "- `frontend/` — client UI" in nav
+    # no description → the bare checkout dir, never a dangling em dash
+    assert "- `backend/`\n" in nav and "- `backend/` —" not in nav
+    # the clone URL is deploy machinery, not per-request context
+    assert "git@" not in nav and "https://" not in nav
+
+def test_navigation_block_attaches_under_authored_prose_and_is_empty_without_repos():
+    from agentic import render
+    repos = [("frontend", "client UI")]
+    # the project's prose already opened `## Navigation` → the roster attaches beneath it
+    attached = render.navigation_block(repos, emit_heading=False)
+    assert "## Navigation" not in attached
+    assert "- `frontend/` — client UI" in attached
+    # a project with no repos renders no section at all, rather than a bare heading
+    assert render.navigation_block([]) == ""
+    assert render.navigation_block([], emit_heading=False) == ""
 
 def test_project_full_markdown_heading_override():
     """The connection section heading is the store's stable label (H2, appended under the
@@ -898,6 +904,24 @@ def test_effort_domain_line_renders_in_all_three_markdown_views():
                 graph.project_full_markdown(pg)):
         assert "runs under the `marketing` org" in out
         assert "`org-marketing`" in out
+
+def test_effort_domain_line_suppressed_when_org_routing_false():
+    """project_full_markdown's org_routing=False (the non-hermes claude-code workstation
+    path, planner._plan_claude_code) omits the org routing line entirely — org skills
+    target hermes only, so a claude-code-only checkout must never be told to load one
+    that was never deployed there. The goal line and everything else still renders."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="")
+    eff = graph.CreativeWork(id="launch", name="Launch", description="",
+                             is_part_of=pg.iri, org_domain="marketing", goal="Ship it")
+    pg = graph.upsert_effort(pg, eff)
+    d = graph.Document(drive_id="D1", name="Doc One", description="x",
+                       date_modified="2026-01-01", is_part_of=eff.iri)
+    pg = graph.upsert_document(pg, d)
+    out = graph.project_full_markdown(pg, org_routing=False)
+    assert "org-marketing" not in out
+    assert "runs under" not in out
+    assert "**Goal:** Ship it" in out
 
 def test_propose_graph_change_round_trips_effort_org_domain():
     """An effort's orgDomain survives propose → accept; editing an unrelated effort field

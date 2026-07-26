@@ -37,17 +37,47 @@ def test_split_live_sections_attributes_edits():
             ("identity/b.md", "beta one"),
             ("context/c.md", "gamma one\ngamma two")]
     live = render.plain_document(base)
-    # unchanged → each section maps back verbatim
-    assert render.split_live_sections(base, live) == {
-        "identity/a.md": "alpha one\nalpha two",
-        "identity/b.md": "beta one",
-        "context/c.md": "gamma one\ngamma two"}
+    # unchanged → each region maps back verbatim, in document order
+    assert render.split_live_sections(base, live) == [
+        ("identity/a.md", "alpha one\nalpha two"),
+        ("identity/b.md", "beta one"),
+        ("context/c.md", "gamma one\ngamma two")]
     # edit inside the middle section only → that one source changes, others intact
     edited = live.replace("beta one", "beta one EDITED\nbeta two")
-    out = render.split_live_sections(base, edited)
+    out = dict(render.split_live_sections(base, edited))
     assert out["identity/b.md"] == "beta one EDITED\nbeta two"
     assert out["identity/a.md"] == "alpha one\nalpha two"
     assert out["context/c.md"] == "gamma one\ngamma two"
+
+def test_split_live_sections_keeps_repeated_source_regions_distinct():
+    """One partial split around a generated region (a project node's prose either side of
+    its generated `## Navigation` repo roster) contributes TWO regions. The carve must keep
+    them separate and ordered — a source-keyed map would collapse them to the last one, so
+    adopt would silently drop the head half of the prose."""
+    base = [("context/p.md", "# Project\n\n## Navigation\n\nrouting prose"),
+            (render.GENERATED_NAV, "- `acore/` — shared defaults"),
+            ("context/p.md", "## Tools\n\nthe tools"),
+            (render.GENERATED_SECTION, "### Documents\n\n- a doc")]
+    live = render.plain_document(base)
+    carved = render.split_live_sections(base, live)
+    assert [s for s, _ in carved] == [
+        "context/p.md", render.GENERATED_NAV, "context/p.md", render.GENERATED_SECTION]
+    # the partial's own regions rejoin to exactly the prose it was deployed from
+    assert render.rejoin_regions(carved, "context/p.md") == (
+        "# Project\n\n## Navigation\n\nrouting prose\n\n## Tools\n\nthe tools")
+
+def test_split_live_sections_attributes_an_edit_after_a_generated_region():
+    """An edit in the prose AFTER a generated region routes to the partial, and the
+    generated region itself is untouched — the round trip that lets a hand-edited repo
+    roster regenerate while the prose around it stays adoptable."""
+    base = [("context/p.md", "## Navigation\n\nrouting prose"),
+            (render.GENERATED_NAV, "- `acore/` — shared defaults"),
+            ("context/p.md", "## Tools\n\nthe tools")]
+    live = render.plain_document(base).replace("the tools", "the tools EDITED")
+    carved = render.split_live_sections(base, live)
+    assert render.rejoin_regions(carved, "context/p.md") == (
+        "## Navigation\n\nrouting prose\n\n## Tools\n\nthe tools EDITED")
+    assert render.rejoin_regions(carved, render.GENERATED_NAV) == "- `acore/` — shared defaults"
 
 def test_strip_frontmatter():
     skill = next(iter(reg.skills.values()))

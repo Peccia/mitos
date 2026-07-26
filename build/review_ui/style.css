@@ -30,7 +30,9 @@ body { isolation: isolate; }
   --bg: #f6f7f9;
   --panel: #fafbfc;
   --ink: #1b1f24;
-  --muted: #6a737d;
+  /* was #6a737d — measured 4.49:1 on --bg, under the 4.5:1 AA floor at the 11–13px
+     sizes this token is actually used at (descriptions, dates, ids, hints). */
+  --muted: #5f6874;
   --line: #d8dee4;
   --accent: #0b6bcb;
   --ok: #1a7f37;
@@ -41,6 +43,36 @@ body { isolation: isolate; }
   --warn-bg: #fff8c5;
   --chg-bg: #ddf4ff;
   --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* ── Scale tokens ─────────────────────────────────────────────────────────
+     Additive: existing rules keep their hand-typed rem values (a full mechanical
+     conversion is its own follow-up), but every new/touched rule in this file should
+     read from this scale rather than typing another one-off fractional rem. */
+  --sp-1: .25rem;  /* 4px */
+  --sp-2: .5rem;   /* 8px */
+  --sp-3: .75rem;  /* 12px */
+  --sp-4: 1rem;    /* 16px */
+  --sp-5: 1.5rem;  /* 24px */
+  --sp-6: 2rem;    /* 32px */
+
+  --fs-xs: .6875rem;  /* 11px */
+  --fs-sm: .75rem;    /* 12px */
+  --fs-base: .8125rem; /* 13px */
+  --fs-md: .875rem;   /* 14px */
+  --fs-lg: 1.25rem;   /* 20px */
+  --fs-xl: 1.5rem;    /* 24px */
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+
+  --ctrl-sm: 24px;  /* accessibility floor — row actions, tiny buttons */
+  --ctrl-md: 32px;  /* fields, standard buttons */
+  --ctrl-lg: 40px;  /* primary actions */
+
+  --row-compact: 32px;
+  --row-comfortable: 44px;
+  --panel-pad: 1rem; /* 16px, one value for every card/panel */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -58,6 +90,19 @@ body { isolation: isolate; }
     --warn-bg: #272115;
     --chg-bg: #121d2f;
   }
+}
+
+/* Visually hidden but present for screen readers/document structure (F7 of the console
+   usability audit) — standard clip-based pattern, not display:none (which removes it
+   from the accessibility tree too). */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── Reset & base ────────────────────────────────────────────────────────── */
@@ -78,14 +123,14 @@ body {
 /* Custom scrollbars — used inside panels/textareas that opt into a thin, cohesive
    scrollbar instead of the OS default (Firefox: scrollbar-width/-color; WebKit below). */
 .thin-scroll, textarea, #inbox-detail, #inbox-list, #prompt-list, #prompt-detail,
-#view-graph, #view-skills, #view-prompts, #graph-sidebar, #cmdk-results {
+#graph-workspace, #view-skills, #view-prompts, #graph-sidebar, #cmdk-results {
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
 .thin-scroll::-webkit-scrollbar, textarea::-webkit-scrollbar,
 #inbox-detail::-webkit-scrollbar, #inbox-list::-webkit-scrollbar,
 #prompt-list::-webkit-scrollbar, #prompt-detail::-webkit-scrollbar,
-#view-graph::-webkit-scrollbar, #view-skills::-webkit-scrollbar,
+#graph-workspace::-webkit-scrollbar, #view-skills::-webkit-scrollbar,
 #view-prompts::-webkit-scrollbar, #graph-sidebar::-webkit-scrollbar,
 #cmdk-results::-webkit-scrollbar {
   width: 9px;
@@ -94,7 +139,7 @@ body {
 .thin-scroll::-webkit-scrollbar-track, textarea::-webkit-scrollbar-track,
 #inbox-detail::-webkit-scrollbar-track, #inbox-list::-webkit-scrollbar-track,
 #prompt-list::-webkit-scrollbar-track, #prompt-detail::-webkit-scrollbar-track,
-#view-graph::-webkit-scrollbar-track, #view-skills::-webkit-scrollbar-track,
+#graph-workspace::-webkit-scrollbar-track, #view-skills::-webkit-scrollbar-track,
 #view-prompts::-webkit-scrollbar-track, #graph-sidebar::-webkit-scrollbar-track,
 #cmdk-results::-webkit-scrollbar-track {
   background: transparent;
@@ -102,7 +147,7 @@ body {
 .thin-scroll::-webkit-scrollbar-thumb, textarea::-webkit-scrollbar-thumb,
 #inbox-detail::-webkit-scrollbar-thumb, #inbox-list::-webkit-scrollbar-thumb,
 #prompt-list::-webkit-scrollbar-thumb, #prompt-detail::-webkit-scrollbar-thumb,
-#view-graph::-webkit-scrollbar-thumb, #view-skills::-webkit-scrollbar-thumb,
+#graph-workspace::-webkit-scrollbar-thumb, #view-skills::-webkit-scrollbar-thumb,
 #view-prompts::-webkit-scrollbar-thumb, #graph-sidebar::-webkit-scrollbar-thumb,
 #cmdk-results::-webkit-scrollbar-thumb {
   background-color: var(--line);
@@ -111,7 +156,7 @@ body {
 .thin-scroll::-webkit-scrollbar-thumb:hover, textarea::-webkit-scrollbar-thumb:hover,
 #inbox-detail::-webkit-scrollbar-thumb:hover, #inbox-list::-webkit-scrollbar-thumb:hover,
 #prompt-list::-webkit-scrollbar-thumb:hover, #prompt-detail::-webkit-scrollbar-thumb:hover,
-#view-graph::-webkit-scrollbar-thumb:hover, #view-skills::-webkit-scrollbar-thumb:hover,
+#graph-workspace::-webkit-scrollbar-thumb:hover, #view-skills::-webkit-scrollbar-thumb:hover,
 #view-prompts::-webkit-scrollbar-thumb:hover, #graph-sidebar::-webkit-scrollbar-thumb:hover,
 #cmdk-results::-webkit-scrollbar-thumb:hover {
   background-color: var(--muted);
@@ -162,7 +207,7 @@ body {
   width: 40px;
   height: 40px;
   border: none;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--sidebar-text);
   cursor: pointer;
@@ -235,7 +280,7 @@ body {
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0,0,0,.28);
   overflow: hidden;
 }
@@ -287,13 +332,41 @@ main {
   min-height: 0;
   min-width: 0;
 }
-#view-graph, #view-skills, #view-prompts {
+#view-skills, #view-prompts {
   overflow-y: auto;
   padding: 1rem 1.2rem 4.5rem;
+}
+/* F4 of the console usability audit: the Knowledge Graph tab used to scroll as one
+   long document (3.6–6.3 screens), carrying the project sidebar and pane toolbars away
+   with it. It now owns its height like #view-inbox does — #graph-workspace is the
+   thing that actually scrolls (see below), so the project list and this view's own
+   padding stay put. */
+#view-graph {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 1rem 1.2rem 0;
 }
 
 /* ── Shared button / form base ───────────────────────────────────────────── */
 .muted { color: var(--muted); font-size: .82rem; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* F9 of the console usability audit: every tab had invented its own search-field
+   look (32.6 / 31.3 / 37.4px tall; radius 6 / 7 / 999px) — the Skills tab's pill field
+   was the best of the four, so it's promoted here as the shared treatment and applied
+   to every filter/search input in the app (search, staged-search, graph-proj-search,
+   skill-filter-bar). */
+.field {
+  font: inherit;
+  height: var(--ctrl-md);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
 
 button {
   font: inherit;
@@ -308,6 +381,14 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
+/* F7 of the console usability audit: the only :focus-visible rules in the stylesheet
+   covered a handful of text inputs — every button, chip, and pill toggle (58+ call
+   sites) had no visible keyboard-focus state at all. One rule, applied broadly. */
+button:focus-visible, .chip:focus-visible, .pool-opt:focus-visible,
+.left-tab:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 /* Disabled accept/reject: drop the gradient (it washes out to an unreadable pastel at
    .45 opacity, worst against a light panel) for a defined, clearly-inactive outline. */
 button.accept:disabled, button.reject:disabled {
@@ -347,7 +428,18 @@ button.reject:hover:not(:disabled) {
 }
 button.reject:active:not(:disabled) { transform: translateY(0); }
 button.ghost { background: none; }
-button.tiny { padding: .05rem .35rem; font-size: .8rem; line-height: 1.2; }
+/* WCAG 2.5.8 minimum target size is 24×24 — .tiny carries nearly every row action
+   (Edit/Remove/Undo/etc, ~60 call sites in app.js), so this floor is the single
+   highest-leverage fix in the stylesheet. display:inline-flex centers the label
+   inside the taller box instead of leaving it pinned to the top under min-height. */
+button.tiny {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ctrl-sm);
+  padding: .2rem .55rem;
+  font-size: .8rem;
+  line-height: 1.2;
+}
 button.tiny.danger { color: var(--bad); }
 button.tiny.danger:hover:not(:disabled) { border-color: var(--bad); }
 
@@ -385,7 +477,7 @@ select:focus, textarea:focus {
 }
 #inbox-detail {
   overflow-y: auto;
-  padding: 1.2rem 1.4rem 4.5rem;
+  padding: var(--panel-pad) var(--panel-pad) 4.5rem;
 }
 
 .inbox-list-row {
@@ -447,10 +539,10 @@ select:focus, textarea:focus {
   flex-wrap: wrap;
   align-items: baseline;
   gap: .6rem;
-  padding: .65rem .9rem;
+  padding: .7rem var(--panel-pad);
 }
 .card-head code { font-family: var(--mono); font-size: .85rem; }
-.card-note { padding: 0 .9rem .4rem; }
+.card-note { padding: 0 var(--panel-pad) .4rem; }
 .accept-note { padding: .4rem .9rem; color: var(--warn); font-size: .85rem; }
 .accept-note.warning-callout {
   margin: .4rem .9rem;
@@ -486,7 +578,7 @@ select:focus, textarea:focus {
   display: flex;
   align-items: center;
   gap: .5rem;
-  padding: .55rem .9rem;
+  padding: .55rem var(--panel-pad);
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
 }
@@ -509,8 +601,13 @@ select:focus, textarea:focus {
   white-space: nowrap;
 }
 
-/* ── Badge system ────────────────────────────────────────────────────────── */
+/* ── Badge system ─────────────────────────────────────────────────────────
+   Base rule carries a neutral fill so a badge with no variant class (e.g. a raw
+   project stage string) still renders as a filled pill instead of invisible
+   transparent-background text — every variant below overrides these two props. */
 .badge {
+  background: var(--line);
+  color: var(--ink);
   font-size: .72rem;
   font-weight: 600;
   border-radius: 4px;
@@ -532,6 +629,7 @@ select:focus, textarea:focus {
 .badge.missing { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
 .badge.compiled { background: var(--ok-bg); color: var(--ok); text-transform: none; letter-spacing: 0; }
 .badge.blocked { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
+.badge.overlay { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
 
 /* ── Diff table ──────────────────────────────────────────────────────────── */
 .diff {
@@ -575,7 +673,7 @@ select:focus, textarea:focus {
   gap: .5rem;
   padding: .3rem .5rem;
   border-left: 3px solid var(--line);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   font-size: .85rem;
 }
 .doc-delta-row.ins { background: var(--ok-bg); border-left-color: var(--ok); }
@@ -636,18 +734,12 @@ details.payload pre {
 }
 .state-legend .state-badge { margin-left: 0; }
 .state-legend span + .state-badge { margin-left: .5rem; }
+/* base look now comes from .field (see the shared rule above) — only its size stays local */
 #search {
-  font: inherit;
   font-size: .82rem;
-  padding: .3rem .6rem;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--bg);
-  color: var(--ink);
   width: 14rem;
   max-width: 40vw;
 }
-#search:focus { outline: none; border-color: var(--accent); }
 .chip {
   font-size: .8rem;
   font-weight: 500;
@@ -679,7 +771,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   overflow: auto;
 }
 #prompt-list { padding: .3rem; }
-#prompt-detail { padding: .9rem 1rem 1rem; }
+#prompt-detail { padding: var(--panel-pad); }
 
 .list-group {
   display: flex;
@@ -882,7 +974,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   padding: .4rem .65rem .4rem 1.7rem;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .resource-row:hover { border-color: var(--accent); box-shadow: 0 2px 6px rgba(0,0,0,.05); }
@@ -893,7 +985,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   top: 50%;
   transform: translateY(-50%);
   width: .5rem; height: .5rem;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--muted);
   opacity: .5;
 }
@@ -904,7 +996,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   min-width: 0;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--ink);
   padding: .3rem .5rem;
   font-size: .82rem;
@@ -931,7 +1023,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   background: var(--bg);
   color: var(--ink);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: .5rem;
   resize: vertical;
   box-sizing: border-box;
@@ -946,7 +1038,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   font-size: .74rem;
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   padding: .05rem .55rem;
 }
 
@@ -1167,6 +1259,10 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 /* ── Ops drawer (compile/deploy log) ─────────────────────────────────────── */
 #ops-drawer {
   position: fixed;
+  /* bottom is reset inline by repositionOpsDrawer() (app.js) whenever #graph-dock or
+     #compose is visible, so this drawer always stacks ABOVE that dock instead of
+     covering its buttons — the two can be open at once (global Compile/Deploy vs.
+     the per-tab dock) and neither may block the other. */
   bottom: 0;
   left: var(--sidebar-width);
   right: 0;
@@ -1174,7 +1270,9 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   background: var(--panel);
   border-top: 1px solid var(--line);
   box-shadow: 0 -2px 10px rgba(0,0,0,.08);
+  transition: bottom .15s ease;
 }
+@media (prefers-reduced-motion: reduce) { #ops-drawer { transition: none; } }
 #ops-drawer-bar { display: flex; align-items: center; gap: .8rem; padding: .5rem 1.2rem; }
 #ops-drawer-toggle { padding: .1rem .55rem; }
 #ops-drawer-status { font-size: .88rem; }
@@ -1222,7 +1320,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0,0,0,.28);
   overflow: hidden;
 }
@@ -1290,7 +1388,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 40px rgba(0,0,0,.28);
   overflow: hidden;
 }
@@ -1337,7 +1435,11 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   display: grid;
   grid-template-columns: minmax(180px, 240px) 1fr;
   gap: 1rem;
-  align-items: start;
+  /* stretch (the grid default) — both columns now fill #view-graph's full remaining
+     height, rather than sizing to their own content, so each can scroll internally. */
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 1rem;
 }
 /* Collapse to single column only on genuinely narrow viewports (icon sidebar means
    workspace is ~viewport - 52px, so 700px viewport → ~648px workspace) */
@@ -1347,20 +1449,13 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  max-height: calc(100vh - 136px);
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.graph-proj-search {
-  margin: .4rem .4rem .2rem;
-  font: inherit;
-  padding: .4rem .6rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--ink);
-}
+/* base look now comes from .field — only placement stays local */
+.graph-proj-search { margin: .4rem .4rem .2rem; }
 .graph-proj-list { overflow: auto; padding: .2rem .4rem .4rem; }
 .graph-proj-empty { padding: .6rem .3rem; }
 .graph-proj-row {
@@ -1388,24 +1483,87 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .graph-proj-sub { display: flex; align-items: center; gap: .4rem; font-size: .74rem; }
 
-#graph-workspace { min-width: 0; }
-.graph-ws-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
-.graph-ws-title { font-size: 1rem; }
-.graph-ws-slug { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+/* the tab's actual scroll container — see the #view-graph comment above.
+   Also a query container: everything inside sizes against the WORKSPACE's width, not the
+   viewport's. A viewport media query is the wrong instrument here — at a 1280px viewport
+   this workspace is only ~920px (52px icon rail + 240px project list + gaps), and the
+   panes inside it narrower still, so viewport breakpoints fire hundreds of pixels too
+   late and rows collapse before anything reflows. */
+#graph-workspace {
+  min-width: 0; height: 100%; overflow-y: auto; padding-bottom: 4.5rem;
+  container-type: inline-size;
+  container-name: graphws;
+}
+/* Sticky within #graph-workspace's own scroll, not the viewport — project identity
+   stays visible no matter how far down a long registry the operator has scrolled. */
+.graph-ws-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  padding-top: .1rem;
+  margin-bottom: .3rem;
+}
 
+/* ── Project panel (Knowledge Graph tab: identity + repos) ──────────────────── */
+/* F1 of the console usability audit: resting state is one summary line — the repo
+   roster used to render in full on every visit (340–560px, pushing the first document
+   below the fold). It now lives in .project-config-detail, disclosed by "View config". */
+.project-panel .card-head { align-items: center; min-height: var(--ctrl-md); }
+/* The only h1 in the Knowledge Graph tab (F7 of the console usability audit — the view
+   previously had no heading elements at all) — reset to read exactly like the plain
+   bold label it replaces, since visually this is a card-head field, not a page banner. */
+.project-panel-title { display: inline; margin: 0; font-size: inherit; font-weight: 600; }
+.project-panel-actions { display: flex; gap: var(--sp-2); flex: none; }
+.project-config-detail {
+  border-top: 1px solid var(--line);
+  padding-top: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+.push-right { margin-left: auto; }
+.project-repo-list { display: flex; flex-direction: column; gap: .3rem; }
+.project-repo-view-row {
+  display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+  font-size: .85rem;
+}
+.project-repo-view-row code { font-family: var(--mono); }
+.project-repo-view-row .repo-url { font-family: var(--mono); font-size: .78rem; opacity: .8; }
+.project-repo-rows { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .35rem; }
+.project-repo-row { display: flex; gap: .4rem; align-items: center; }
+.project-repo-row input {
+  padding: .35rem .5rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
+.project-repo-row input:first-child { flex: 1.2; font-family: var(--mono); font-size: .82rem; }
+.project-repo-row input:nth-child(2) { flex: 1; }
+
+/* F6 of the console usability audit: a 50/50 split for panes that are never 50/50 —
+   Discovery holds one watch and a filter (measured ~270px); Registry holds the
+   project's full document list (measured up to 2,850px). Weight toward the registry;
+   align-items:start already keeps Discovery from stretching to match.
+   Single column is the DEFAULT — side-by-side is opt-in above a workspace width that
+   can actually seat both (Discovery needs ~320px before its three watch buttons and the
+   registry's four columns start fighting each other). */
 .graph-panes {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 1rem;
   align-items: start;
 }
-@media (max-width: 860px) { .graph-panes { grid-template-columns: 1fr; } }
+@container graphws (min-width: 1000px) {
+  .graph-panes { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.9fr); }
+}
 .graph-pane {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: .6rem .8rem;
+  padding: var(--panel-pad);
   min-width: 0;
+  /* each pane is itself a query container — the registry grid below reflows against the
+     pane it actually lives in, which is the only width that matters to it. */
+  container-type: inline-size;
+  container-name: pane;
 }
 .pane-head {
   display: flex;
@@ -1413,7 +1571,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   gap: .5rem;
   margin-bottom: .55rem;
 }
-.pane-head strong { flex: 1; }
+.pane-head strong, .pane-head-title { flex: 1; margin: 0; font-size: inherit; font-weight: 600; }
 .pane-hint { padding: .4rem 0; }
 
 .left-pane-tabs { display: flex; gap: 1rem; margin-bottom: .55rem; border-bottom: 1px solid var(--line); }
@@ -1444,12 +1602,8 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 
 /* ── Shared row layout (staged + registry) ───────────────────────────────── */
 .staged-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; margin-bottom: .5rem; }
-.staged-search {
-  flex: 1; min-width: 8rem; font: inherit;
-  padding: .3rem .55rem;
-  border: 1px solid var(--line); border-radius: 6px;
-  background: var(--bg); color: var(--ink);
-}
+/* base look now comes from .field — only its flex sizing stays local */
+.staged-search { flex: 1; min-width: 8rem; }
 .staged-info { flex: 1; font-size: .76rem; }
 
 /* ── Watched scopes strip ─────────────────────────────────────────────────
@@ -1462,31 +1616,52 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   gap: .3rem;
   margin-bottom: .6rem;
 }
+/* flex-wrap, not nowrap: .row-actions holds three nowrap buttons (~215px of min-content)
+   and would otherwise win the shrink negotiation outright, squeezing the info column to
+   ~34px — at which width the label broke one character per line and the meta text grew a
+   250px-tall column beside vertically-centered buttons. Now the actions drop to their own
+   line whenever the info column can't hold its 11rem basis. */
 .watched-scope-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: .6rem;
+  flex-wrap: wrap;
+  gap: .4rem .6rem;
   padding: .4rem .6rem;
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   font-size: .82rem;
 }
 .watched-scope-info {
   display: flex;
   flex-direction: column;
   gap: .1rem;
+  flex: 1 1 11rem;
   min-width: 0;
 }
+.watched-scope-row .row-actions { flex: none; }
 /* A named watch reads as prose; an unnamed one is still a raw folder id/query, so it keeps
-   the mono face that makes those legible. */
+   the mono face that makes those legible. overflow-wrap (not word-break) breaks only a
+   word that genuinely cannot fit, instead of breaking every word at the column edge. */
 .watched-scope-label {
   font-weight: 600;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
-.watched-scope-label.untitled { font-family: var(--mono); }
-.watched-scope-meta { font-size: .74rem; }
+.watched-scope-label.untitled {
+  font-family: var(--mono);
+  /* an unnamed watch's label IS a raw folder id — clamp it rather than let 33 opaque
+     characters set the row's height. The full value stays in the meta title. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watched-scope-meta {
+  font-size: .74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Scope-count chip on a staged row — only rendered when more than one listing exists. */
 .badge.scope-count {
@@ -1517,13 +1692,13 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .stage-cmd-hint { font-size: .78rem; line-height: 1.45; }
 .stage-cmd-actions { display: flex; gap: .4rem; margin-top: .6rem; }
-.staged-row, .registry-row {
+.staged-row {
   display: flex; align-items: flex-start; gap: .55rem;
   padding: .45rem 0;
   border-top: 1px solid var(--line);
   font-size: .85rem;
 }
-.staged-row:first-of-type, .registry-row:first-of-type { border-top: none; }
+.staged-row:first-of-type { border-top: none; }
 .staged-row > input[type="checkbox"] { flex: none; margin-top: .25rem; }
 .staged-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .25rem; }
 .staged-nameline { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
@@ -1533,17 +1708,103 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .staged-mod { white-space: nowrap; font-size: .78rem; }
 .staged-meta .tiny, .staged-link { flex: none; white-space: nowrap; }
 .staged-link { font-size: .78rem; color: var(--accent); }
-.staged-row.pending, .registry-row.pending { opacity: .6; }
+.staged-row.pending { opacity: .6; }
 .staged-row.indraft { opacity: .8; }
 .registry-desc { font-size: .78rem; }
 .registry-id { font-size: .72rem; word-break: break-all; max-width: 12rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .25rem; }
-.tag-chip { font-size: .72rem; padding: .1rem .45rem; border-radius: 9px;
+.tag-chip { font-size: .72rem; padding: .1rem .45rem; border-radius: var(--radius-pill);
   border: 1px solid var(--line); background: var(--bg); }
+
+/* ── Registry grid (F5 of the console usability audit) ───────────────────────
+   .registry-header-row and .registry-row are each their own grid container, but
+   share the exact same --registry-grid template, so their cells land on identical
+   column edges without needing a single spanning grid (which nested effort groups —
+   indented via .effort-docs — would make awkward with subgrid/display:contents). */
+/* Widest form: name | description | date | id | actions. Every track is fr-or-fixed,
+   never `auto` — an `auto` max lets a track be sized by its content's max-content width,
+   and a wrapping flex child inside a grid cell reports an oversized intrinsic
+   contribution for that, which collapsed the fr tracks to 0 at narrow widths. */
+.registry-header-row, .registry-row {
+  --registry-grid: minmax(0, 1.5fr) minmax(0, 1.7fr) 5.5rem minmax(0, 1fr) 10.5rem;
+  display: grid;
+  grid-template-columns: var(--registry-grid);
+  gap: 0 var(--sp-3);
+  align-items: start;
+}
+/* The opaque store id is the first thing worth losing — it's a machine key, not something
+   read while scanning a list, and it stays available via each row's title and its Open
+   link. Threshold is set where the id track would fall to roughly a dozen characters;
+   below that it costs the name and description columns far more than the truncated stub
+   it shows is worth. */
+@container pane (max-width: 760px) {
+  .registry-header-row, .registry-row {
+    --registry-grid: minmax(0, 1.5fr) minmax(0, 1.7fr) 5.5rem 10.5rem;
+  }
+  .rrow-id { display: none; }
+}
+/* Below ~620px there is no honest column layout left — the name and description tracks
+   fall under ~150px each and every title wraps to three lines, which costs more height
+   than stacking does. The row becomes a small record instead: name, then description,
+   then date and actions sharing a footer line (the two shortest cells, so pairing them
+   saves a whole row of height per document). */
+@container pane (max-width: 620px) {
+  .registry-header-row { display: none; }
+  .registry-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "name name"
+      "desc desc"
+      "date actions";
+    gap: var(--sp-1) var(--sp-2);
+    padding: var(--sp-3) 0;
+    align-items: center;
+  }
+  .rrow-name { grid-area: name; }
+  .rrow-desc { grid-area: desc; }
+  .rrow-date { grid-area: date; font-size: .78rem; }
+  .rrow-actions { grid-area: actions; justify-content: flex-end; }
+  /* an empty description would otherwise leave a phantom gap row */
+  .rrow-desc:empty { display: none; }
+}
+.registry-header-row {
+  padding: 0 0 var(--sp-1);
+  font: 600 var(--fs-sm)/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--sp-1);
+}
+.registry-row {
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+  font-size: .85rem;
+}
+.registry-row:first-of-type { border-top: none; }
+.registry-row.pending { opacity: .6; }
 .registry-row.remove { background: var(--bad-bg); border-radius: 6px; padding-left: .4rem; }
 .registry-row.add    { background: var(--ok-bg);  border-radius: 6px; padding-left: .4rem; }
 .registry-row.edit   { background: var(--chg-bg); border-radius: 6px; padding-left: .4rem; }
+.rrow-cell { min-width: 0; }
+.rrow-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; }
+.rrow-name-text { min-width: 0; overflow-wrap: break-word; }
+.rrow-name-text.struck { text-decoration: line-through; color: var(--muted); }
+.rrow-desc { display: flex; flex-direction: column; gap: .2rem; }
+.rrow-date { white-space: nowrap; }
+/* one line, ellipsised — the full value is the span's own title attribute */
+.rrow-id .registry-id {
+  display: block;
+  max-width: 100%; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  word-break: normal;
+}
+.rrow-actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  justify-content: flex-end; text-align: right;
+  min-width: 0; /* don't let this flex container's intrinsic size drive the grid track */
+}
 
 /* ── Skills tab: accordion list ─────────────────────────────────────────── */
 .skills-toolbar {
@@ -1565,7 +1826,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   font: inherit;
   padding: .45rem .8rem .45rem 2.1rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel)
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 16 16' fill='none'><circle cx='7' cy='7' r='5.2' stroke='%238b949e' stroke-width='1.5'/><line x1='11' y1='11' x2='14.5' y2='14.5' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round'/></svg>")
     no-repeat .75rem center;
@@ -1593,7 +1854,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   padding: .75rem .85rem;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   transition: box-shadow .15s ease, border-color .15s ease;
 }
 .skill-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.07); }
@@ -1624,7 +1885,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   padding: .1rem .45rem;
   background: var(--chg-bg);
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   color: var(--accent);
   flex: none;
 }

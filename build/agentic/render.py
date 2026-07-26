@@ -17,16 +17,25 @@ from .loader import EXTENSION_ANCHOR, Prompt, Registry, Skill, SkillResource, do
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
 
-# The source label for a generated section inside an otherwise user-owned document
+# The source label for a generated region inside an otherwise user-owned document
 # (e.g. the knowledge-graph document block appended after a project's prose). It is NOT a
 # registry partial — it routes to no file. Recording it as a `section_bodies` source lets
 # adopt/drift treat that region as machine-owned (skip it) while protecting the prose
 # sections around it, all WITHOUT any marker in the deployed file (invariant #5).
+#
+# A document may carry MORE THAN ONE generated region, in any position — notably a project
+# node, whose generated repo roster sits inside `## Navigation` (near the top, so the
+# reserved-section order holds) while its generated document map trails the prose. Each
+# region kind gets its own `<generated:…>` label so the regions stay distinguishable;
+# `is_generated_source` matches the whole family.
 GENERATED_SECTION = "<generated>"
+GENERATED_NAV = "<generated:navigation>"
 
 
 def is_generated_source(src: str) -> bool:
-    return src == GENERATED_SECTION
+    """True for any machine-owned region label (`<generated>`, `<generated:navigation>`, …)
+    — never a registry partial path, which can't start with `<`."""
+    return src == GENERATED_SECTION or src.startswith("<generated:")
 
 
 def prose_sections(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -58,14 +67,21 @@ def stub_document(import_line: str) -> str:
 
 def split_live_sections(
     base_sections: list[tuple[str, str]], live: str
-) -> dict[str, str] | None:
-    """Carve an edited multi-section file back into per-source text.
+) -> list[tuple[str, str]] | None:
+    """Carve an edited multi-section file back into per-region text.
 
     `base_sections` is the (source, body) breakdown recorded at deploy time. We align
     the live file against the document we deployed and map each section's content back
     out, so `adopt` can route an edit to its registry partial with no in-file markers.
-    Returns {source: live_text}, or None if an edit straddles a section boundary
-    (can't be cleanly attributed — the caller then resolves by hand).
+    Returns [(source, live_text), …] IN DOCUMENT ORDER, or None if an edit straddles a
+    section boundary (can't be cleanly attributed — the caller then resolves by hand).
+
+    Ordered pairs, not a {source: text} mapping: one partial may contribute SEVERAL
+    regions to a document when a generated region is interleaved between them (a project
+    node's prose is split around its generated `## Navigation` repo roster). Keying by
+    source would silently collapse those regions to whichever came last. Callers that
+    write back to a partial rejoin its regions in this order — see
+    `commands.route_into_registry`.
     """
     base_lines = plain_document(base_sections).rstrip("\n").split("\n")
     live_lines = live.rstrip("\n").split("\n")
@@ -88,14 +104,21 @@ def split_live_sections(
                 return j1 if bi == i1 else None      # boundary inside an edit
         return len(live_lines)
 
-    out: dict[str, str] = {}
+    out: list[tuple[str, str]] = []
     for k, (src, body) in enumerate(base_sections):
         a = to_live(starts[k])
         b = to_live(starts[k] + len(body.split("\n")))   # first line past this section
         if a is None or b is None or b < a:
             return None
-        out[src] = "\n".join(live_lines[a:b]).strip("\n")
+        out.append((src, "\n".join(live_lines[a:b]).strip("\n")))
     return out
+
+
+def rejoin_regions(carved: list[tuple[str, str]], src: str) -> str:
+    """Every region `src` contributed to a carved document, rejoined in document order
+    exactly as `plain_document` joined them — so a partial split around a generated
+    region round-trips to the same body it was deployed from."""
+    return "\n\n".join(text for s, text in carved if s == src)
 
 
 
@@ -332,6 +355,30 @@ def dynamic_branches_block(branches: list[str]) -> str:
              "Custom branches discovered under `registry/context/<branch>/AGENTS.md`:", ""]
     for b in sorted(branches):
         lines.append(f"- `{b}/`")
+    return "\n".join(lines) + "\n"
+
+
+def navigation_block(repos: list[tuple[str, str]], *, emit_heading: bool = True) -> str:
+    """The `<generated:navigation>` repo roster for a project node: one line per cloned
+    checkout, `dirname/` plus its `repo_notes:` description. The SINGLE source for a
+    project's repo list — a project's prose never hand-lists the same checkouts, which is
+    what used to drift out of sync with the manifest.
+
+    Deliberately NO clone URL: `## Navigation` is about local paths the agent opens with
+    file/terminal tools, and the remote is deploy-time machinery the agent can read from
+    the checkout's own `.git/config` on the rare occasion it needs it — not context worth
+    paying for on every request.
+
+    `emit_heading=False` when the project's prose already opened `## Navigation` (the
+    roster then attaches beneath that authored routing prose) — the same
+    prose-opened-the-section convention `planner._connection_emit` uses for the document
+    map. Empty string when the project has no repos, so the section never renders bare.
+    """
+    if not repos:
+        return ""
+    lines = ["## Navigation", ""] if emit_heading else []
+    for dirname, description in repos:
+        lines.append(f"- `{dirname}/` — {description}" if description else f"- `{dirname}/`")
     return "\n".join(lines) + "\n"
 
 

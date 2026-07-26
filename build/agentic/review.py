@@ -33,7 +33,7 @@ from . import commands, loader, render, staging as staging_mod
 from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
-from .planner import plan_machine
+from .planner import plan_machine, _project_repos
 
 UI_DIR = Path(__file__).resolve().parent.parent / "review_ui"
 DECISIONS = "decisions.jsonl"
@@ -120,9 +120,11 @@ def _graph_candidate_targets(reg: Registry, meta: dict, payload: str
         [upserted_effort_id, …], [removed_effort_id, …]) a graph candidate proposes;
     ("", [], [], [], []) for non-graph. Removals live in meta (the fragment carries
     only upserts), so removed docs/efforts are flagged in-flight just like upserted
-    ones."""
+    ones. A `kind: project` candidate isn't a document/effort proposal, but it still
+    carries `project:` in its meta — surfaced here too so the console can flag it
+    against the same project without a second lookup path."""
     if meta.get("kind") != "graph":
-        return "", [], [], [], []
+        return meta.get("project") or "", [], [], [], []
     slug = meta.get("project") or ""
     removals = [str(r) for r in (meta.get("removals") or [])]
     effort_removals = [str(r) for r in (meta.get("effort_removals") or [])]
@@ -199,6 +201,17 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         current = (graphmod.canonical_jsonld(reg.graphs[slug])
                    if slug in reg.graphs else "")
         return current, graphmod.canonical_jsonld(merged), True, ""
+    if meta.get("kind") == "project":
+        # a project-manifest edit: the payload IS the full replacement YAML (built by
+        # propose_project_edit, already re-validated at propose time) — diff whole-file,
+        # same shape as a verbatim skill/prompt edit, but never routed through the
+        # Markdown-only checks below (a manifest is YAML, not prose).
+        rp = meta.get("registry_path") or ""
+        if not rp:
+            return "", payload, False, "no registry route for a project candidate"
+        dest = reg.root / "registry" / rp
+        current = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+        return current, payload, True, ""
     if meta.get("sections"):
         cur = [(s["source"], reg.partials[s["source"]].body)
                for s in meta["sections"] if s["source"] in reg.partials]
@@ -291,16 +304,23 @@ def _stale(reg: Registry, meta: dict) -> bool | None:
     """Has the registry moved since this candidate was captured? None = unknowable
     (no base recorded, or the deployed render flavor can't be reconstructed here)."""
     if meta.get("sections"):
-        for s in meta["sections"]:
-            p = reg.partials.get(s["source"])
+        recorded = [(s["source"], s["text"]) for s in meta["sections"]]
+        # A partial split around a generated region contributes several regions; compare
+        # it ONCE against its regions rejoined in document order, or each fragment would
+        # read as a mismatch against the whole partial body and report permanent staleness.
+        for src in dict.fromkeys(s for s, _ in recorded):
+            if render.is_generated_source(src):
+                continue   # machine-owned — regenerated every deploy, never a staleness signal
+            p = reg.partials.get(src)
             if p is None:
                 return True
-            # `s["text"]` is the EXPANDED section text recorded at deploy (planner runs
-            # the personalization pass before it lands in the lockfile/meta); `p.body` is
-            # always the placeholder form. Fold the recorded text back through this
-            # partial's own tokens before comparing, or every personalized partial would
-            # show as permanently stale regardless of whether it actually changed.
-            reversed_text = render.reverse_expand_placeholders(reg, p.body, s["text"].strip("\n"))
+            text = render.rejoin_regions(recorded, src)
+            # that text is the EXPANDED form recorded at deploy (planner runs the
+            # personalization pass before it lands in the lockfile/meta); `p.body` is
+            # always the placeholder form. Fold it back through this partial's own tokens
+            # before comparing, or every personalized partial would show as permanently
+            # stale regardless of whether it actually changed.
+            reversed_text = render.reverse_expand_placeholders(reg, p.body, text.strip("\n"))
             if p.body != reversed_text:
                 return True
         return False
@@ -393,6 +413,11 @@ def decide(reg: Registry, candidate_id: str, decision: str, reason: str = "",
         if meta.get("kind") == "graph":
             # a knowledge-graph mapping upserts into registry/graph/, not prose routing
             changed, err = _apply_graph_candidate(reg, meta, payload)
+            if err:
+                return {"ok": False, "error": err}
+        elif meta.get("kind") == "project":
+            # a project-manifest edit writes YAML verbatim, not prose routing
+            changed, err = _apply_project_candidate(reg, meta, payload)
             if err:
                 return {"ok": False, "error": err}
         else:
@@ -533,6 +558,40 @@ def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[lis
     if removed_docs:
         dismiss_docs(reg, slug, removed_docs, source="removal")
     return [_graph_rel(reg, slug)], None
+
+
+def _apply_project_candidate(reg: Registry, meta: dict, payload: str) -> tuple[list[str], str | None]:
+    """Accept a `kind: project` candidate: re-validate the payload one more time (it sat
+    on disk as untrusted text since propose — same posture as _revalidate_verbatim for
+    skills/prompts) by loading it as YAML, overlaying it onto a scratch copy of the
+    registry, and running loader._validate. Only then is it written verbatim to the
+    project's manifest file. Returns (changed_paths, error)."""
+    slug = meta.get("project") or ""
+    if slug not in reg.projects:
+        return [], f"unknown project {slug!r} for project candidate"
+    rp = meta.get("registry_path") or ""
+    if not rp:
+        return [], "no registry route for a project candidate"
+    try:
+        updated = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as e:
+        return [], f"invalid project manifest YAML: {e}"
+    if not isinstance(updated, dict):
+        return [], "project manifest must be a mapping"
+    import copy
+    from .io import write_text
+    trial = copy.deepcopy(reg)
+    trial.projects[slug] = {**updated, "_is_local": reg.projects[slug].get("_is_local")}
+    try:
+        loader._validate(trial)
+    except loader.RegistryError as e:
+        return [], str(e)
+    dest = reg.root / "registry" / rp
+    new_text = payload.rstrip("\n") + "\n"
+    if dest.is_file() and dest.read_text(encoding="utf-8") == new_text:
+        return [], None
+    write_text(dest, new_text)
+    return [rp], None
 
 
 def _graph_note(n_docs: int, n_removals: int,
@@ -761,6 +820,120 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         meta["store"] = store
     cid = _write_candidate(reg, f"graph-{slug}", meta, "graph.jsonld", fragment)
     return {"ok": True, "id": cid, "registry_path": graph_rel}
+
+
+# ── project manifest editing (the Knowledge Graph tab's Project panel) ─────────
+def _project_manifest_fields(proj: dict) -> dict:
+    """The persisted-YAML view of a project manifest — every key except the
+    loader-computed `_is_local` tag (see loader._load_projects)."""
+    return {k: v for k, v in proj.items() if not k.startswith("_")}
+
+
+def _project_file(reg: Registry, slug: str) -> Path:
+    """`registry/projects/<slug>.yaml` or `registry/local/projects/<slug>.yaml`,
+    matching whichever layer the project's manifest currently loads from — mirrors
+    `_graph_dir`'s core-vs-overlay routing for the same slug."""
+    proj = reg.projects.get(slug) or {}
+    sub = "local/projects" if proj.get("_is_local") else "projects"
+    return reg.root / "registry" / sub / f"{slug}.yaml"
+
+
+_PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes"}
+
+
+def propose_project_edit(reg: Registry, slug: str, fields: dict,
+                         reason: str = "") -> dict:
+    """Propose an identity/repo edit to a project's manifest as a `kind: project` inbox
+    candidate: `name`, `description`, `stage`, `repo` (the full replacement URL list —
+    a single URL collapses to a plain string, matching manifest convention), `repo_notes`
+    (the full replacement basename -> description map). Anything not named in `fields` is
+    left untouched — every other manifest key (document_store, local_path, context, skills,
+    agentic_tree, ...) passes through as-is, same "whitelist overlay" shape as
+    propose_meta_edit for skills/prompts.
+
+    The edited manifest is re-validated against a scratch copy of the whole registry
+    (loader._validate) before it ever reaches the inbox — "reject early", not just at
+    accept time, mirroring propose_meta_edit's pre-validation for skill/prompt frontmatter.
+    Returns {ok, id, registry_path} or {ok: False, error}."""
+    proj = reg.projects.get(slug)
+    if proj is None:
+        return {"ok": False, "error": f"unknown project {slug!r}"}
+    fields = fields or {}
+    unknown = set(fields) - _PROJECT_EDITABLE_FIELDS
+    if unknown:
+        return {"ok": False, "error": f"unknown or non-editable field(s) {sorted(unknown)}"}
+
+    updated = _project_manifest_fields(proj)
+    if "name" in fields:
+        name = str(fields["name"]).strip()
+        if not name:
+            return {"ok": False, "error": "name must not be empty"}
+        updated["name"] = name
+    if "description" in fields:
+        desc = str(fields["description"] or "").strip()
+        if desc:
+            updated["description"] = desc
+        else:
+            updated.pop("description", None)
+    if "stage" in fields:
+        stage = str(fields["stage"] or "").strip()
+        if stage not in loader.VALID_STAGES:
+            return {"ok": False,
+                    "error": f"stage must be one of {sorted(loader.VALID_STAGES)}"}
+        updated["stage"] = stage
+    if "repo" in fields:
+        raw = fields["repo"]
+        if isinstance(raw, list):
+            urls = [str(u).strip() for u in raw if str(u).strip()]
+        elif isinstance(raw, str) and raw.strip():
+            urls = [raw.strip()]
+        else:
+            urls = []
+        if not urls:
+            updated.pop("repo", None)
+        elif len(urls) == 1:
+            updated["repo"] = urls[0]
+        else:
+            updated["repo"] = urls
+    if "repo_notes" in fields:
+        raw_notes = fields["repo_notes"] or {}
+        if not isinstance(raw_notes, dict):
+            return {"ok": False, "error": "repo_notes must be a mapping"}
+        notes = {str(k).strip(): str(v).strip() for k, v in raw_notes.items()
+                if str(v).strip()}
+        if notes:
+            updated["repo_notes"] = notes
+        else:
+            updated.pop("repo_notes", None)
+
+    import copy
+    trial = copy.deepcopy(reg)
+    trial.projects[slug] = {**updated, "_is_local": proj.get("_is_local")}
+    try:
+        loader._validate(trial)
+    except loader.RegistryError as e:
+        return {"ok": False, "error": str(e)}
+
+    dest = _project_file(reg, slug)
+    registry_path = str(dest.relative_to(reg.root / "registry")).replace("\\", "/")
+    payload = yaml.safe_dump(updated, sort_keys=False, allow_unicode=True)
+    meta = {
+        "registry_path": registry_path,
+        "kind": "project",
+        "project": slug,
+        "source": {"machine": socket.gethostname() or "console", "tool": "console"},
+        "base_hash": "",
+        "deploy_path": "",
+        "sources": [registry_path],
+        "captured_at": _now(),
+        "note": "project manifest edited in the operator console",
+    }
+    if dest.is_file():
+        meta["registry_base_hash"] = sha256(dest.read_text(encoding="utf-8"))
+    if reason:
+        meta["reason"] = reason
+    cid = _write_candidate(reg, f"project-{slug}", meta, f"{slug}.yaml", payload)
+    return {"ok": True, "id": cid, "registry_path": registry_path}
 
 
 # ── propose (a console prompt-library edit → inbox candidate) ─────────────────
@@ -1721,10 +1894,19 @@ def graph_index(reg: Registry) -> list[dict]:
             return d.is_part_of[len(graphmod.CREATIVE_WORK_NS):] if d.is_part_of.startswith(
                 graphmod.CREATIVE_WORK_NS) else ""
 
+        proj = reg.projects[slug]
         out.append({
             "slug": slug,
-            "name": reg.projects[slug].get("name") or slug,
+            "name": proj.get("name") or slug,
             "has_graph": pg is not None,
+            # project identity + repos — the Project panel's editable fields (propose via
+            # POST /api/project/edit -> propose_project_edit -> the Inbox, same valve as
+            # everything else). is_local flags where an accepted edit will land.
+            "description": proj.get("description") or "",
+            "stage": proj.get("stage") or "",
+            "is_local": bool(proj.get("_is_local")),
+            "repo": _project_repos(proj),
+            "repo_notes": dict(proj.get("repo_notes") or {}),
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
@@ -2089,6 +2271,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/graph/purge", "/api/graph/refresh",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
+                                  "/api/project/edit",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
@@ -2197,6 +2380,15 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     str(body.get("reason", "") or ""),
                     effs if isinstance(effs, list) else [],
                     eff_rem if isinstance(eff_rem, list) else [])
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/project/edit":
+                # propose a project identity/repo edit as a kind:project candidate —
+                # only writes inbox/ (the Knowledge Graph tab's Project panel)
+                fields = body.get("fields")
+                result = propose_project_edit(
+                    holder["reg"], str(body.get("slug", "")),
+                    fields if isinstance(fields, dict) else {},
+                    str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/dismiss":
                 # Discovery's manual Dismiss action — moves doc(s) to Recovery

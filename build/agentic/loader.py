@@ -642,6 +642,29 @@ def _validate(reg: Registry) -> None:
             else:
                 raise RegistryError(
                     f"project {slug}: 'repo' must be a string or a list of strings")
+        # `repo_notes:` (optional): a one-line description per repo, keyed by the repo's
+        # checkout basename (the same identity `repo_notes`/Workspace Layout/clone-dest all
+        # key off) — never by URL, which is what actually varies across owners/hosts. Feeds
+        # the generated `## Workspace Layout` section (graph.project_full_markdown) so a
+        # project's prose partial never has to hand-list what the manifest already states.
+        notes_raw = proj.get("repo_notes")
+        if notes_raw is not None and notes_raw != {}:
+            if not isinstance(notes_raw, dict):
+                raise RegistryError(f"project {slug}: 'repo_notes' must be a mapping "
+                                    f"of repo basename to description")
+            known_basenames = {
+                _repo_basename(u) for u in (
+                    repo_raw if isinstance(repo_raw, list)
+                    else ([repo_raw] if isinstance(repo_raw, str) and repo_raw.strip()
+                          else []))}
+            for key, val in notes_raw.items():
+                if key not in known_basenames:
+                    raise RegistryError(
+                        f"project {slug}: repo_notes key {key!r} does not match any "
+                        f"'repo' checkout basename; known: {sorted(known_basenames)}")
+                if not isinstance(val, str) or not val.strip():
+                    raise RegistryError(
+                        f"project {slug}: repo_notes[{key!r}] must be a non-empty string")
         for mname, raw in (proj.get("local_path") or {}).items():
             if mname not in reg.machines:
                 raise RegistryError(

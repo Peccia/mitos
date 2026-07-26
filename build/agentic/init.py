@@ -18,6 +18,21 @@ from .loader import LOCAL_OVERLAY
 ORG_TEMPLATES_DIR = "registry/templates/org"
 OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 
+# The three supported machine use cases (see machines/example-*.yaml for the shipped
+# templates these mirror) — each maps directly to a `targets:` list. `hermes` in a
+# machine's targets excludes the coding-harness targets on that same machine
+# (loader._validate's machine-role exclusivity check), so "coding harnesses only" and
+# "full agentic assistant" are mutually exclusive by construction, not just by this
+# wizard's framing. Org skills (`org-software`/`org-design`/`org-marketing`) declare
+# `targets: [hermes]` only, and the org-domain routing table/lines render solely on the
+# agents-md/hermes tree (render.org_domain_table, graph._effort_domain_line) — so only
+# the "hermes" use case ever deploys orgs; "workstation" and "coding" never do.
+MACHINE_USE_CASES: dict[str, list[str]] = {
+    "workstation": ["claude-code"],
+    "coding": ["antigravity", "claude-app", "claude-code"],
+    "hermes": ["hermes", "agents-md"],
+}
+
 
 def org_templates(root: Path) -> list[str]:
     """The available org seeds (folder names under registry/templates/org/)."""
@@ -139,3 +154,51 @@ def _overlay_readme(backend: str) -> str:
             "added; core-only files remain.\n\n"
             f"Workspace backend: `{backend}` — see the connector docs to connect it, then "
             "`python build/mitos.py connect --project <slug>`.\n")
+
+
+def scaffold_machine(root: Path, *, name: str, os_name: str, use_case: str,
+                     overwrite: bool = False) -> str | None:
+    """Write `registry/local/machines/<name>.yaml` for one of the three supported use
+    cases (see `MACHINE_USE_CASES`) — the profile that actually decides what `deploy`
+    materializes on this box. Mirrors `machines/example-*.yaml`'s field/path conventions.
+
+    **Non-destructive by default** (matches `scaffold_overlay`): does nothing and returns
+    None when the profile already exists, unless `overwrite=True`. Returns the
+    registry-relative path it wrote, or None when it skipped. Raises ValueError on an
+    unknown use case."""
+    if use_case not in MACHINE_USE_CASES:
+        raise ValueError(f"unknown use case {use_case!r}; available: "
+                         f"{sorted(MACHINE_USE_CASES)}")
+    dest = root / "registry" / LOCAL_OVERLAY / "machines" / f"{name}.yaml"
+    if dest.exists() and not overwrite:
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(_machine_yaml(name, os_name, use_case), encoding="utf-8")
+    return f"{LOCAL_OVERLAY}/machines/{name}.yaml"
+
+
+def _machine_yaml(name: str, os_name: str, use_case: str) -> str:
+    targets = MACHINE_USE_CASES[use_case]
+    projects_root = "C:/Projects" if os_name == "windows" else "~/Projects"
+    lines = [f"name: {name}", f"os: {os_name}",
+             f"targets: [{', '.join(targets)}]", "paths:"]
+    if use_case == "workstation":
+        lines += [
+            f'  projects_root: "{projects_root}"',
+            '  claude_code_skills: "~/.claude/skills"',
+        ]
+    elif use_case == "coding":
+        lines += [
+            f'  projects_root: "{projects_root}"',
+            '  antigravity_config: "~/.gemini/config"',
+            '  antigravity_skills: "~/.gemini/config/skills"',
+            '  claude_code_skills: "~/.claude/skills"',
+            '  claude_skills_staging: "~/ClaudeSkills"',
+        ]
+    else:  # hermes
+        lines += [
+            '  hermes_home: "~/.hermes"',
+            '  hermes_config: "~/.hermes/config.yaml"',
+            '  assistant_root: "~/MitosAgent"',
+        ]
+    return "\n".join(lines) + "\n"
