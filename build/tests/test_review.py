@@ -76,6 +76,106 @@ def test_graph_index_shows_all_when_no_local_overlay():
     assert "mitos" in slugs
 
 
+def test_propose_project_edit_creates_kind_project_candidate_and_accepts_cleanly():
+    """propose_project_edit -> decide() round-trip: name/description/stage/repo/repo_notes
+    land in the manifest verbatim, everything else (document_store, local_path, context)
+    passes through untouched, and the result reloads cleanly from disk."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, graph_index, load_candidates, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {
+        "name": "Example Project Renamed",
+        "description": "an updated one-line summary",
+        "stage": "maintain",
+        "repo": ["git@github.com:you/x.git", "git@github.com:you/y.git"],
+        "repo_notes": {"x": "the main checkout"},
+    }, "")
+    assert out["ok"], out
+    assert out["registry_path"] == "projects/example-project.yaml"
+
+    candidates = load_candidates(treg)
+    mine = next(c for c in candidates if c["id"] == out["id"])
+    assert mine["kind"] == "project"
+    assert mine["acceptable"]
+    assert mine["project"] == "example-project"
+
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    assert result["changed"] == ["projects/example-project.yaml"]
+    written = tmp / "registry" / "projects" / "example-project.yaml"
+    text = written.read_text(encoding="utf-8")
+    assert "Example Project Renamed" in text
+    assert "an updated one-line summary" in text
+    assert "maintain" in text
+
+    reloaded = loadermod.load(tmp)
+    proj = reloaded.projects["example-project"]
+    assert proj["name"] == "Example Project Renamed"
+    assert proj["stage"] == "maintain"
+    assert proj["repo"] == ["git@github.com:you/x.git", "git@github.com:you/y.git"]
+    assert proj["repo_notes"] == {"x": "the main checkout"}
+    # untouched fields survive the edit
+    assert proj["document_store"] == "none"
+    assert proj["local_path"] == {"example-windows": "example-project"}
+
+    idx = next(g for g in graph_index(reloaded) if g["slug"] == "example-project")
+    assert idx["stage"] == "maintain"
+    assert idx["repo_notes"] == {"x": "the main checkout"}
+
+
+def test_propose_project_edit_rejects_unknown_field():
+    from agentic.review import propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"document_store": "gws"}, "")
+    assert not out["ok"]
+    assert "document_store" in out["error"]
+
+
+def test_propose_project_edit_rejects_bad_repo_notes():
+    """A repo_notes key that doesn't match any repo's checkout basename fails loader
+    validation at PROPOSE time — never reaches the inbox."""
+    from agentic.review import propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {
+        "repo": "git@github.com:you/x.git",
+        "repo_notes": {"nope": "wrong key"},
+    }, "")
+    assert not out["ok"]
+    assert "does not match any" in out["error"]
+    assert not (loader.inbox_dir(treg)).is_dir() or not list(loader.inbox_dir(treg).iterdir())
+
+
+def test_propose_project_edit_rejects_unknown_project():
+    from agentic.review import propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "does-not-exist", {"name": "x"}, "")
+    assert not out["ok"]
+    assert "unknown project" in out["error"]
+
+
+def test_propose_project_edit_clearing_repo_removes_repo_notes_too():
+    """Clearing `repo` while `repo_notes` is left unset in this edit must still pass
+    validation — repo_notes only carries forward if the caller explicitly resends it, and
+    an edit that drops repo entirely must not leave an orphaned repo_notes behind."""
+    from agentic.review import decide, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    treg.projects["example-project"]["repo"] = "git@github.com:you/x.git"
+    treg.projects["example-project"]["repo_notes"] = {"x": "note"}
+
+    out = propose_project_edit(treg, "example-project", {"repo": [], "repo_notes": {}}, "")
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    written = tmp / "registry" / "projects" / "example-project.yaml"
+    text = written.read_text(encoding="utf-8")
+    assert "repo_notes" not in text
+
+
 def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     """propose_new_skill needs no new acceptance-path logic: route_into_registry already
     writes a brand-new file verbatim when the target path doesn't exist (commands.py),

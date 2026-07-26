@@ -613,6 +613,89 @@ def test_repo_basename_forms():
     assert _repo_basename("https://github.com/Peccia/foo.git") == "foo"
     assert _repo_basename("https://example.com/bar/") == "bar"
 
+_EX_PARTIAL = "context/projects/example-project.md"
+
+
+def _rig_with_repos(prose_body: str | None = None):
+    """example-windows with example-project carrying two repos (one described), and
+    optionally a replacement prose body for its context partial."""
+    import copy
+    from dataclasses import replace as _replace
+    rig = _full_windows_rig()
+    rig.projects["example-project"] = copy.deepcopy(rig.projects["example-project"])
+    rig.projects["example-project"]["repo"] = [
+        "https://github.com/you/frontend.git", "https://github.com/you/backend.git"]
+    rig.projects["example-project"]["repo_notes"] = {"frontend": "client UI"}
+    if prose_body is not None:
+        rig.partials = dict(rig.partials)
+        rig.partials[_EX_PARTIAL] = _replace(rig.partials[_EX_PARTIAL], body=prose_body)
+    return rig
+
+
+def _example_node(rig):
+    from agentic import planner
+    return next(o for o in planner.plan_machine(rig, "example-windows")
+                if o.target == "agentic-graph"
+                and o.deploy_path.endswith("Projects/example-project/AGENTS.md"))
+
+
+def test_project_node_renders_repo_roster_inside_navigation():
+    """A project node's cloned checkouts render as the GENERATED `## Navigation` roster —
+    the single source for the repo list — ahead of the generated document block, with no
+    `## Workspace Layout` section and no clone URLs. This fixture's prose carries no `##`
+    of its own, so the roster supplies the heading."""
+    from agentic import render
+    node = _example_node(_rig_with_repos())
+    assert "## Workspace Layout" not in node.content
+    assert "## Navigation" in node.content
+    assert "- `frontend/` — client UI" in node.content
+    assert "- `backend/`" in node.content          # no note → bare checkout dir
+    assert "github.com/you/frontend.git" not in node.content   # URL is deploy machinery
+    # Navigation leads the generated document block (reserved-section order, invariant #12)
+    assert node.content.index("## Navigation") < node.content.index(
+        "Knowledge-graph documents for this project")
+    assert render.GENERATED_NAV in [s for s, _ in node.section_bodies]
+
+
+def test_project_node_roster_attaches_under_authored_navigation():
+    """When the prose already opens `## Navigation` (the apdict shape), the roster attaches
+    beneath the author's routing text instead of emitting a second heading — which splits
+    the partial into TWO regions around the generated one. The carve must keep both, or
+    adopt would silently drop the half above the roster."""
+    from agentic import render
+    prose = ("# Example Project\n\nintro line\n\n"
+             "## Navigation\n\nrouting prose here\n\n"
+             "## Tools\n\n- the browser\n")
+    node = _example_node(_rig_with_repos(prose))
+    assert node.content.count("## Navigation") == 1      # no duplicate heading
+    # roster lands under the authored routing prose, above the next reserved section
+    nav = node.content.index("routing prose here")
+    assert nav < node.content.index("- `frontend/` — client UI") < node.content.index("## Tools")
+
+    kinds = [s for s, _ in node.section_bodies]
+    assert kinds.count(_EX_PARTIAL) == 2, \
+        "prose is split around the generated roster, so it contributes two regions"
+    carved = render.split_live_sections(node.section_bodies, node.content)
+    assert carved is not None
+    # the partial's regions rejoin to exactly its authored prose — nothing generated leaks
+    # into what adopt would write back
+    rejoined = render.rejoin_regions(carved, _EX_PARTIAL)
+    assert "frontend/" not in rejoined
+    assert "routing prose here" in rejoined and "- the browser" in rejoined
+
+def test_project_node_without_repos_has_no_navigation_roster():
+    """A project with no repos degrades to exactly the shape it had before the roster
+    existed — no bare `## Navigation` heading, no empty region in the lockfile."""
+    from agentic import planner, render
+    rig = _full_windows_rig()   # example-project ships repo: "" (absent)
+    outs = planner.plan_machine(rig, "example-windows")
+    node = next(o for o in outs if o.target == "agentic-graph"
+                and o.deploy_path.endswith("Projects/example-project/AGENTS.md"))
+    assert "## Navigation" not in node.content
+    assert render.GENERATED_NAV not in [s for s, _ in node.section_bodies]
+    assert [s for s, _ in node.section_bodies].count(
+        "context/projects/example-project.md") == 1
+
 def test_plan_clones_gated_on_claude_code_env_and_repo():
     from agentic.planner import plan_clones
     assert plan_clones(reg, "example-linux") == []          # no claude-code target

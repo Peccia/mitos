@@ -58,6 +58,8 @@ let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left c
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
 let recoverFilter = "";    // client-side search text for the recovery list
 let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,description,dateModified,keywords}, lockId }
+let projectEditOpen = false;   // is the Project panel's identity/repo editor open, for graphSlug
+let projectEditVals = null;    // { name, description, stage, repos:[{url,description}] } while editing
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
 //   add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}},
@@ -715,9 +717,168 @@ function selectProject(slug) {
   stagedFilter = ""; stagedPool = "project";
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
+  projectEditOpen = false; projectEditVals = null;
   renderGraph();
   loadStaged(slug);
   loadDismissed(slug);
+}
+
+// ── Project panel: identity (name/description/stage) + repos, the Knowledge Graph
+// tab's first step toward a full Project view. Edits propose a `kind: project` inbox
+// candidate (POST /api/project/edit) — reviewed and Accepted in the Inbox tab like
+// everything else; nothing here writes the registry directly.
+function buildProjectPanel(container, g) {
+  const card = el("div", "card project-panel");
+  if (projectEditOpen && projectEditVals) {
+    card.append(projectEditorCard(g));
+    container.append(card);
+    return;
+  }
+  const head = el("div", "card-head");
+  head.append(el("strong", "", g.name), el("code", "", g.slug));
+  if (g.stage) head.append(el("span", "badge", g.stage));
+  if (g.is_local) head.append(el("span", "muted", "overlay"));
+  const editBtn = el("button", "tiny push-right", "Edit");
+  editBtn.onclick = () => {
+    projectEditVals = {
+      name: g.name || "", description: g.description || "", stage: g.stage || "",
+      repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
+    };
+    projectEditOpen = true;
+    renderGraph();
+  };
+  head.append(editBtn);
+  card.append(head);
+  if (g.description) card.append(el("p", "card-note muted", g.description));
+  if ((g.repo || []).length) {
+    const list = el("div", "card-note project-repo-list");
+    for (const url of g.repo) {
+      const bn = repoBasename(url);
+      const desc = (g.repo_notes || {})[bn] || "";
+      const row = el("div", "project-repo-view-row");
+      row.append(el("code", "", bn + "/"));
+      if (desc) row.append(el("span", "muted", desc));
+      row.append(el("span", "muted repo-url", url));
+      list.append(row);
+    }
+    card.append(list);
+  }
+  container.append(card);
+}
+
+// Last path segment of a git URL, minus a trailing .git — mirrors loader._repo_basename
+// client-side (the server is the source of truth; this is purely for display grouping,
+// matching repo URLs in g.repo to their g.repo_notes description).
+function repoBasename(url) {
+  let s = (url || "").trim().replace(/\/+$/, "");
+  if (s.endsWith(".git")) s = s.slice(0, -4);
+  const parts = s.replace(/:/g, "/").split("/");
+  return parts[parts.length - 1] || "repo";
+}
+
+function projectEditorCard(g) {
+  const card = el("div", "inline-editor");
+  const vals = projectEditVals;
+  const inputs = {};
+  const field = (key, label, ph) => {
+    const wrap = el("div", "graph-field");
+    wrap.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text"; inp.value = vals[key] || "";
+    if (ph) inp.placeholder = ph;
+    wrap.append(inp); card.append(wrap); inputs[key] = inp;
+    return inp;
+  };
+  field("name", "Name", "Project name");
+  const descWrap = el("div", "graph-field");
+  descWrap.append(el("label", "", "Description"));
+  const descArea = el("textarea");
+  descArea.value = vals.description || "";
+  descArea.placeholder = "one-line summary shown on the generated Project Roster";
+  descArea.rows = 2;
+  descWrap.append(descArea); card.append(descWrap); inputs.description = descArea;
+
+  const stageWrap = el("div", "graph-field");
+  stageWrap.append(el("label", "", "Stage"));
+  const stageSel = el("select", "graph-select");
+  for (const s of ["ideation", "speccing", "build", "maintain"]) {
+    const opt = el("option", "", s); opt.value = s;
+    if (vals.stage === s) opt.selected = true;
+    stageSel.append(opt);
+  }
+  stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
+
+  // Repos — url + one-line description per row (repo_notes, keyed by checkout basename
+  // server-side); add/remove rows freely, order doesn't matter to the manifest.
+  const reposWrap = el("div", "graph-field");
+  reposWrap.append(el("label", "", "Repositories"));
+  const rows = el("div", "project-repo-rows");
+  const rowInputs = [];
+  const addRow = (url, description) => {
+    const row = el("div", "project-repo-row");
+    const urlInp = el("input"); urlInp.type = "text"; urlInp.placeholder = "git@github.com:owner/name.git";
+    urlInp.value = url || "";
+    const descInp = el("input"); descInp.type = "text"; descInp.placeholder = "description (optional)";
+    descInp.value = description || "";
+    const rm = el("button", "tiny danger", "×");
+    rm.type = "button";
+    rm.onclick = () => { row.remove(); const i = rowInputs.indexOf(entry); if (i >= 0) rowInputs.splice(i, 1); };
+    row.append(urlInp, descInp, rm);
+    rows.append(row);
+    const entry = { urlInp, descInp };
+    rowInputs.push(entry);
+  };
+  for (const r of vals.repos || []) addRow(r.url, r.description);
+  reposWrap.append(rows);
+  const addBtn = el("button", "tiny ghost", "+ Add repo");
+  addBtn.type = "button";
+  addBtn.onclick = () => addRow("", "");
+  reposWrap.append(addBtn);
+  card.append(reposWrap);
+
+  inputs.name.focus();
+
+  const actions = el("div", "inline-actions");
+  const save = el("button", "accept tiny", "Save");
+  save.onclick = async () => {
+    const name = inputs.name.value.trim();
+    if (!name) { toast("Name is required."); return; }
+    const repos = rowInputs
+      .map((r) => ({ url: r.urlInp.value.trim(), description: r.descInp.value.trim() }))
+      .filter((r) => r.url);
+    const seen = new Set();
+    for (const r of repos) {
+      if (seen.has(r.url)) { toast(`Duplicate repo URL: ${r.url}`); return; }
+      seen.add(r.url);
+    }
+    const repoNotes = {};
+    for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
+    const fields = {
+      name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      repo: repos.map((r) => r.url), repo_notes: repoNotes,
+    };
+    save.disabled = true;
+    try {
+      const res = await fetch("/api/project/edit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: g.slug, fields }),
+      });
+      const out = await res.json();
+      if (!out.ok) { toast(`Error: ${out.error}`, 6000); save.disabled = false; return; }
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      projectEditOpen = false; projectEditVals = null;
+      await refresh();
+    } catch (e) {
+      toast(`Error: ${e}`, 5000);
+      save.disabled = false;
+    }
+  };
+  const cancel = el("button", "ghost tiny", "Cancel");
+  cancel.onclick = () => { projectEditOpen = false; projectEditVals = null; renderGraph(); };
+  actions.append(save, cancel);
+  card.append(actions);
+  scrollCardIntoView(card);
+  return card;
 }
 
 // ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
@@ -728,6 +889,7 @@ function buildGraphWorkspace(g) {
   head.append(el("code", "graph-ws-slug", g.slug));
   head.append(el("span", "muted", `${g.documents.length} mapped`));
   ws.append(head);
+  buildProjectPanel(ws, g);
   ws.append(el("p", "graph-help muted",
     "Map, edit, and remove documents below — changes collect in the dock and submit as one "
     + "kind:graph candidate to Accept in the Inbox. Nothing writes the registry directly."));

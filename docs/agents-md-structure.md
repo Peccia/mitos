@@ -53,6 +53,41 @@ same heading (the planner detects the ``(`key`)`` marker and suppresses the dupl
 heading via `emit_heading=False`). A project with no curated paths gets the whole
 connection section generated.
 
+## The generated repo roster inside `## Navigation`
+
+A project's cloned checkouts are local paths, so they belong to `## Navigation` — and they
+are **generated**, never hand-listed. `render.navigation_block` renders one line per repo
+(`- `acore/` — <description>`) from the manifest's `repo:` list plus its optional
+`repo_notes:` map (basename → one-line description, editable in the operator console's
+Project panel). A project's prose describes *why* its repos exist or how they relate; the
+roster states *what* they are. Nothing is duplicated, so nothing can drift out of sync with
+the manifest.
+
+The clone URL is deliberately absent: it is deploy-time machinery, recoverable from each
+checkout's own `.git/config`, and not worth context on every request.
+
+Placement follows the same prose-opened-the-section convention the connection block uses:
+
+- Prose **already opens `## Navigation`** → the roster attaches beneath the author's
+  routing text, no second heading.
+- Prose has **no `## Navigation`** → the roster emits the heading itself, positioned after
+  the H1 and its description and before the first authored `##`, so the reserved order
+  holds.
+- **No repos** → no section at all, rather than a bare heading.
+
+Mechanically this is the one place a generated region sits *inside* a document rather than
+trailing it, which is why `render.split_live_sections` returns **ordered regions** rather
+than a source-keyed map: the prose partial contributes a region on each side of the roster,
+and `commands.route_into_registry` rejoins them (`render.rejoin_regions`) before writing
+back. A hand-edit to the roster is silently regenerated; a hand-edit to the prose around it
+is still ordinary, adoptable drift.
+
+Only project nodes whose checkouts are actually siblings of the file get a roster — the
+workstation `local_path` node and the `agentic_context_root` reference mount. The Hermes
+operating tree never does: a hermes machine excludes `claude-code`, so `plan_clones` yields
+nothing there, and an `agentic_tree:` mount puts clones beside the mount rather than inside
+it.
+
 ## Skills
 
 A `SKILL.md` body opens with `# <Skill Title>` (a human-readable name, so the file

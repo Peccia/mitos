@@ -277,8 +277,11 @@ def _section_aware_status(o: Output, locked: dict, dest: Path, new_hash: str) ->
     carved = render.split_live_sections(base_sections, dest.read_text(encoding="utf-8"))
     if carved is None:
         return None
+    # Positional, not by-source: a partial split around a generated region contributes
+    # several prose regions, and `join_prose` concatenates them in the same document
+    # order — so the two sides stay comparable however the regions are interleaved.
     deployed_prose = render.join_prose(base_sections)
-    live_prose = "\n\n".join(carved.get(s, "") for s, _ in render.prose_sections(base_sections))
+    live_prose = render.join_prose(carved)
     drifted = live_prose != deployed_prose
     pending = new_hash != locked.get("source_hash")
     if drifted and pending:
@@ -762,15 +765,19 @@ def route_into_registry(reg: Registry, registry_path: str, payload_text: str,
     success; changed is empty when the payload already matches the registry.
     """
     if sections:
-        mapping = render.split_live_sections(sections, payload_text)
-        if mapping is None:
+        carved = render.split_live_sections(sections, payload_text)
+        if carved is None:
             srcs = "\n".join(f"  - registry/{src}" for src, _ in sections)
             return [], [], ("an edit spans a section boundary — it can't be attributed "
                             f"cleanly. Apply it by hand to the relevant partial(s):\n{srcs}")
         changed, warnings = [], []
-        for src, new_body in mapping.items():
+        # One partial may own several regions (its prose split around a generated one, e.g.
+        # a project node's `## Navigation` repo roster). Route it ONCE, from its regions
+        # rejoined in document order — per-region writes would each clobber the last.
+        for src in dict.fromkeys(s for s, _ in carved):
             if render.is_generated_source(src):
                 continue   # a generated block routes to no registry partial — never adopted
+            new_body = render.rejoin_regions(carved, src)
             partial = reg.partials.get(src)
             if partial is None:
                 warnings.append(f"section {src!r} maps to no registry partial; skipped")

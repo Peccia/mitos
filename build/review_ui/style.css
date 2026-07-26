@@ -1393,6 +1393,26 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .graph-ws-title { font-size: 1rem; }
 .graph-ws-slug { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
 
+/* ── Project panel (Knowledge Graph tab: identity + repos) ──────────────────── */
+.project-panel .card-head { align-items: center; }
+.push-right { margin-left: auto; }
+.project-repo-list { display: flex; flex-direction: column; gap: .3rem; }
+.project-repo-view-row {
+  display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+  font-size: .85rem;
+}
+.project-repo-view-row code { font-family: var(--mono); }
+.project-repo-view-row .repo-url { font-family: var(--mono); font-size: .78rem; opacity: .8; }
+.project-repo-rows { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .35rem; }
+.project-repo-row { display: flex; gap: .4rem; align-items: center; }
+.project-repo-row input {
+  padding: .35rem .5rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
+.project-repo-row input:first-child { flex: 1.2; font-family: var(--mono); font-size: .82rem; }
+.project-repo-row input:nth-child(2) { flex: 1; }
+
 .graph-panes {
   display: grid;
   grid-template-columns: 1fr 1fr;

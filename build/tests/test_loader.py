@@ -713,6 +713,63 @@ def test_repo_validation_rejects_wrong_type():
     except RegistryError as e:
         assert "string or a list of strings" in str(e)
 
+# ── repo_notes field validation ──────────────────────────────────────────────────────────────
+
+def test_repo_notes_validation_accepts_matching_basename():
+    import copy
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "https://github.com/you/x.git"
+    rig.projects["example-project"]["repo_notes"] = {"x": "the main checkout"}
+    _validate(rig)  # must not raise
+
+def test_repo_notes_validation_rejects_unknown_basename():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "https://github.com/you/x.git"
+    rig.projects["example-project"]["repo_notes"] = {"nope": "wrong key"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "does not match any" in str(e)
+
+def test_repo_notes_validation_rejects_empty_description():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "https://github.com/you/x.git"
+    rig.projects["example-project"]["repo_notes"] = {"x": "   "}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_repo_notes_validation_rejects_without_repo():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo_notes"] = {"x": "orphaned note"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "does not match any" in str(e)
+
+def test_repo_notes_validation_rejects_non_dict():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "https://github.com/you/x.git"
+    rig.projects["example-project"]["repo_notes"] = ["x", "the main checkout"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as e:
+        assert "must be a mapping" in str(e)
+
 # ── multi-store document_store validation ───────────────────────────────────────────────────
 
 def test_document_store_validation_accepts_string():

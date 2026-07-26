@@ -666,20 +666,21 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
 
 
 def project_full_markdown(pg: ProjectGraph,
-                          repos: list[tuple[str, str]] | None = None,
                           heading: str | None = None, *,
                           level: int = 2, emit_heading: bool = True,
                           org_routing: bool = True) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block for the agentic-harness tree
     (Antigravity / Claude Code / Claude Desktop): the FULL document context inline — per
     document the description, Drive ID, modified date, and tags (concise, one line each),
-    grouped by effort — plus an optional `## Workspace Layout` section listing repos cloned
-    beside this file. There is NO companion details file here (single self-contained
+    grouped by effort. There is NO companion details file here (single self-contained
     AGENTS.md). Capped per group.
 
-    `repos` is a list of (url, dirname) pairs — one per cloned checkout; None/omitted when
-    the project has no repo. Rendered as the `## <Name> (`key`)` connection section (H2)
-    unless `emit_heading=False` (the project's prose already opened it).
+    A project's cloned repos are NOT here — they are local paths, so they belong to the
+    node's `## Navigation` section, generated separately by `render.navigation_block` and
+    spliced in by the planner near the top of the file (invariant #12's reserved order).
+
+    The connection section is rendered as `## <Name> (`key`)` (H2) unless `emit_heading=False`
+    (the project's prose already opened it).
 
     `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`).
     This renderer is also used by non-hermes claude-code workstations (`planner._plan_claude_code`),
@@ -688,19 +689,6 @@ def project_full_markdown(pg: ProjectGraph,
 
     Returns only the GENERATED block; a project's human-authored prose is prepended by the
     planner as a separate, protected section."""
-    prefix: list[str] = []
-    if repos:
-        verb = "repositories are" if len(repos) > 1 else "repository is"
-        prefix += [
-            "## Workspace Layout",
-            "",
-            f"This project's {verb} cloned alongside this file:",
-            "",
-        ]
-        for url, dirname in repos:
-            prefix.append(f"- `{dirname}/` — `{url}`")
-        prefix.append("")
-
     intro = "Knowledge-graph documents for this project. Resolve a document by its ID."
 
     def entry_fn(docs: list[Document]) -> list[str]:
@@ -711,12 +699,9 @@ def project_full_markdown(pg: ProjectGraph,
         out.append("")
         return out
 
-    block = _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
-                       emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
-                       include_effort_desc=True, org_routing=org_routing)
-    if prefix:
-        return "\n".join(prefix).rstrip("\n") + "\n\n" + block
-    return block
+    return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
+                      emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
+                      include_effort_desc=True, org_routing=org_routing)
 
 
 def _by_recency(documents: list) -> list:

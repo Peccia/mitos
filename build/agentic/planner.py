@@ -308,6 +308,16 @@ def _project_repos(proj: dict) -> list[str]:
     return [u.strip() for u in raw if isinstance(u, str) and u.strip()]
 
 
+def _project_repo_entries(proj: dict) -> list[tuple[str, str, str]]:
+    """(url, checkout basename, description) for each of a project's repos — the
+    description comes from `repo_notes:`, keyed by basename (loader-validated to match),
+    empty string when the repo has no note. Feeds `graph.project_full_markdown`'s
+    generated `## Workspace Layout` section — the one place repo descriptions render."""
+    notes = proj.get("repo_notes") or {}
+    return [(url, _repo_basename(url), str(notes.get(_repo_basename(url), "")).strip())
+            for url in _project_repos(proj)]
+
+
 def _reg_root_norm(reg: Registry) -> str:
     """Normalised, slash-terminated registry root for guard comparisons."""
     return str(reg.root).replace("\\", "/").rstrip("/")
@@ -413,21 +423,23 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
         base = f"{root}/Projects/{slug}"
         proj = reg.projects.get(slug) or {}
         agents_path = f"{base}/AGENTS.md"
-        # full document context inline + repos cloned beside this file (no details file)
-        repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
+        # full document context inline (no details file); repos cloned beside this file
+        # render as the generated `## Navigation` roster inside _project_node_regions
         prose_src, prose = _project_prose(reg, proj, "agents-md")
         gen_body = _project_doc_block(
-            reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
+            reg, proj, pg, graphmod.project_full_markdown,
             level=2 if prose_src else 1,
             emit_heading=_connection_emit(proj, prose),
             org_routing=org_routing)
+        regions = _project_node_regions(proj, prose_src, prose, gen_body)
         if prose_src:
-            # prose header (protected) + generated doc block in one AGENTS.md
+            # prose (protected) interleaved with the generated nav + doc regions
             outputs.append(_mixed_doc_output(
-                "agentic-graph", agents_path, prose, gen_body, prose_src, "protect"))
+                "agentic-graph", agents_path, regions, prose_src, "protect"))
         else:
             # no human prose for this project → the file is wholly generated
-            outputs.append(_generated(agents_path, gen_body))
+            outputs.append(_generated(agents_path, render.plain_document(
+                [(s, b.rstrip("\n")) for s, b in regions if b.strip()])))
     return outputs
 
 
@@ -466,23 +478,70 @@ def _multi(sections: list[tuple[str, str]]) -> list:
     return list(sections) if len(sections) > 1 else []
 
 
-def _mixed_doc_output(target: str, deploy_path: str, prose_body: str, gen_body: str,
+def _mixed_doc_output(target: str, deploy_path: str, regions: list[tuple[str, str]],
                       prose_src: str, drift_policy: str) -> "Output":
-    """One AGENTS.md that is user prose FOLLOWED BY a machine-generated document block.
+    """One AGENTS.md interleaving user prose with machine-generated regions.
 
-    The two are recorded as `section_bodies` with the generated half tagged
-    `render.GENERATED_SECTION` — so adopt routes only the prose back to its partial and
-    drift detection protects only the prose, while the doc block regenerates every deploy.
-    No marker is written into the file (invariant #5); the split lives in the lockfile.
-    The file is `protect` (its prose is the user's), but its generated tail is never
-    captured as drift (see commands.classify_output)."""
-    sections = [(prose_src, prose_body.rstrip("\n")),
-                (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
+    `regions` is the ordered (source, body) list — prose regions carry the partial's rel,
+    generated ones a `render.GENERATED_*` label — so adopt routes only the prose back to
+    its partial and drift detection protects only the prose, while every generated region
+    regenerates on each deploy. No marker is written into the file (invariant #5); the
+    split lives in the lockfile. The file is `protect` (its prose is the user's), but its
+    generated regions are never captured as drift (see commands.classify_output).
+
+    A partial may appear in MORE THAN ONE region — a project node's prose is split around
+    the generated `## Navigation` repo roster, which has to sit near the top to satisfy the
+    reserved-section order. `render.split_live_sections` returns ordered pairs (not a
+    source-keyed map) precisely so those regions survive the round trip; `route_into_registry`
+    rejoins them before writing back."""
+    regions = [(src, body.rstrip("\n")) for src, body in regions if body.strip()]
     return Output(
         target=target, kind="text", deploy_path=deploy_path,
         dist_rel=f"{target}/{safe_rel(deploy_path)}",
-        content=render.plain_document(sections), drift_policy=drift_policy,
-        sources=[prose_src], section_bodies=sections)
+        content=render.plain_document(regions), drift_policy=drift_policy,
+        sources=[prose_src], section_bodies=regions)
+
+
+def _split_prose_for_nav(prose: str) -> tuple[str, str, bool]:
+    """Split a project's prose at the insertion point for its generated repo roster:
+    `(head, tail, prose_opened_navigation)`.
+
+    - Prose HAS a `## Navigation` section -> head ends with that section's authored
+      routing text, tail is everything from the next `##` on. The roster attaches beneath
+      the author's own prose (heading suppressed), mirroring how a curated connection
+      section receives the document map.
+    - Prose has NO `## Navigation` -> head is everything before the first `##` (the H1 and
+      its description), tail is the rest, and the roster emits its own `## Navigation`
+      heading there — first among the reserved sections, as the taxonomy requires.
+    - Prose has no `##` at all -> the whole body is head and the roster follows it.
+    """
+    lines = prose.split("\n")
+    nav_at = next((i for i, ln in enumerate(lines)
+                   if re.match(r"^##\s+Navigation\s*$", ln)), None)
+    if nav_at is not None:
+        end = next((i for i in range(nav_at + 1, len(lines))
+                    if lines[i].startswith("## ")), len(lines))
+        return "\n".join(lines[:end]), "\n".join(lines[end:]), True
+    first_h2 = next((i for i, ln in enumerate(lines) if ln.startswith("## ")), len(lines))
+    return "\n".join(lines[:first_h2]), "\n".join(lines[first_h2:]), False
+
+
+def _project_node_regions(proj: dict, prose_src: str | None, prose: str,
+                          gen_body: str) -> list[tuple[str, str]]:
+    """The ordered region list for a project node: prose head, the generated `## Navigation`
+    repo roster, prose tail, then the generated document block. Any empty region is dropped
+    by `_mixed_doc_output`, so a project with no repos (or no prose) degrades to exactly the
+    shape it had before the roster existed."""
+    repos = [(dirname, description)
+             for _url, dirname, description in _project_repo_entries(proj)]
+    if not prose_src:
+        # wholly generated node: the roster still leads, above the document block
+        nav = render.navigation_block(repos)
+        return [(render.GENERATED_NAV, nav), (render.GENERATED_SECTION, gen_body)]
+    head, tail, prose_opened_nav = _split_prose_for_nav(prose)
+    nav = render.navigation_block(repos, emit_heading=not prose_opened_nav)
+    return [(prose_src, head), (render.GENERATED_NAV, nav), (prose_src, tail),
+            (render.GENERATED_SECTION, gen_body)]
 
 
 def _doc_store_heading(reg: Registry, proj: dict) -> str | None:
@@ -888,12 +947,17 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                 # prose header (protected) + lightweight titles index (generated);
                 # full per-document detail lives in the companion AGENTS_DETAILS.md.
                 prose_body = render.plain_document(sections).rstrip("\n")
+                # No generated `## Navigation` repo roster here, unlike the workstation
+                # project nodes: this tree's checkouts are never siblings of this file (a
+                # hermes machine excludes claude-code, so plan_clones yields nothing for
+                # it; an agentic_tree mount puts clones beside the MOUNT, not inside it).
                 outputs.append(_mixed_doc_output(
-                    "agents-md", deploy_path, prose_body,
-                    _project_doc_block(
-                        reg, proj, pg, graphmod.project_index_markdown, level=2,
-                        emit_heading=_connection_emit(proj, prose_body),
-                        org_routing=org_routing),
+                    "agents-md", deploy_path,
+                    [(src_rel, prose_body),
+                     (render.GENERATED_SECTION, _project_doc_block(
+                         reg, proj, pg, graphmod.project_index_markdown, level=2,
+                         emit_heading=_connection_emit(proj, prose_body),
+                         org_routing=org_routing))],
                     src_rel, policy))
             else:
                 outputs.append(Output(
@@ -1124,10 +1188,9 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             # partials (audience: [hermes, agents-md]) are visible without requiring a
             # separate claude-code audience declaration on each partial.
             from . import graph as graphmod
-            repos = [(r, _repo_basename(r)) for r in _project_repos(proj)]
             prose_src, prose = _project_prose(reg, proj, "agents-md")
             gen_body = _project_doc_block(
-                reg, proj, pg, graphmod.project_full_markdown, repos=repos or None,
+                reg, proj, pg, graphmod.project_full_markdown,
                 level=2 if prose_src else 1,
                 emit_heading=_connection_emit(proj, prose),
                 # Org skills target hermes only (never claude-code) — a non-hermes
@@ -1141,14 +1204,17 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             if at_subdir:
                 gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
             agents_path = f"{local}/AGENTS.md"
+            regions = _project_node_regions(proj, prose_src, prose, gen_body)
             if prose_src:
                 outputs.append(_mixed_doc_output(
-                    "claude-code", agents_path, prose, gen_body, prose_src, "protect"))
+                    "claude-code", agents_path, regions, prose_src, "protect"))
             else:
                 outputs.append(Output(
                     target="claude-code", kind="text", deploy_path=agents_path,
                     dist_rel=f"claude-code/{safe_rel(agents_path)}",
-                    content=gen_body, drift_policy="generated", sources=[],
+                    content=render.plain_document(
+                        [(s, b.rstrip("\n")) for s, b in regions if b.strip()]),
+                    drift_policy="generated", sources=[],
                 ))
             claude_path = f"{local}/{cf['filename']}"
             outputs.append(Output(
