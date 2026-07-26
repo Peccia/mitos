@@ -184,7 +184,9 @@ placeholders" section and `build/tests/test_personalization.py`.
 
 ## Verifying changes
 1. `python build/compile.py compile` — schema validation is the first test; it must
-   pass with no unknown-partial or missing-field errors.
+   pass with no unknown-partial or missing-field errors. It also rewrites this file's
+   own artifact, the repo-root `AGENTS.md` (no machine's `local_path` points at a
+   contributor's checkout, so `deploy` can't) — commit it when it changes.
 2. Run the compiler test suite: `pytest build/tests/` (per-area files: `test_graph.py`,
    `test_connectors.py`, `test_commands.py`, `test_loader.py`, `test_targets.py`,
    `test_review.py`, `test_compiler.py`, `test_staging.py` (the pure scope_key/merge/

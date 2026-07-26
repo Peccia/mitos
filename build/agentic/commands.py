@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 from ruamel.yaml import YAML
 
-from . import loader, lockfile, render
+from . import loader, lockfile, render, selfdoc
 from .io import (dump_json, expand, safe_rel, sha256, write_bytes, write_text,
                  zip_bytes, zip_bytes_multiple)
 from .loader import Registry
@@ -184,6 +184,11 @@ def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -
     if skipped:
         print(f"  (skipped {len(skipped)} example template(s): {', '.join(skipped)} — "
               f"copy one into registry/local/machines/ to make it your own)")
+    # The repo's own AGENTS.md is this project's artifact, but no machine's local_path
+    # points at a contributor's checkout, so deploy can't keep it fresh — compile does.
+    # No-ops for any registry that isn't this repo (the suite's temp copies).
+    if selfdoc.rewrite(reg.root):
+        print("  rewrote AGENTS.md from registry/context/projects/mitos.md")
     return 0
 
 
