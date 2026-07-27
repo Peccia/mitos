@@ -248,9 +248,9 @@ def _plan_claude_app(reg, machine_name, spec, paths) -> list[Output]:
     # — Desktop MCP config (LAN/HTTP workaround) —
     mc = spec.get("mcp_config") or {}
     dest = paths.get(mc.get("deploy_to_key", "claude_desktop_config"))
-    if mc and dest:
+    gws = _gws(reg, machine_name) if (mc and dest) else None
+    if gws:
         alias = spec["server_alias"]
-        gws = _gws(reg, machine_name)
         outputs.append(Output(
             target="claude-app", kind="json_merge", deploy_path=dest,
             dist_rel=f"claude-app/{safe_rel(dest)}",
@@ -649,14 +649,23 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     A skill carrying `extends_skill` never deploys standalone — it splices into its
     parent's body at render time only (render.compose_skill_body); shipping it as its
     own duplicate file would clutter every target it targets.
+
+    On top of those two, a third, non-curatable gate: a skill declaring
+    `requires_server:` is dropped unless this machine declares that server in its
+    `document_store:`. A skill that is nothing but instructions for one MCP server's
+    tools is noise — or worse, a dangling instruction — on a box where that server was
+    never wired, and a brand-new coding-harness user should not have to hand-write an
+    `exclude:` list to keep the maintainer's workspace skills off their machine.
     """
     tgt = sk_spec["include_target"]
     curation = ((machine or {}).get("skills") or {}).get(tgt) or {}
     include = curation.get("include")
     exclude = set(curation.get("exclude") or [])
+    stores = set(document_stores((machine or {}).get("document_store")))
     return [s for s in reg.skills.values()
             if tgt in s.targets
             and not s.frontmatter.get("extends_skill")
+            and (s.requires_server is None or s.requires_server in stores)
             and (include is None or s.name in include)
             and s.name not in exclude]
 
@@ -664,12 +673,13 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
 def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     """Loud diagnostics for skills that are compatible with a target (their own
     `targets:` frontmatter says so) but don't end up deployed there for this machine —
-    either filtered out by this machine's curation, or landing on a scope-ignoring
-    target while marked `scope: project` (its confinement guarantee doesn't hold
-    there). Warn-only: nothing here changes what deploys, it only surfaces filters
-    that were previously silent."""
+    filtered out by this machine's curation, dropped because their `requires_server:`
+    connection isn't wired here, or landing on a scope-ignoring target while marked
+    `scope: project` (its confinement guarantee doesn't hold there). Warn-only: nothing
+    here changes what deploys, it only surfaces filters that were previously silent."""
     machine = reg.machines.get(machine_name) or {}
     machine_targets = set(machine.get("targets", []))
+    stores = set(document_stores(machine.get("document_store")))
     warnings: list[str] = []
     for tname, tspec in reg.targets.items():
         if tname not in machine_targets:
@@ -682,9 +692,16 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
         selected = _selected_skills(reg, sk_spec, machine)
         selected_names = {s.name for s in selected}
         for name in sorted(candidates - selected_names):
-            warnings.append(
-                f"skill '{name}' targets '{tname}' but is excluded by this machine's "
-                f"curation (skills.{tname} in machines/{machine_name}.yaml)")
+            req = reg.skills[name].requires_server
+            if req and req not in stores:
+                warnings.append(
+                    f"skill '{name}' targets '{tname}' but requires the '{req}' "
+                    f"connection, which machines/{machine_name}.yaml does not declare "
+                    f"(document_store:) — not deployed")
+            else:
+                warnings.append(
+                    f"skill '{name}' targets '{tname}' but is excluded by this machine's "
+                    f"curation (skills.{tname} in machines/{machine_name}.yaml)")
         if tname in SCOPE_IGNORING_SKILL_TARGETS:
             for skill in selected:
                 if skill.scope == "project":
@@ -723,9 +740,16 @@ def _local(reg: Registry, machine_name: str, proj: dict) -> str | None:
     return resolve_local_path(machine_name, reg.machines[machine_name], raw)
 
 
-def _gws(reg: Registry, machine_name: str) -> dict:
+def _gws(reg: Registry, machine_name: str) -> dict | None:
     """The gws server definition with its URL resolved for the consuming machine
-    (the server is hosted on the Hermes laptop; other machines reach it over LAN)."""
+    (the server is hosted on the Hermes laptop; other machines reach it over LAN).
+
+    None when this machine never declared the connection in its `document_store:` — a
+    box with no Google Workspace must not get a gws server spliced into its harness
+    config, any more than it gets the gws SKILL.md (_selected_skills). Same signal both
+    times: the machine profile states which connections it actually has."""
+    if "gws" not in document_stores(reg.machines[machine_name].get("document_store")):
+        return None
     server = dict(reg.servers["servers"]["gws"])
     server["url"] = (server.get("urls") or {}).get(machine_name, server["url"])
     return server
@@ -1128,9 +1152,9 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
     # mcp merge
     mcp = spec["mcp"]
     cfg = paths.get(mcp["file_key"]) or paths.get("hermes_config")
-    if cfg:
-        block = {"mcp_servers": render.hermes_mcp_block(_gws(reg, machine_name),
-                                                        mcp["server_alias"])}
+    gws = _gws(reg, machine_name)
+    if cfg and gws:
+        block = {"mcp_servers": render.hermes_mcp_block(gws, mcp["server_alias"])}
         outputs.append(Output(
             target="hermes", kind="yaml_merge", deploy_path=cfg,
             dist_rel=f"hermes/{safe_rel(cfg)}.mcp_servers.yaml",
@@ -1335,7 +1359,7 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
     alias = spec["server_alias"]
     gws = _gws(reg, machine_name)
     cfg_dir = paths.get("antigravity_config")
-    if cfg_dir:
+    if cfg_dir and gws:
         mc = spec["mcp_config"]
         deploy_path = f"{cfg_dir.rstrip('/')}/{mc['filename']}"
         outputs.append(Output(

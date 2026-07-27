@@ -144,6 +144,14 @@ with a coding-harness target on one machine is rejected at compile time (see **m
 under [Core concepts](#core-concepts)) — use case 3 is a dedicated machine, not an add-on
 to 1 or 2.
 
+**Workspace connections are opt-in too.** None of the three templates declares a
+`document_store:`, so a fresh machine gets no MCP server spliced into its harness config
+and no connection-bound skill — the shipped `gws` skill declares `requires_server: gws`
+and stays off any box that never wired Google Workspace. `deploy` names what it withheld
+and why. Set up the server first ([`docs/connectors/`](docs/connectors/)), then add
+`document_store: gws` to your machine profile; both the wiring and the skill appear on the
+next deploy. See [connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
+
 
 ## Make it yours
 

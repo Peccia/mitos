@@ -140,6 +140,19 @@ class Skill:
         project-scoped skill surface); see validate_skill_scope."""
         return self.frontmatter.get("scope", "global")
 
+    @property
+    def requires_server(self) -> str | None:
+        """The MCP server (a `connections/servers.yaml` key) this skill is useless
+        without — e.g. the `gws` skill is nothing but instructions for driving the `gws`
+        server's tools. Optional; omit for a skill that stands on its own.
+
+        A machine declares the connections it actually has via its `document_store:`
+        (the same field render.connections_block reads to decide which connection
+        sections a node may name). planner._selected_skills drops a skill whose required
+        server this machine never declared, so a coding-harness box with no workspace
+        wired never receives instructions for tools it cannot call."""
+        return self.frontmatter.get("requires_server") or None
+
 
 @dataclass
 class Prompt:
@@ -569,6 +582,16 @@ def _validate(reg: Registry) -> None:
         err = validate_skill_scope(s.name, s.frontmatter)
         if err:
             raise RegistryError(err)
+    # requires_server: a connection gate — see Skill.requires_server /
+    # planner._selected_skills. Validated against connections/servers.yaml so a typo
+    # fails at compile rather than silently suppressing the skill on every machine.
+    known_servers = set((reg.servers.get("servers") or {}).keys())
+    for s in reg.skills.values():
+        req = s.requires_server
+        if req and req not in known_servers:
+            raise RegistryError(
+                f"skill {s.name!r}: requires_server {req!r} is not a server in "
+                f"connections/servers.yaml; known: {', '.join(sorted(known_servers))}")
     # prompts may omit targets (console-only is valid); when targets are set they must be known
     for p in reg.prompts.values():
         bad = set(p.targets) - KNOWN_TARGETS

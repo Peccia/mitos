@@ -7,7 +7,7 @@ from pathlib import Path
 from conftest import (
     REPO_ROOT, reg, loader, planner, render, classify_output,
     _inbox, _temp_registry, _doc, _write_graph,
-    _plant_candidate, _skill_meta, _full_windows_rig, _sandbox_deploy,
+    _plant_candidate, _skill_meta, _full_windows_rig, _connected_rig, _sandbox_deploy,
     _git_available, _run_git, _make_overlay_hub, _clone_overlay, _seed_overlay,
 )
 
@@ -449,16 +449,67 @@ def test_skill_selection_layers():
     # a personal choice belongs on the (overlayable) machine, never on core targets/*.yaml.
     from agentic.planner import _selected_skills
     base = {"include_target": "hermes"}
-    all_hermes = {s.name for s in _selected_skills(reg, base)}
+    # `gws` declares requires_server: gws, so every layer below is exercised on a machine
+    # that actually has the connection wired (see test_requires_server_gates_skill).
+    wired = {"document_store": "gws"}
+    all_hermes = {s.name for s in _selected_skills(reg, base, wired)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, base, {"skills": {"hermes": {"include": ["new-session", "gws"]}}})
+    only = _selected_skills(reg, base, {**wired, "skills": {"hermes": {"include": ["new-session", "gws"]}}})
     assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
-    rest = _selected_skills(reg, base, {"skills": {"hermes": {"exclude": ["gws"]}}})
+    rest = _selected_skills(reg, base, {**wired, "skills": {"hermes": {"exclude": ["gws"]}}})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
     assert not _selected_skills(
         reg, {"include_target": "claude-code"},
-        {"skills": {"claude-code": {"include": ["graph-bootstrap"]}}})
+        {**wired, "skills": {"claude-code": {"include": ["graph-bootstrap"]}}})
+
+def test_requires_server_gates_skill():
+    """A skill declaring `requires_server:` reaches only a machine that declares that
+    server in its `document_store:`. The regression this guards: a brand-new
+    coding-harness box (no workspace wired) used to receive the `gws` SKILL.md — a page
+    of instructions for MCP tools it cannot call — as the ONLY thing deploy gave it."""
+    from agentic.planner import _selected_skills
+    for tgt in ("hermes", "claude-code", "claude-app", "antigravity"):
+        spec = {"include_target": tgt}
+        if tgt not in reg.skills["gws"].targets:
+            continue
+        assert "gws" not in {s.name for s in _selected_skills(reg, spec, {})}
+        assert "gws" not in {s.name for s in _selected_skills(reg, spec, {"document_store": "none"})}
+        assert "gws" in {s.name for s in _selected_skills(reg, spec, {"document_store": "gws"})}
+        # a multi-store machine counts as wired when gws is anywhere in the list
+        assert "gws" in {s.name for s in
+                         _selected_skills(reg, spec, {"document_store": ["gws"]})}
+    # curation cannot smuggle it back in: the connection gate is not a preference
+    assert "gws" not in {s.name for s in _selected_skills(
+        reg, {"include_target": "hermes"}, {"skills": {"hermes": {"include": ["gws"]}}})}
+
+def test_fresh_coding_machine_deploys_no_workspace_content():
+    """End-to-end guard for the fresh-user path: a machine built from init's
+    coding-harness use cases must not receive a workspace skill or MCP wiring for a
+    connection it never declared, and its CLAUDE.md must not name a hermes-only skill."""
+    import copy
+
+    from agentic.init import MACHINE_USE_CASES
+    for use_case in ("workstation", "coding"):
+        rig = copy.deepcopy(reg)
+        m = rig.machines["example-windows"]
+        m["targets"] = list(MACHINE_USE_CASES[use_case])
+        m.pop("document_store", None)
+        outs = planner.plan_machine(rig, "example-windows")
+        assert not [o for o in outs if "/gws/" in o.deploy_path or o.deploy_path.endswith("gws.zip")], \
+            f"{use_case}: workspace skill deployed without a declared connection"
+        assert not [o for o in outs if o.lane == "connections"], \
+            f"{use_case}: MCP wiring planned without a declared connection"
+        # the identity header must not carry the agentic tree's operating rules — they
+        # name `new-session` (a hermes-only skill) and an AGENTS.md tree that a
+        # coding-harness box does not have. A builder-context MENTION of the skill name
+        # is fine; the imperative bullet is what must be gone.
+        for o in outs:
+            if o.deploy_path.endswith("CLAUDE.md"):
+                assert "execution of the skill: `new-session`" not in o.content, \
+                    f"{use_case}: CLAUDE.md instructs a skill only hermes deploys"
+                assert "Always read `AGENTS.md` within" not in o.content, \
+                    f"{use_case}: CLAUDE.md routes through an agentic tree that isn't here"
 
 def test_target_side_skill_curation_rejected():
     """include:/exclude: under a targets/*.yaml skills: block is core, shared by every
@@ -498,11 +549,9 @@ def test_machine_side_skill_curation_validation():
     _validate(reg2)
 
 def test_deselect_then_prune():
-    import copy
-
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel
-    reg2 = copy.deepcopy(reg)
+    reg2 = _connected_rig("example-linux")   # gws needs its connection to deploy at all
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-prune-"))
     assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
     gws_path = next(o.deploy_path for o in planner.plan_machine(reg2, "example-linux")
@@ -1855,11 +1904,18 @@ def test_claude_code_global_scope_skill_unbound_to_any_project_still_deploys():
 def test_skill_deploy_warnings_flags_machine_curated_exclusion():
     """A skill compatible with a target (its own frontmatter says so) but filtered out
     by this machine's curation is reported as a warning — the filter is never silent."""
-    import copy
-    r = copy.deepcopy(reg)
+    r = _connected_rig("example-linux")   # gws is otherwise filtered by requires_server
     r.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
     warnings = planner.skill_deploy_warnings(r, "example-linux")
     assert any("'gws'" in w and "'hermes'" in w and "curation" in w for w in warnings)
+
+def test_skill_deploy_warnings_name_the_missing_connection():
+    """A requires_server drop is reported as such, not misattributed to curation — the
+    operator needs to know the fix is `document_store:`, not an exclude list."""
+    warnings = planner.skill_deploy_warnings(reg, "example-linux")   # ships unconnected
+    assert any("'gws'" in w and "requires the 'gws' connection" in w
+               and "document_store" in w for w in warnings)
+    assert not any("curation" in w for w in warnings)
 
 def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
     """A scope: project skill that also targets claude-app (a scope-ignoring target)
@@ -1876,7 +1932,7 @@ def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
               and "ignores scope" in w for w in warnings)
 
 def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
-    warnings = planner.skill_deploy_warnings(reg, "example-linux")
+    warnings = planner.skill_deploy_warnings(_connected_rig("example-linux"), "example-linux")
     assert warnings == []
 
 

@@ -123,6 +123,19 @@ def _full_windows_rig():
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
     return r
 
+def _connected_rig(machine: str, store: str = "gws", base=None):
+    """A registry copy whose `machine` declares `store` as a wired connection.
+
+    The shipped use-case templates (`machines/example-*.yaml`) deliberately declare NO
+    `document_store:` — a brand-new box must not receive MCP wiring or a
+    `requires_server:` skill for a server nobody set up (planner._gws /
+    _selected_skills). Tests that assert on connection-bound output therefore have to
+    state that precondition, the way `_full_windows_rig` states the target set."""
+    import copy
+    r = copy.deepcopy(base if base is not None else reg)
+    r.machines[machine]["document_store"] = store
+    return r
+
 def _sandbox_deploy(machine: str) -> Path:
     """Deploy a machine into a fresh temp root; return the root."""
     import tempfile
@@ -153,6 +166,10 @@ def _temp_registry():
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
         "name": "rig", "os": _local_os(), "targets": ["hermes", "agents-md"],
+        # rig is the fully-wired rig: it hosts gws AND declares the connection, so
+        # connection-gated output (MCP merge, the `requires_server: gws` skills) is
+        # planned here. The shipped machines/example-*.yaml deliberately do not.
+        "document_store": "gws",
         "paths": {"hermes_home": f"{home}/.hermes",
                   "hermes_config": f"{home}/.hermes/config.yaml",
                   "assistant_root": f"{home}/MitosAgent",

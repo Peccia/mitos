@@ -36,6 +36,7 @@ targets:                     # List of compatible tools
   - hermes
 category: development        # Optional: organizational category (default: general)
 scope: global                # Optional: global (default) | project — see below
+requires_server: gws         # Optional: only deploy where this connection exists — see below
 ---
 
 # Instructions
@@ -55,6 +56,36 @@ manifest. The `scope:` frontmatter key picks which one:
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
   manifest's `skills:` key, never the shared directory. `hermes` and `claude-app` have no
   project-scoped surface at all, so they ignore `scope` and stay global regardless.
+
+### Connection-bound skills: `requires_server:`
+
+Some skills are nothing but instructions for one MCP server's tools — the shipped `gws`
+skill is a page of workflows for the `gws` Google Workspace server. On a machine where
+that server was never set up, deploying it is worse than useless: the agent is told to
+route every document request through tools it cannot call.
+
+Declare the dependency and the skill self-limits:
+
+```yaml
+requires_server: gws         # a server key from connections/servers.yaml
+```
+
+It then deploys **only** to machines that declare that server in their profile's
+`document_store:` — the same field that decides which connection sections a node may
+name. A machine that omits `document_store:` (as every shipped
+`machines/example-*.yaml` use-case template does) receives no connection-bound skill at
+all, and `deploy` says so:
+
+```
+[warn] skill 'gws' targets 'claude-code' but requires the 'gws' connection,
+       which machines/dev-box.yaml does not declare (document_store:) — not deployed
+```
+
+The gate is **not** a preference: unlike the machine-side `skills: {<target>: {include:}}`
+curation, a machine cannot `include:` its way past a connection it doesn't have. Wire the
+server first (see `docs/connectors/`), then add `document_store: <name>` to the machine
+profile. The same signal gates MCP wiring — a machine with no declared connection gets no
+server spliced into its harness config either.
 
 ### Binding to Projects (claude-code and antigravity)
 A `scope: project` skill (or any skill you want a specific project's checkout to carry,

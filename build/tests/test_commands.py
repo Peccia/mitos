@@ -7,7 +7,7 @@ from pathlib import Path
 from conftest import (
     REPO_ROOT, reg, loader, planner, render, classify_output,
     _inbox, _temp_registry, _doc, _write_graph,
-    _plant_candidate, _skill_meta, _full_windows_rig, _sandbox_deploy,
+    _plant_candidate, _skill_meta, _full_windows_rig, _connected_rig, _sandbox_deploy,
     _git_available, _run_git, _make_overlay_hub, _clone_overlay, _seed_overlay,
 )
 
@@ -673,8 +673,10 @@ def test_yaml_merge_preserves_user_entries():
     from agentic.commands import _apply_yaml_merge
     from agentic.io import safe_rel
 
-    # pull the real yaml_merge output the same way test_json_merge_preserves_user_entries does
-    perm = next(o for o in planner.plan_machine(reg, "example-linux") if o.kind == "yaml_merge")
+    # pull the real yaml_merge output the same way test_json_merge_preserves_user_entries
+    # does — on a rig that declares the connection, since the mcp block is gated on it
+    perm = next(o for o in planner.plan_machine(_connected_rig("example-linux"), "example-linux")
+                if o.kind == "yaml_merge")
 
     root = Path(tempfile.mkdtemp(prefix="ae-yamlmerge-"))
     tgt = root / safe_rel(perm.target_file)
@@ -698,7 +700,6 @@ def test_yaml_merge_preserves_user_entries():
     assert _apply_yaml_merge(perm, absent_root) is False
 
 def test_yaml_merge_leaf_path_preserves_siblings():
-    import copy
     import tempfile
 
     import yaml as _yaml
@@ -706,7 +707,7 @@ def test_yaml_merge_leaf_path_preserves_siblings():
     from agentic.commands import _apply_yaml_merge
     from agentic.io import expand, safe_rel
 
-    rig = copy.deepcopy(reg)
+    rig = _connected_rig("example-linux")   # the mcp block below needs a wired connection
     rig.machines["example-linux"]["hermes_settings"] = {"memory_enabled": True}
     outs = planner.plan_machine(rig, "example-linux")
     settings = next(o for o in outs if o.kind == "yaml_merge" and "terminal.cwd" in o.owned_keys)

@@ -7,7 +7,7 @@ from pathlib import Path
 from conftest import (
     REPO_ROOT, reg, loader, planner, render, classify_output,
     _inbox, _temp_registry, _doc, _write_graph,
-    _plant_candidate, _skill_meta, _full_windows_rig, _sandbox_deploy,
+    _plant_candidate, _skill_meta, _full_windows_rig, _connected_rig, _sandbox_deploy,
     _git_available, _run_git, _make_overlay_hub, _clone_overlay, _seed_overlay,
 )
 
@@ -156,7 +156,9 @@ def test_per_machine_server_url():
     win = planner.plan_machine(treg, "example-windows")
     mcp_cfg = next(o for o in win if o.deploy_path.endswith("mcp_config.json"))
     assert "http://localhost:8000/mcp" in mcp_cfg.content
-    linux = planner.plan_machine(treg, "example-linux")
+    # example-linux ships with no document_store — declare it, since MCP wiring is gated
+    # on the machine actually having the connection (planner._gws)
+    linux = planner.plan_machine(_connected_rig("example-linux", base=treg), "example-linux")
     hermes_block = next(o for o in linux if o.kind == "yaml_merge")
     assert "http://localhost:8000/mcp" in hermes_block.content
 

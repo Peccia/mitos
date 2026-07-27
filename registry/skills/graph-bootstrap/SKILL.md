@@ -6,6 +6,7 @@ author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
 targets: [hermes]
+requires_server: gws       # reaches Drive through the gws MCP server
 category: devops
 hermes:
   tags: [graph, drive, bootstrap, registry, gws]
