@@ -9,6 +9,7 @@ from conftest import (
     _inbox, _temp_registry, _doc, _write_graph,
     _plant_candidate, _skill_meta, _full_windows_rig, _sandbox_deploy,
     _git_available, _run_git, _make_overlay_hub, _clone_overlay, _seed_overlay,
+    noninteractive_stdin,
 )
 
 def test_connector_bootstrap_emits_graph_candidate_through_valve():
@@ -421,7 +422,12 @@ def test_connect_loops_multi_store_one_candidate_per_store():
         args = argparse.Namespace(project="example-project", backend=None,
                                   folder_id=None, recursive=False, query=None,
                                   stage=False, store=None)
-        rc = mitos._cmd_connect(args)
+        # No --folder-id and no --query, so _cmd_connect offers the folder-scope picker —
+        # which _pick_folder is documented to skip when stdin isn't a terminal. Pin that
+        # here rather than inheriting the shell's stdin: otherwise this passes in CI and
+        # under captured pytest, and hangs/aborts (rc 130) from a real terminal.
+        with noninteractive_stdin():
+            rc = mitos._cmd_connect(args)
     finally:
         connectors_pkg.connector_for_store = orig_connector_for_store
         mitos.REPO_ROOT = orig_repo_root

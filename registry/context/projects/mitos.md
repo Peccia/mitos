@@ -204,6 +204,15 @@ placeholders" section and `build/tests/test_personalization.py`.
    rather than passing `None` — add it to `make_fixture` instead of hand-rolling a
    workaround in the test. Pinned by `test_runner.py`, which also scans the whole suite for
    unsupported fixture names.
+   The runner also wraps the whole run in `conftest.noninteractive_stdin()`, matching what
+   pytest's default capture already gives every test: `sys.stdin` is not a terminal and
+   raises on read. Interactive code branches on this (`mitos._pick_folder` no-ops unless
+   `sys.stdin.isatty()`; `mitos._ask` turns an unreadable stdin into a clean `_Abort`), so
+   without it a test inherits the ambient shell — green in CI and under captured pytest,
+   red the moment anyone runs the runner from a real terminal. A test that drives an
+   interactive entrypoint should ALSO use the context manager directly, stating the
+   interactivity it expects rather than relying on the wrapper (that is what keeps it
+   correct under `pytest -s`, which disables capture).
 3. `python build/compile.py deploy --machine <m> --dry-run` — read the action list
    before any real deploy.
 

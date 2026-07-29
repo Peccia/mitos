@@ -44,27 +44,33 @@ def _fixtures(fn) -> tuple[dict, list]:
 
 def main() -> int:
     total = failed = 0
-    for mod_name in _modules():
-        mod = importlib.import_module(mod_name)
-        for name in sorted(dir(mod)):
-            fn = getattr(mod, name)
-            if not (name.startswith("test_") and callable(fn)):
-                continue
-            total += 1
-            try:
-                kwargs, teardowns = _fixtures(fn)
+    # Neutralize stdin for the whole run, matching what pytest's default capture already
+    # gives every test. Without it, a test touching an interactive path (mitos._pick_folder
+    # branches on sys.stdin.isatty()) inherits the ambient shell: green in CI and under
+    # captured pytest, red from a real terminal. That divergence is the runner's to close,
+    # not each test's to work around.
+    with conftest.noninteractive_stdin():
+        for mod_name in _modules():
+            mod = importlib.import_module(mod_name)
+            for name in sorted(dir(mod)):
+                fn = getattr(mod, name)
+                if not (name.startswith("test_") and callable(fn)):
+                    continue
+                total += 1
                 try:
-                    fn(**kwargs)
-                finally:
-                    for teardown in reversed(teardowns):
-                        teardown()
-            except AssertionError as e:
-                failed += 1
-                print(f"FAIL  {mod_name}.{name}: {e}")
-            except Exception as e:  # noqa: BLE001
-                failed += 1
-                print(f"ERROR {mod_name}.{name}: {type(e).__name__}: {e}")
-                traceback.print_exc()
+                    kwargs, teardowns = _fixtures(fn)
+                    try:
+                        fn(**kwargs)
+                    finally:
+                        for teardown in reversed(teardowns):
+                            teardown()
+                except AssertionError as e:
+                    failed += 1
+                    print(f"FAIL  {mod_name}.{name}: {e}")
+                except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    print(f"ERROR {mod_name}.{name}: {type(e).__name__}: {e}")
+                    traceback.print_exc()
     print(f"\n{total - failed}/{total} passed")
     return 1 if failed else 0
 

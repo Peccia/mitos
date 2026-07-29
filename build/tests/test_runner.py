@@ -64,6 +64,48 @@ def test_monkeypatch_shim_sets_and_undoes(monkeypatch):
     assert "AE_RUNNER_PROBE" not in os.environ
 
 
+def test_noninteractive_stdin_matches_pytest_capture():
+    """`conftest.noninteractive_stdin()` gives a block the same stdin contract pytest's
+    default capture does: not a terminal, and unreadable.
+
+    The regression: `mitos._pick_folder` is documented to no-op when stdin isn't a
+    terminal, so a test driving `_cmd_connect` without a folder scope inherited whatever
+    the shell had — green in CI and under captured pytest, aborted (rc 130) from a real
+    terminal, i.e. `python build/tests/test_compiler.py` in any interactive session. The
+    runner now wraps the whole suite in this, so the outcome no longer depends on the
+    shell. Reads RAISE rather than returning "" so an unintended prompt fails loudly
+    instead of silently taking the blank-input branch."""
+    import sys as _sys
+
+    original = _sys.stdin
+    with conftest.noninteractive_stdin():
+        assert _sys.stdin is not original
+        assert _sys.stdin.isatty() is False
+        for read in ("read", "readline", "readlines"):
+            try:
+                getattr(_sys.stdin, read)()
+            except OSError:
+                pass
+            else:
+                raise AssertionError(f"{read}() must raise, not return silently")
+        # `input()` therefore cannot succeed — mitos._ask turns this into a clean abort
+        try:
+            input("prompt: ")
+        except (OSError, EOFError):
+            pass
+        else:
+            raise AssertionError("input() must not succeed under a neutralized stdin")
+    assert _sys.stdin is original, "stdin must be restored on exit"
+
+
+def test_runner_neutralizes_stdin_for_the_whole_suite():
+    """The wrapper is applied in `test_compiler.main`, not left to each test — otherwise
+    every future test touching an interactive path re-acquires the same shell dependency."""
+    source = (HERE / "test_compiler.py").read_text(encoding="utf-8")
+    assert "conftest.noninteractive_stdin()" in source, \
+        "test_compiler.main must wrap the run in conftest.noninteractive_stdin()"
+
+
 def test_unsupported_fixture_fails_loudly():
     """An unknown fixture name must raise, never hand a test a silent `None`."""
     try:

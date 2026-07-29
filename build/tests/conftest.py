@@ -4,6 +4,7 @@ pytest auto-imports this file, making all helpers available to every test_*.py f
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -87,6 +88,52 @@ class _MonkeyPatch:
         for fn in reversed(self._undo):
             fn()
         self._undo.clear()
+
+
+class _NonInteractiveStdin:
+    """A stand-in for `sys.stdin` that is not a terminal and cannot be read — the same
+    contract pytest's own capture gives a test by default.
+
+    It exists because interactive code paths branch on `sys.stdin.isatty()`
+    (`mitos._pick_folder` no-ops when stdin isn't a terminal) or read it outright
+    (`mitos._ask`). Left to the ambient stdin, such a test passes in CI and under captured
+    pytest, then fails the moment anyone runs it from a real terminal — the outcome depends
+    on the shell, not the code. Reads raise rather than returning "" so a test that reaches
+    a prompt it did not intend fails loudly instead of silently taking the blank-input
+    branch."""
+
+    def isatty(self) -> bool:
+        return False
+
+    def _unreadable(self, *_a, **_kw):
+        raise OSError("stdin is not readable in tests — a prompt was reached unexpectedly")
+
+    read = readline = readlines = _unreadable
+
+    def __iter__(self):
+        return iter(())
+
+    def fileno(self) -> int:
+        raise OSError("no fileno for the test stdin stand-in")
+
+    def close(self) -> None:
+        pass
+
+
+@contextlib.contextmanager
+def noninteractive_stdin():
+    """Run a block with `sys.stdin` guaranteed non-interactive and unreadable.
+
+    Used two ways: the stdlib runner wraps the WHOLE suite in it so it matches pytest's
+    default capture (see test_compiler.main), and a test driving an interactive entrypoint
+    uses it directly so it states the interactivity it expects instead of inheriting the
+    shell's — which keeps it correct under `pytest -s` too."""
+    original = sys.stdin
+    sys.stdin = _NonInteractiveStdin()
+    try:
+        yield
+    finally:
+        sys.stdin = original
 
 
 def make_fixture(name: str):
