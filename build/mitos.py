@@ -123,7 +123,8 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         print(f"  Available templates: {', '.join(templates) or '(none found)'}")
         org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
         org = org_raw if org_raw else None
-    backend = _ask("Workspace backend [gws]: ") or "gws"
+    store = _ask_document_store(initmod)
+    backend = store or "none"
     try:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,
                                            address=address, email=email,
@@ -145,21 +146,20 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     from agentic.commands import _local_os
     print("\nNow let's set up this machine's profile (registry/local/machines/<name>.yaml) — "
           "the file that decides what actually deploys here.")
+    use_case, targets = (None, None)
     if is_hermes:
         use_case = "hermes"
         print("Full agentic assistant selected — this profile will target [hermes, agents-md].")
     else:
-        print("  [1] Claude Code only")
-        print("  [2] Claude Code + Antigravity + Claude Desktop (all coding harnesses)")
-        sub_choice = _ask("Which coding harnesses? [2]: ") or "2"
-        use_case = "workstation" if sub_choice == "1" else "coding"
+        targets = _ask_coding_targets(initmod)
     default_name = "my-machine"
     machine_name = _ask(f"A short name for this machine [{default_name}]: ") or default_name
     default_os = _local_os()
     os_name = _ask(f"OS (windows/linux/macos) [{default_os}]: ") or default_os
     try:
         machine_written = initmod.scaffold_machine(REPO_ROOT, name=machine_name,
-                                                    os_name=os_name, use_case=use_case)
+                                                    os_name=os_name, use_case=use_case,
+                                                    targets=targets, document_store=store)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -169,13 +169,79 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     else:
         print(f"\nregistry/local/machines/{machine_name}.yaml already exists — left untouched.")
 
-    if backend and backend != "mock":
-        print(f"\nNext: stand up the {backend} MCP server (see docs/connectors/), point the "
-              f"`{backend}` entry in connections/servers.yaml at it, then run "
+    if store and store != "mock":
+        print(f"\nNext: stand up the {store} MCP server (see docs/connectors/), point the "
+              f"`{store}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
+    elif not is_hermes:
+        # No connection, and every core skill but `gws` is hermes-only — so this box's
+        # first deploy carries no skills at all. Say so, and point at the two ways to
+        # add one, rather than letting an empty skills directory read as a broken install.
+        print("\nNo connection declared, so nothing connection-bound deploys here yet. The "
+              "skills that ship in core are for the agentic assistant, so your first deploy "
+              "will not install any — add your own:")
+        print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
+        print("  - the console's Skills & Orgs tab: python build/compile.py review")
+        print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "
+              "set each skill's `targets:` to the harnesses you picked above.")
     print(f"\nThen: python build/compile.py compile && "
           f"python build/compile.py deploy --machine {machine_name} --dry-run")
     return 0
+
+
+def _ask_coding_targets(initmod) -> list[str]:
+    """Which coding harnesses this machine runs — an independent multi-select, not a preset.
+    Each is its own target with its own deploy paths, so any subset is a legal profile;
+    offering only "Claude Code" or "all three" was a shape of the wizard, never a constraint
+    of the system. Blank keeps the historical default (all three)."""
+    options = list(initmod.CODING_TARGETS.items())
+    print("\nWhich coding harnesses does this machine run? "
+          "(comma-separated numbers, or `all`)")
+    for i, (target, label) in enumerate(options, 1):
+        print(f"  [{i}] {label}  ({target})")
+    while True:
+        raw = _ask("Harnesses [all]: ").strip().lower()
+        if not raw or raw == "all":
+            return [t for t, _ in options]
+        picked, bad = [], []
+        for part in (p.strip() for p in raw.split(",") if p.strip()):
+            if part.isdigit() and 1 <= int(part) <= len(options):
+                target = options[int(part) - 1][0]
+                if target not in picked:
+                    picked.append(target)
+            else:
+                bad.append(part)
+        if bad:
+            print(f"  not a listed number: {', '.join(bad)} — try again.")
+            continue
+        if picked:
+            return picked
+        print("  pick at least one — try again.")
+
+
+def _ask_document_store(initmod) -> str | None:
+    """The machine's `document_store:` — its connection, and the one signal every
+    connection-bound output is gated on. Returns None for "no connection", which writes NO
+    document_store field: the honest state for a box whose server is not running, and the
+    reason this asks instead of assuming a default. The choices are the servers actually
+    defined in connections/servers.yaml, never a hardcoded name."""
+    servers = initmod.known_servers(REPO_ROOT)
+    print("\nDoes this machine have a document store (MCP server) wired up?")
+    print("  [0] None — skip for now (recommended if the server isn't running yet)")
+    for i, name in enumerate(servers, 1):
+        print(f"  [{i}] {name}")
+    print("  Nothing connection-bound deploys without one: no MCP wiring is spliced into "
+          "your harness configs, and any skill declaring `requires_server:` stays off this "
+          "box. You can add it to the machine profile later and re-deploy.")
+    while True:
+        raw = _ask("Choice [0]: ").strip()
+        if not raw or raw == "0":
+            return None
+        if raw.isdigit() and 1 <= int(raw) <= len(servers):
+            return servers[int(raw) - 1]
+        if raw in servers:
+            return raw
+        print(f"  pick 0-{len(servers)} — try again.")
 
 
 def _init_pull_from_hub() -> int:

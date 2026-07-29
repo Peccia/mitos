@@ -441,6 +441,75 @@ def test_scaffold_machine_rejects_unknown_use_case():
     except ValueError:
         pass
 
+def test_scaffold_machine_accepts_any_coding_harness_subset():
+    """The presets are a wizard convenience, not the set of legal machines: ANY non-empty
+    subset of the coding harnesses scaffolds a profile that loads, validates, and plans.
+    The regression this guards is `mitos init` offering Claude Code as the only
+    single-harness option — an Antigravity-only or Claude-Desktop-only box was always
+    legal, nobody had just written down the preset."""
+    import itertools
+
+    from agentic import init as initmod
+
+    harnesses = list(initmod.CODING_TARGETS)
+    assert set(harnesses) == {"claude-code", "antigravity", "claude-app"}
+    for size in range(1, len(harnesses) + 1):
+        for combo in itertools.combinations(harnesses, size):
+            treg, tmp = _temp_registry()
+            written = initmod.scaffold_machine(tmp, name="box", os_name="windows",
+                                               targets=list(combo))
+            assert written == "local/machines/box.yaml"
+            reg2 = loader.load(tmp)          # loader._validate runs inside load()
+            assert set(reg2.machines["box"]["targets"]) == set(combo)
+            planner.plan_machine(reg2, "box")
+            # the paths block is the UNION of what those targets need — no more, no less
+            expected = {k for t in combo for k in initmod._TARGET_PATH_KEYS[t]}
+            assert set(reg2.machines["box"]["paths"]) == expected, combo
+            # a coding-harness machine never carries the agentic tree or an org skill
+            assert "agents-md" not in reg2.machines["box"]["targets"]
+
+def test_scaffold_machine_rejects_illegal_target_sets():
+    from agentic import init as initmod
+    bad = (
+        {"targets": ["hermes", "claude-code"]},   # machine-role exclusivity (loader._validate)
+        {"targets": []},                          # nothing to deploy
+        {"targets": ["no-such-tool"]},
+        {},                                       # neither use_case nor targets
+        {"use_case": "coding", "targets": ["claude-code"]},   # both
+    )
+    for kwargs in bad:
+        treg, tmp = _temp_registry()
+        try:
+            initmod.scaffold_machine(tmp, name="box", os_name="linux", **kwargs)
+            raise AssertionError(f"expected ValueError for {kwargs}")
+        except ValueError:
+            pass
+        assert not (tmp / "registry/local/machines/box.yaml").exists(), \
+            f"{kwargs}: refused, but still wrote a profile"
+    # hermes pulls agents-md in with it — the tree is the point of that target
+    assert initmod.resolve_targets(targets=["hermes"]) == ["hermes", "agents-md"]
+
+def test_scaffold_machine_document_store_is_asked_not_assumed():
+    """`document_store:` is written only when the user names a store. Omitting it is the
+    honest state for a box whose server isn't running — and it is the one signal every
+    connection-bound output is gated on, so a wrong default silently deploys MCP wiring
+    and `requires_server:` skills for a connection the user never had."""
+    from agentic import init as initmod
+
+    assert initmod.known_servers(REPO_ROOT) == ["gws"]   # the choices are read, not hardcoded
+
+    treg, tmp = _temp_registry()
+    initmod.scaffold_machine(tmp, name="box", os_name="windows", targets=["claude-code"])
+    reg2 = loader.load(tmp)
+    assert "document_store" not in reg2.machines["box"]
+    assert not [o for o in planner.plan_machine(reg2, "box") if o.lane == "connections"]
+
+    treg2, tmp2 = _temp_registry()
+    initmod.scaffold_machine(tmp2, name="box", os_name="windows",
+                             targets=["claude-code"], document_store="gws")
+    reg3 = loader.load(tmp2)
+    assert reg3.machines["box"]["document_store"] == "gws"
+
 def test_example_project_suppressed_when_overlay_projects_exist():
     """An `example: true` sample steps aside once overlay projects exist — across BOTH
     enumeration trees (agents-md assistant tree + agentic-graph roster). Real reg carries

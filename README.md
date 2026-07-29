@@ -124,33 +124,53 @@ For indexing documents and setting up external document stores (like Google Work
 
 ## Choosing your setup
 
-`python build/mitos.py init` asks which of these you're setting up and writes the matching
+`python build/mitos.py init` asks how you'll run Mitos on this box and writes
 `registry/local/machines/<name>.yaml` for you — the file that actually decides what `deploy`
-materializes. The three shapes:
+materializes. The first question is the one that matters:
 
-| Use case | `targets:` | What deploys | Orgs? | Shipped template |
-|---|---|---|---|---|
-| **1. Claude Code only** | `[claude-code]` | Skills + prompts into your existing checkout(s). No agentic tree. | No | [`machines/example-workstation.yaml`](machines/example-workstation.yaml) |
-| **2. Coding harnesses** | `[antigravity, claude-app, claude-code]` | Skills across Claude Code, Antigravity, and Claude Desktop/web. No agentic tree. | No | [`machines/example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) |
-| **3. Full agentic assistant (Hermes)** | `[hermes, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** | [`machines/example-linux.yaml`](machines/example-linux.yaml) |
+| Role | `targets:` | What deploys | Orgs? |
+|---|---|---|---|
+| **Coding harnesses** | any subset of `[claude-code, antigravity, claude-app]` | Skills + prompts inside the editors you already use. No agentic tree. | No |
+| **Full agentic assistant (Hermes)** | `[hermes, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** |
+
+Pick the coding role and init then asks **which** harnesses, as an independent multi-select
+— each is its own target with its own deploy paths, so any non-empty subset is a legal
+machine (Antigravity alone, Claude Desktop alone, all three). The `paths:` block is derived
+from whatever you pick. Three of those combinations ship as copyable templates:
+[`example-workstation.yaml`](machines/example-workstation.yaml) (`[claude-code]`),
+[`example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) (all three), and
+[`example-linux.yaml`](machines/example-linux.yaml) (the Hermes shape).
 
 **Orgs (`org-software`/`org-design`/`org-marketing`) require `hermes` literally in
-`targets:`.** They never deploy on use cases 1 or 2 — the three org skills declare
+`targets:`.** They never deploy on a coding-harness machine — the three org skills declare
 `targets: [hermes]` only, and the org-domain table + per-effort routing lines render
 exclusively on the hermes/agents-md tree. `agents-md` by itself (e.g. a workstation using
 `agentic_context_root` or a project's `agentic_tree:` mount) is a context-format choice,
 not an org trigger — see [`docs/org-templates.md`](docs/org-templates.md). Mixing `hermes`
 with a coding-harness target on one machine is rejected at compile time (see **machine**
-under [Core concepts](#core-concepts)) — use case 3 is a dedicated machine, not an add-on
-to 1 or 2.
+under [Core concepts](#core-concepts)) — the Hermes role is a dedicated machine, not an
+add-on. `init` refuses the mix before it writes anything.
 
-**Workspace connections are opt-in too.** None of the three templates declares a
-`document_store:`, so a fresh machine gets no MCP server spliced into its harness config
-and no connection-bound skill — the shipped `gws` skill declares `requires_server: gws`
-and stays off any box that never wired Google Workspace. `deploy` names what it withheld
-and why. Set up the server first ([`docs/connectors/`](docs/connectors/)), then add
-`document_store: gws` to your machine profile; both the wiring and the skill appear on the
-next deploy. See [connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
+**Workspace connections are asked for, never assumed.** Init offers the servers defined in
+[`connections/servers.yaml`](connections/servers.yaml) plus **None** (the default), and
+writes `document_store:` only if you name one. That field is the single signal every
+connection-bound output is gated on: without it a machine gets no MCP server spliced into
+its harness config and no connection-bound skill — the shipped `gws` skill declares
+`requires_server: gws` and stays off any box that never wired Google Workspace. `deploy`
+names what it withheld and why. Set up the server first
+([`docs/connectors/`](docs/connectors/)), then add `document_store: gws` to your machine
+profile; both the wiring and the skill appear on the next deploy. See
+[connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
+
+**Your first deploy to a coding machine installs no skills, and that's expected.** Every
+skill that ships in core targets the agentic assistant, except `gws` — which stays off
+until you declare its connection. The skills lane is for *your* content: author one at
+`registry/local/skills/<name>/SKILL.md` in your gitignored overlay, or from the console's
+**Skills & Orgs** tab (`python build/compile.py review` → **+ New skill**), which lands it
+in the same place through the inbox. Set its `targets:` to the harnesses you picked, and
+`scope:` to `global` (every project on the machine) or `project` (only the projects naming
+it). See [How skills reach a tool](#how-skills-reach-a-tool) and
+[`docs/authoring-capabilities.md`](docs/authoring-capabilities.md).
 
 
 ## Make it yours

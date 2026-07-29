@@ -18,20 +18,77 @@ from .loader import LOCAL_OVERLAY
 ORG_TEMPLATES_DIR = "registry/templates/org"
 OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 
-# The three supported machine use cases (see machines/example-*.yaml for the shipped
-# templates these mirror) — each maps directly to a `targets:` list. `hermes` in a
-# machine's targets excludes the coding-harness targets on that same machine
-# (loader._validate's machine-role exclusivity check), so "coding harnesses only" and
-# "full agentic assistant" are mutually exclusive by construction, not just by this
-# wizard's framing. Org skills (`org-software`/`org-design`/`org-marketing`) declare
-# `targets: [hermes]` only, and the org-domain routing table/lines render solely on the
-# agents-md/hermes tree (render.org_domain_table, graph._effort_domain_line) — so only
-# the "hermes" use case ever deploys orgs; "workstation" and "coding" never do.
+# The named machine shapes (see machines/example-*.yaml for the shipped templates these
+# mirror) — each maps directly to a `targets:` list. These are PRESETS, not the full set
+# of legal profiles: `scaffold_machine` also takes an arbitrary `targets=` list, which is
+# how `mitos init` offers the coding harnesses as an independent multi-select (there is
+# nothing special about the claude-code-only shape — it was simply the only single-harness
+# preset anyone had written down). `hermes` in a machine's targets excludes the
+# coding-harness targets on that same machine (loader._validate's machine-role exclusivity
+# check), so "coding harnesses" and "full agentic assistant" are mutually exclusive by
+# construction, not just by this wizard's framing. Org skills
+# (`org-software`/`org-design`/`org-marketing`) declare `targets: [hermes]` only, and the
+# org-domain routing table/lines render solely on the agents-md/hermes tree
+# (render.org_domain_table, graph._effort_domain_line) — so only a hermes machine ever
+# deploys orgs; a coding-harness machine never does.
 MACHINE_USE_CASES: dict[str, list[str]] = {
     "workstation": ["claude-code"],
     "coding": ["antigravity", "claude-app", "claude-code"],
     "hermes": ["hermes", "agents-md"],
 }
+
+# The coding harnesses a user picks from independently, with the label the wizard shows.
+CODING_TARGETS: dict[str, str] = {
+    "claude-code": "Claude Code",
+    "antigravity": "Antigravity",
+    "claude-app": "Claude Desktop / claude.ai",
+}
+
+# Which `paths:` keys each target actually needs, and the starter value to write for each.
+# A profile's paths block is the UNION over its targets (deduped, in _PATH_ORDER) — that
+# is what makes an arbitrary target subset scaffoldable instead of only the three presets.
+# Key order doubles as the emit order of `targets:`, matching machines/example-*.yaml.
+_TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
+    "antigravity": ("projects_root", "antigravity_config", "antigravity_skills"),
+    "claude-app": ("claude_skills_staging",),
+    "claude-code": ("projects_root", "claude_code_skills"),
+    "hermes": ("hermes_home", "hermes_config", "assistant_root"),
+    "agents-md": (),          # a context FORMAT, not a harness — owns no path of its own
+}
+
+# Stable emit order, so two profiles with overlapping targets read the same way.
+_PATH_ORDER = ("projects_root", "antigravity_config", "antigravity_skills",
+               "claude_code_skills", "claude_skills_staging",
+               "hermes_home", "hermes_config", "assistant_root")
+
+_PATH_VALUES: dict[str, str] = {
+    "antigravity_config": "~/.gemini/config",
+    "antigravity_skills": "~/.gemini/config/skills",
+    "claude_code_skills": "~/.claude/skills",
+    "claude_skills_staging": "~/ClaudeSkills",
+    "hermes_home": "~/.hermes",
+    "hermes_config": "~/.hermes/config.yaml",
+    "assistant_root": "~/MitosAgent",
+}
+
+
+def known_servers(root: Path) -> list[str]:
+    """The MCP server keys a machine may name in `document_store:` (connections/servers.yaml,
+    plus any the overlay adds). Read directly rather than through `loader.load` — init runs
+    before an overlay exists, and a half-built registry must not stop the wizard asking."""
+    names: list[str] = []
+    for conn in (root / "connections" / "servers.yaml",
+                 root / "registry" / LOCAL_OVERLAY / "connections" / "servers.yaml"):
+        if not conn.is_file():
+            continue
+        try:
+            data = yaml.safe_load(conn.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            continue
+        for name in (data.get("servers") or {}):
+            if name not in names:
+                names.append(name)
+    return names
 
 
 def org_templates(root: Path) -> list[str]:
@@ -147,58 +204,112 @@ def _user_yaml(given_name: str, family_name: str, email: str, location: str) -> 
 
 
 def _overlay_readme(backend: str) -> str:
+    """`backend` is the document store chosen at init, or "none" — it is a NOTE here, not
+    the wiring. The live setting is the machine profile's `document_store:`, which is what
+    gates every connection-bound output; this file only records the answer for a reader."""
+    store_note = (
+        "Workspace connection: none yet. Add `document_store: <server>` to your machine "
+        "profile once the server is running (see docs/connectors/), then re-deploy — the "
+        "MCP wiring and any `requires_server:` skill appear on that deploy.\n"
+        if backend in ("", "none") else
+        f"Workspace connection: `{backend}` — see the connector docs to connect it, then "
+        f"`python build/mitos.py connect --project <slug>`.\n")
     return ("# Personal overlay (private)\n\n"
             "This tree is your Mitos personalization. It is **gitignored** — never committed "
             "to the public repo. It overrides the core registry by last-layer-wins: a file "
             "here with the same logical path/name as a core file replaces it; new files are "
             "added; core-only files remain.\n\n"
-            f"Workspace backend: `{backend}` — see the connector docs to connect it, then "
-            "`python build/mitos.py connect --project <slug>`.\n")
+            "Your own skills live in `skills/<name>/SKILL.md` here — the skills that ship in "
+            "core target the agentic assistant (`hermes`), so a coding-harness machine "
+            "installs none of them. Author one by hand or from the console's Skills & Orgs "
+            "tab (`python build/compile.py review`).\n\n"
+            + store_note)
 
 
-def scaffold_machine(root: Path, *, name: str, os_name: str, use_case: str,
+def resolve_targets(*, use_case: str | None = None,
+                    targets: list[str] | None = None) -> list[str]:
+    """The `targets:` list for a machine, from either a named preset or an explicit set.
+    Exactly one of the two must be given. An explicit set is normalized (deduped, emitted
+    in `_TARGET_PATH_KEYS` order) and `hermes` pulls in `agents-md`, since the operating
+    tree is the whole point of that target. Raises ValueError on an unknown name, an empty
+    set, or a hermes+coding mix — the last one mirrors `loader._validate`'s machine-role
+    exclusivity check, so the wizard refuses before writing a profile that cannot compile."""
+    if (use_case is None) == (targets is None):
+        raise ValueError("pass exactly one of use_case= or targets=")
+    if use_case is not None:
+        if use_case not in MACHINE_USE_CASES:
+            raise ValueError(f"unknown use case {use_case!r}; available: "
+                             f"{sorted(MACHINE_USE_CASES)}")
+        return list(MACHINE_USE_CASES[use_case])
+
+    chosen = set(targets or ())
+    if not chosen:
+        raise ValueError("targets= must name at least one target")
+    unknown = sorted(chosen - set(_TARGET_PATH_KEYS))
+    if unknown:
+        raise ValueError(f"unknown target(s) {unknown}; available: "
+                         f"{sorted(_TARGET_PATH_KEYS)}")
+    if "hermes" in chosen:
+        clash = sorted(chosen & set(CODING_TARGETS))
+        if clash:
+            raise ValueError(
+                f"'hermes' cannot share a machine with {clash} — an agentic machine is "
+                f"dedicated to that purpose. Use a project's `agentic_tree:` instead.")
+        chosen.add("agents-md")
+    return [t for t in _TARGET_PATH_KEYS if t in chosen]
+
+
+def scaffold_machine(root: Path, *, name: str, os_name: str, use_case: str | None = None,
+                     targets: list[str] | None = None, document_store: str | None = None,
                      overwrite: bool = False) -> str | None:
-    """Write `registry/local/machines/<name>.yaml` for one of the three supported use
-    cases (see `MACHINE_USE_CASES`) — the profile that actually decides what `deploy`
-    materializes on this box. Mirrors `machines/example-*.yaml`'s field/path conventions.
+    """Write `registry/local/machines/<name>.yaml` — the profile that actually decides what
+    `deploy` materializes on this box. Takes either a named preset (`use_case`, see
+    `MACHINE_USE_CASES`) or an explicit `targets` list; the `paths:` block is derived as the
+    union of what those targets need, so any legal subset scaffolds, not just the presets.
+    Mirrors `machines/example-*.yaml`'s field/path conventions.
+
+    `document_store` is the machine's connection — the one signal every connection-bound
+    output is gated on (MCP wiring, plus any skill declaring `requires_server:`). Pass None
+    (the default) to omit the field entirely, which is the honest state for a box whose
+    server is not running yet: nothing connection-bound deploys, and `deploy` says what it
+    withheld and why. Not validated here against `connections/servers.yaml` — the loader
+    owns that check, and duplicating it would mean two places to keep in sync.
 
     **Non-destructive by default** (matches `scaffold_overlay`): does nothing and returns
     None when the profile already exists, unless `overwrite=True`. Returns the
     registry-relative path it wrote, or None when it skipped. Raises ValueError on an
-    unknown use case."""
-    if use_case not in MACHINE_USE_CASES:
-        raise ValueError(f"unknown use case {use_case!r}; available: "
-                         f"{sorted(MACHINE_USE_CASES)}")
+    unknown use case/target or an illegal target mix."""
+    resolved = resolve_targets(use_case=use_case, targets=targets)
     dest = root / "registry" / LOCAL_OVERLAY / "machines" / f"{name}.yaml"
     if dest.exists() and not overwrite:
         return None
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_machine_yaml(name, os_name, use_case), encoding="utf-8")
+    dest.write_text(_machine_yaml(name, os_name, resolved, document_store),
+                    encoding="utf-8")
     return f"{LOCAL_OVERLAY}/machines/{name}.yaml"
 
 
-def _machine_yaml(name: str, os_name: str, use_case: str) -> str:
-    targets = MACHINE_USE_CASES[use_case]
-    projects_root = "C:/Projects" if os_name == "windows" else "~/Projects"
-    lines = [f"name: {name}", f"os: {os_name}",
-             f"targets: [{', '.join(targets)}]", "paths:"]
-    if use_case == "workstation":
+def _machine_yaml(name: str, os_name: str, targets: list[str],
+                  document_store: str | None) -> str:
+    keys: list[str] = []
+    for target in targets:
+        for key in _TARGET_PATH_KEYS[target]:
+            if key not in keys:
+                keys.append(key)
+    values = dict(_PATH_VALUES,
+                  projects_root="C:/Projects" if os_name == "windows" else "~/Projects")
+
+    lines = [f"name: {name}", f"os: {os_name}", f"targets: [{', '.join(targets)}]"]
+    if document_store:
+        lines.append(f"document_store: {document_store}")
+    else:
         lines += [
-            f'  projects_root: "{projects_root}"',
-            '  claude_code_skills: "~/.claude/skills"',
+            "# The connections this box has. Everything connection-bound is gated on it:",
+            "# the MCP wiring spliced into each harness's config AND any skill declaring",
+            "# `requires_server:`. Uncomment once the server is really running, so this",
+            "# machine never receives instructions for tools it cannot call.",
+            "# document_store: gws",
         ]
-    elif use_case == "coding":
-        lines += [
-            f'  projects_root: "{projects_root}"',
-            '  antigravity_config: "~/.gemini/config"',
-            '  antigravity_skills: "~/.gemini/config/skills"',
-            '  claude_code_skills: "~/.claude/skills"',
-            '  claude_skills_staging: "~/ClaudeSkills"',
-        ]
-    else:  # hermes
-        lines += [
-            '  hermes_home: "~/.hermes"',
-            '  hermes_config: "~/.hermes/config.yaml"',
-            '  assistant_root: "~/MitosAgent"',
-        ]
+    lines.append("paths:")
+    lines += [f'  {key}: "{values[key]}"' for key in _PATH_ORDER if key in keys]
     return "\n".join(lines) + "\n"

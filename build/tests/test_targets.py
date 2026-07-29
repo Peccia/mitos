@@ -511,6 +511,63 @@ def test_fresh_coding_machine_deploys_no_workspace_content():
                 assert "Always read `AGENTS.md` within" not in o.content, \
                     f"{use_case}: CLAUDE.md routes through an agentic tree that isn't here"
 
+def test_coding_harness_context_carries_no_assistant_persona():
+    """A project's CLAUDE.md on a coding-harness box must not cast the agent as the
+    owner's *personal assistant*, must not inline the owner's email/location (that file is
+    normally committed to the repo), and must not claim a document store the machine never
+    declared. `identity/who-i-am.md` is [hermes, agents-md]; `who-i-am-coding.md` is the
+    [claude-code] counterpart, and audience picks exactly one."""
+    import copy
+
+    from agentic.init import MACHINE_USE_CASES
+    user = reg.user or {}
+    for use_case in ("workstation", "coding"):
+        rig = copy.deepcopy(reg)
+        m = rig.machines["example-windows"]
+        m["targets"] = list(MACHINE_USE_CASES[use_case])
+        m.pop("document_store", None)
+        # a user's OWN project: no knowledge graph, repo context only — the branch that
+        # inlines the identity partials rather than emitting a stub or an AGENTS.md
+        rig.projects["myapp"] = {
+            "name": "MyApp", "slug": "myapp", "stage": "build",
+            "local_path": {"example-windows": "myapp"},
+            "context": {"repo": "registry/context/projects/example-project-repo.md"},
+        }
+        claude_mds = [o for o in planner.plan_machine(rig, "example-windows")
+                      if o.deploy_path.endswith("myapp/CLAUDE.md")]
+        assert claude_mds, f"{use_case}: expected a CLAUDE.md for a repo-context project"
+        for o in claude_mds:
+            assert "personal assistant" not in o.content, \
+                f"{use_case}: coding harness cast as the assistant persona"
+            assert "document store" not in o.content, \
+                f"{use_case}: claims a document store this machine never declared"
+            for field in ("email", "location"):
+                value = (user.get(field) or "").strip()
+                if value:
+                    assert value not in o.content, \
+                        f"{use_case}: leaks the owner's {field} into a committed CLAUDE.md"
+            # the coding counterpart IS present — this is a swap, not a deletion
+            assert "coding agent" in o.content, f"{use_case}: no identity header at all"
+
+def test_deployed_workspace_skill_names_no_hermes_machinery():
+    """The `gws` skill is the one core skill a coding-harness box can receive. Its BODY
+    must not reference machinery only the agentic harness has — `SOUL.md`, Hermes, or
+    Hermes's `config.yaml` — since those name files that box does not have. (The gate in
+    test_requires_server_gates_skill stops it deploying UNWIRED; this covers the wired
+    case.)"""
+    import copy
+
+    rig = _connected_rig("example-windows")           # document_store: gws → skill deploys
+    rig = copy.deepcopy(rig)
+    outs = [o for o in planner.plan_machine(rig, "example-windows")
+            if "gws" in o.deploy_path and o.target != "hermes"]
+    assert outs, "expected the gws skill on a wired coding-harness machine"
+    for o in outs:
+        body = "\n".join(o.zip_members.values()) if o.zip_members else o.content
+        for term in ("SOUL", "Hermes", "config.yaml"):
+            assert term not in body, \
+                f"{o.deploy_path}: names hermes-only machinery '{term}'"
+
 def test_target_side_skill_curation_rejected():
     """include:/exclude: under a targets/*.yaml skills: block is core, shared by every
     user, and not overlayable — curation belongs on the machine profile instead."""

@@ -1,5 +1,5 @@
 ---
-audience: [hermes, claude-code, antigravity, agents-md]
+audience: [hermes, agents-md]
 ---
 ## About Me
 
