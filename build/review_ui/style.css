@@ -756,6 +756,15 @@ details.payload pre {
    so the base tiny-button padding (.05rem .35rem) silently won and squashed these pills
    next to the full-size chips in the same row. This rule outranks both on purpose. */
 button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
+/* Divider between the scope pair (My machines / All) and the kind/category chips — they
+   filter on different axes, so reading them as one row invites "why is All still hiding
+   things". A hairline is enough; a wrapped row drops it harmlessly. */
+.chip-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: .15rem .35rem;
+  background: var(--line);
+}
 
 #prompt-split {
   display: grid;

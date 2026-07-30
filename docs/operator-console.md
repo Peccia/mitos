@@ -158,7 +158,18 @@ One structured field in this tab drives the org model — the **effort `Org doma
 
 The **Skills & Orgs** tab is a card grid over every skill in your registry — one card per skill,
 with its description, target chips (which tools it deploys to), and — for org-domain skills — an
-`org: <domain>` badge. The card face carries only what *distinguishes* one skill from another;
+`org: <domain>` badge.
+
+The grid opens **scoped to your machines**: only skills a machine in your registry would
+actually deploy. That is the same question `deploy` answers, so both gates apply — a skill's
+`targets:` *and* its `requires_server:` connection. On a coding-harness box with no
+`document_store:` the shipped core skills all drop out (`org-*`, `new-session`,
+`graph-bootstrap`, and `project-update` declare `targets: [hermes]`; `gws` needs its server
+wired), leaving your own. Switch the **All** chip to browse the whole registry — nothing is
+hidden permanently, so the org skills stay readable as reference on any machine. The
+per-target chips beside it come from the targets your machines *declare*, not every adapter
+Mitos supports: a filter that can only ever empty the list isn't a filter. A fresh clone with
+no machine profile yet shows everything. The card face carries only what *distinguishes* one skill from another;
 every skill's uniform detail lives in one reusable **properties drawer** that slides in from the
 right (**Properties**, or Esc to close). Version/author/license/platforms are rarely-consulted
 provenance, so they sit there as a single compact line rather than a grid of cards.
@@ -220,7 +231,7 @@ skills and are never attached to a project** — the only org edge in the graph 
 
 The **Prompt Library** acts as a scratchpad and library for one-shot chat sessions in tools that Mitos does not deploy directly to (like standard web/desktop chat interfaces).
 
-- **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Filter chips reflect the categories actually present in your registry. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
+- **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Like the Skills tab, the Library opens **scoped to your machines** — a coding-harness box isn't handed the hermes-only skill bodies or the agentic-tree partials (`agentic-root.md`, `projects-index.md`, `operating-rules.md`) it can never use; the **All** chip reveals them. The scope pair only appears when something is actually being withheld. Kind/category chips reflect what the active scope contains, so a chip never yields an empty list. A prompt with no `targets:` is console-only by design and always shows. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
 - **Find anything (Ctrl/⌘K)**: Opens a command palette that searches every skill, prompt, and partial at once, from any tab — pick a result to jump straight to it in the Prompt Library.
 - **Favorites**: Toggle the star icon to pin a skill or prompt to your favorites list (drag to reorder, or use **Manage** for batch-unpin). Pins persist to `registry/local/prompt-favorites.yaml` and sync across sessions/devices.
 - **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal.

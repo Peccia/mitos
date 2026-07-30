@@ -6,6 +6,86 @@ import copy
 from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
+def _one_machine_rig(**machine):
+    """A registry whose fleet is exactly one machine — the fresh-install shape."""
+    rig = copy.deepcopy(reg)
+    rig.machines.clear()
+    rig.machines["box"] = {"name": "box", "os": "windows", "paths": {}, **machine}
+    return rig
+
+
+def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
+    """The console shows every registry item but TAGS each with `deploys_here`, so a fresh
+    coding-harness install opens on its own content instead of the hermes-only core skills.
+
+    The tag is asked of `planner._selected_skills` — the same function deploy uses — so the
+    connection gate counts too: `gws` targets claude-code but declares `requires_server:
+    gws`, and must read False until the machine declares that store. A `targets`-only test
+    would get that one wrong."""
+    from agentic.review import prompt_index
+
+    coding = _one_machine_rig(targets=["claude-code"])
+    shown = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
+    assert shown == set(), f"a coding box with no connection receives nothing: {shown}"
+
+    wired = _one_machine_rig(targets=["claude-code"], document_store="gws")
+    shown = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
+    assert shown == {"gws"}, f"wiring the store reveals exactly gws: {shown}"
+
+    # nothing is dropped from the payload — the console's "All" chip still reveals them
+    assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
+
+
+def test_deploys_here_is_a_no_op_on_a_hermes_machine():
+    """The guard for 'no impact on current functionality': an agentic machine's view is
+    unchanged, since every core skill targets hermes."""
+    from agentic.review import prompt_index
+
+    rig = _one_machine_rig(targets=["hermes", "agents-md"], document_store="gws")
+    idx = prompt_index(rig)
+    assert all(s["deploys_here"] for s in idx["skills"])
+    # the agentic tree's own prose reads as deployable here, and the coding persona does not
+    by_rel = {p["rel"]: p["deploys_here"] for p in idx["partials"]}
+    assert by_rel["identity/who-i-am.md"] and by_rel["context/agentic-root.md"]
+    assert not by_rel["identity/who-i-am-coding.md"]
+
+
+def test_deploys_here_shows_everything_on_a_fresh_clone():
+    """No real machines yet (only the shipped `example: true` templates) — `real_machines`
+    falls back to them, so the quick-start browse still shows content. Same step-aside
+    convention as planner._suppressed_examples."""
+    from agentic.review import prompt_index
+
+    rig = copy.deepcopy(reg)
+    assert all(m.get("example") for m in rig.machines.values()), \
+        "core ships only example machines — if that changes, this test's premise is gone"
+    assert any(s["deploys_here"] for s in prompt_index(rig)["skills"])
+
+
+def test_console_only_prompt_always_reads_as_available():
+    """A prompt with no `targets:` was never meant to deploy (registry/prompts/), so
+    'would a machine receive it' is the wrong question — it must not be scoped away."""
+    from agentic.review import prompt_index
+
+    rig = _one_machine_rig(targets=["claude-code"])
+    for p in prompt_index(rig)["prompts"]:
+        if not p["targets"]:
+            assert p["deploys_here"], f"console-only prompt {p['name']} was hidden"
+
+
+def test_state_exposes_machine_targets_separately_from_known_targets():
+    """Two lists, not interchangeable: `known_targets` is every adapter (the AUTHORING
+    forms — a skill may target a machine you haven't built), `machine_targets` is only what
+    your machines declare (the FILTER chips). Mixing them is what offered a `hermes` filter
+    chip on a coding-harness box."""
+    from agentic.review import state
+
+    st = state(_one_machine_rig(targets=["claude-code"]))
+    assert st["machine_targets"] == ["claude-code"]
+    assert "hermes" in st["known_targets"], "authoring must still offer every adapter"
+    assert "hermes" not in st["machine_targets"]
+
+
 def test_graph_index_lists_local_projects_regardless_of_drive_key():
     """graph_index must list every local project — presence or absence of 'drive' is irrelevant.
 
@@ -958,7 +1038,7 @@ def test_prompt_index_prompts_key_shape():
     assert isinstance(result["prompts"], list)
     assert result["prompts"], "expected at least one registry/prompts/*.md entry"
     expected_keys = {"name", "description", "category", "targets", "body", "frontmatter",
-                     "favorited"}
+                     "favorited", "deploys_here"}
     for item in result["prompts"]:
         assert set(item.keys()) == expected_keys
 

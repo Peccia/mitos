@@ -43,6 +43,7 @@ let collapsed = store.get(LS.collapsed, {});   // list group id -> true when col
 let compose = store.get(LS.compose, { items: [], text: null }); // items: keys; text: edited merge
 let selectedKey = null;                        // the prompt shown in the detail pane
 let filterChip = "all";                        // active list filter chip
+let promptShowAll = false;                     // see skillShowAll — same default, same escape hatch
 let PROMPTS = [];                              // flat prompt list (rebuilt each render)
 let PMAP = new Map();                          // key -> prompt
 let graphSlug = null;                          // selected project in the Knowledge Graph tab
@@ -73,6 +74,11 @@ let expandedSkillName = null;   // slug of the currently expanded skill row, or 
 let skillFilterText = "";       // client-side search text
 let skillFilterTarget = "";     // filter by target slug, "" = all
 let skillFilterOrg = false;     // filter to only org-domain skills
+// Default view = only what this registry's machines would actually deploy (the server's
+// per-item `deploys_here`). A coding-harness box therefore opens on its own skills instead
+// of the hermes-only core ones it can never receive; the "All" chip reveals everything, so
+// org skills stay readable as reference. Not persisted — a fresh session starts scoped.
+let skillShowAll = false;
 let orgSkillViewMode = {};      // skill name -> "role" | "agentsmd" per-skill
 
 // ── Ops (compile/deploy from the console) state ─────────────────────────────
@@ -2219,6 +2225,7 @@ function buildPrompts() {
       groupLabel: catLabels[s.category] || s.category.replace(/^./, (c) => c.toUpperCase()),
       search: `${s.name} ${s.description || ""} ${s.body}`.toLowerCase(),
       favorited: !!s.favorited,
+      deploysHere: s.deploys_here !== false,
     });
   }
   for (const p of STATE.prompts.prompts) {
@@ -2231,6 +2238,7 @@ function buildPrompts() {
       groupLabel: catLabels[p.category] || p.category.replace(/^./, (c) => c.toUpperCase()),
       search: `${p.name} ${p.description || ""} ${p.body}`.toLowerCase(),
       favorited: !!p.favorited,
+      deploysHere: p.deploys_here !== false,
     });
   }
   const labels = { identity: "Identity", context: "Context", projects: "Projects" };
@@ -2243,6 +2251,7 @@ function buildPrompts() {
       targets: null, body: p.body,
       group: `partial:${p.group}`, groupLabel: labels[p.group] || p.group,
       search: `${p.rel} ${p.body}`.toLowerCase(),
+      deploysHere: p.deploys_here !== false,
     });
   }
   return out;
@@ -2310,11 +2319,35 @@ const _partialLabels = { identity: "Identity", context: "Context", projects: "Pr
 function renderChips() {
   const box = $("filter-chips");
   box.replaceChildren();
+
+  // Scope toggle, mirroring the Skills tab (skillShowAll): the Library defaults to what
+  // this registry's machines actually deploy, so a coding-harness box is not handed the
+  // hermes-only skill bodies and agentic-tree partials it can never use. Rendered only when
+  // something is actually being withheld — otherwise it is a control with no effect.
+  const scoped = PROMPTS.filter(inScope);
+  if (PROMPTS.some((p) => !p.deploysHere)) {
+    for (const [label, all, title] of [
+      ["My machines", false, "Only prose a machine in your registry would actually receive"],
+      ["All", true, "Everything in the registry, including prose no machine of yours receives"],
+    ]) {
+      const active = promptShowAll === all;
+      const c = el("button", "chip" + (active ? " active" : ""), label);
+      c.title = title;
+      c.setAttribute("aria-pressed", String(active));
+      c.onclick = () => { promptShowAll = all; filterChip = "all"; renderChips(); renderList(); };
+      box.append(c);
+    }
+    box.append(el("span", "chip-sep"));
+  }
+
+  // Kind/category chips reflect what the ACTIVE scope contains, not the whole registry —
+  // a chip that can only ever yield an empty list is worse than no chip.
   const chips = [["all", "All"]];
-  if (PROMPTS.some((p) => p.kind === "skill")) chips.push(["skill", "Skills"]);
-  if (PROMPTS.some((p) => p.kind === "prompt")) chips.push(["prompt", "Prompts"]);
-  const partialCats = [...new Set(PROMPTS.filter((p) => p.kind === "partial").map((p) => p.catName))];
+  if (scoped.some((p) => p.kind === "skill")) chips.push(["skill", "Skills"]);
+  if (scoped.some((p) => p.kind === "prompt")) chips.push(["prompt", "Prompts"]);
+  const partialCats = [...new Set(scoped.filter((p) => p.kind === "partial").map((p) => p.catName))];
   for (const cat of partialCats) chips.push([cat, _partialLabels[cat] || cat]);
+  if (!chips.some(([id]) => id === filterChip)) filterChip = "all";
   for (const [id, label] of chips) {
     const c = el("button", "chip" + (filterChip === id ? " active" : ""), label);
     c.onclick = () => { filterChip = id; renderChips(); renderList(); };
@@ -2322,7 +2355,12 @@ function renderChips() {
   }
 }
 
+function inScope(p) {
+  return promptShowAll || p.deploysHere;
+}
+
 function chipAllows(p) {
+  if (!inScope(p)) return false;
   if (filterChip === "all") return true;
   if (filterChip === "skill") return p.kind === "skill";
   if (filterChip === "prompt") return p.kind === "prompt";
@@ -3166,8 +3204,13 @@ async function saveDraft(p, body, reason) {
 }
 
 // ── Skills tab: card grid over registry skills ──────────────────────────────────
-// The fixed target-adapter set now comes from /api/state (loader.KNOWN_TARGETS,
-// build/agentic/loader.py) instead of a hardcoded duplicate — see STATE.known_targets.
+// Two target lists reach this tab from /api/state, and they are not interchangeable:
+//   STATE.known_targets   — every adapter Mitos has (loader.KNOWN_TARGETS). Used by the
+//                           AUTHORING forms: a skill may declare any target, including one
+//                           for a machine you have not built yet.
+//   STATE.machine_targets — only what this registry's machines declare. Used by the FILTER
+//                           chips, which exist to narrow what you actually have.
+// Mixing them is what put a `hermes` filter chip on a coding-harness box.
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n).trimEnd() + "…" : s;
@@ -3185,6 +3228,15 @@ function renderSkills() {
   if (newSkillOpen)     { box.append(newSkillForm());      return; }
   if (newOrgDomainOpen) { box.append(newOrgDomainForm()); return; }
 
+  // ── build domain-by-skill lookup from orgData ────────────────────────────
+  // orgData is keyed by domain ("software"), each entry has .skill ("org-software").
+  // Join direction: skill name → domain key. orgData may be null on first paint.
+  // Built BEFORE the toolbar: the "Orgs only" chip needs it to decide whether to render.
+  const orgDomainBySkill = {};
+  for (const [dom, data] of Object.entries(orgData || {})) {
+    orgDomainBySkill[data.skill] = dom;
+  }
+
   // ── toolbar: filter bar (left) + action buttons (right) ─────────────────
   const toolbar = el("div", "skills-toolbar");
 
@@ -3196,19 +3248,60 @@ function renderSkills() {
   searchInp.oninput = () => { skillFilterText = searchInp.value; renderSkills(); };
   filterBar.append(searchInp);
 
-  // target filter chips — sourced from STATE.known_targets (never hardcoded)
   const chipRow = el("div", "skill-filter-chips");
-  for (const t of ["all", ...(STATE.known_targets || [])]) {
-    const active = (t === "all" ? "" : t) === skillFilterTarget;
-    const b = el("button", "pool-opt" + (active ? " active" : ""), t === "all" ? "All" : t);
-    b.setAttribute("aria-pressed", String(active));
-    b.onclick = () => { skillFilterTarget = t === "all" ? "" : t; renderSkills(); };
-    chipRow.append(b);
+
+  // Scope toggle: what this registry's machines deploy (default) vs. everything. Shown only
+  // when something is actually withheld — on a fleet that includes a hermes box every core
+  // skill deploys somewhere, so the pair would be a control with no effect (matches the
+  // Prompt Library's renderChips). A stuck `skillShowAll` is reset so the default view is
+  // honest once nothing is withheld.
+  const anyWithheld = (STATE.prompts.skills || []).some((s) => s.deploys_here === false);
+  if (anyWithheld) {
+    for (const [label, all, title] of [
+      ["My machines", false, "Only skills a machine in your registry would actually deploy"],
+      ["All", true, "Every skill in the registry, including ones no machine of yours receives"],
+    ]) {
+      const active = skillShowAll === all;
+      const b = el("button", "pool-opt" + (active ? " active" : ""), label);
+      b.title = title;
+      b.setAttribute("aria-pressed", String(active));
+      b.onclick = () => { skillShowAll = all; renderSkills(); };
+      chipRow.append(b);
+    }
+    chipRow.append(el("span", "chip-sep"));
+  } else {
+    skillShowAll = false;
   }
-  const orgChip = el("button", "pool-opt" + (skillFilterOrg ? " active" : ""), "Orgs only");
-  orgChip.setAttribute("aria-pressed", String(skillFilterOrg));
-  orgChip.onclick = () => { skillFilterOrg = !skillFilterOrg; renderSkills(); };
-  chipRow.append(orgChip);
+
+  // Target filter chips — in the scoped view they come from the targets this registry's
+  // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `hermes` as
+  // a filter on a coding-harness box is a control that can only ever empty the list.
+  const targetOpts = skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []);
+  // Drop a narrow left over from the other scope BEFORE rendering — e.g. `hermes` picked
+  // under All, then back to My machines. Without this the list empties with no active chip
+  // on screen to explain why, which reads as a bug rather than a filter.
+  if (skillFilterTarget && !targetOpts.includes(skillFilterTarget)) skillFilterTarget = "";
+  if (targetOpts.length > 1) {          // nothing to narrow between when there's only one
+    for (const t of ["any", ...targetOpts]) {
+      const active = (t === "any" ? "" : t) === skillFilterTarget;
+      const b = el("button", "pool-opt" + (active ? " active" : ""), t === "any" ? "Any target" : t);
+      b.setAttribute("aria-pressed", String(active));
+      b.onclick = () => { skillFilterTarget = t === "any" ? "" : t; renderSkills(); };
+      chipRow.append(b);
+    }
+  }
+  // Same rule for "Orgs only": omit it when the active scope holds no org-domain skill, so
+  // it can't sit there as the one chip guaranteed to yield nothing on a coding-harness box.
+  const scopedSkills = (STATE.prompts.skills || [])
+    .filter((s) => skillShowAll || s.deploys_here !== false);
+  if (scopedSkills.some((s) => orgDomainBySkill[s.name])) {
+    const orgChip = el("button", "pool-opt" + (skillFilterOrg ? " active" : ""), "Orgs only");
+    orgChip.setAttribute("aria-pressed", String(skillFilterOrg));
+    orgChip.onclick = () => { skillFilterOrg = !skillFilterOrg; renderSkills(); };
+    chipRow.append(orgChip);
+  } else if (skillFilterOrg) {
+    skillFilterOrg = false;
+  }
   filterBar.append(chipRow);
   toolbar.append(filterBar);
 
@@ -3222,18 +3315,11 @@ function renderSkills() {
   toolbar.append(btnGroup);
   box.append(toolbar);
 
-  // ── build domain-by-skill lookup from orgData ────────────────────────────
-  // orgData is keyed by domain ("software"), each entry has .skill ("org-software").
-  // Join direction: skill name → domain key. orgData may be null on first paint.
-  const orgDomainBySkill = {};
-  for (const [dom, data] of Object.entries(orgData || {})) {
-    orgDomainBySkill[data.skill] = dom;
-  }
-
   // ── filter ───────────────────────────────────────────────────────────────
   const q = skillFilterText.trim().toLowerCase();
   const skills = (STATE.prompts.skills || []);
   const visible = skills.filter(s => {
+    if (!skillShowAll && s.deploys_here === false) return false;
     if (skillFilterOrg && !orgDomainBySkill[s.name]) return false;
     if (skillFilterTarget && !(s.targets || []).includes(skillFilterTarget)) return false;
     if (q && !s.name.includes(q) && !(s.description || "").toLowerCase().includes(q)) return false;
@@ -3241,8 +3327,14 @@ function renderSkills() {
   });
 
   if (!visible.length) {
+    // Distinguish "you have none" from "the scope hid them" — otherwise a fresh
+    // coding-harness install reads as a broken registry rather than an empty one.
+    const hiddenByScope = !skillShowAll && skills.some(s => s.deploys_here === false);
     box.append(el("div", "empty-state",
-      skills.length ? "No skills match the current filter." : "No skills yet — create one to get started."));
+      !skills.length ? "No skills yet — create one to get started."
+      : hiddenByScope ? "No skills deploy to your machines yet — create one, or pick All to "
+                        + "browse the ones that ship with Mitos."
+      : "No skills match the current filter."));
     return;
   }
 

@@ -414,6 +414,16 @@ and **Deploy** directly from the sidebar, with a pre-deploy plan preview and a l
 drawer — `--force`/`--prune`/scoped `--lane`/`--target` deploys remain CLI-only. Full
 guide: [docs/operator-console.md](docs/operator-console.md).
 
+**Skills & Orgs and the Prompt Library open scoped to your machines.** Both default to
+showing only what a machine in your registry would actually deploy — asked of the same
+logic `deploy` uses, so a skill's `targets:` *and* its `requires_server:` connection gate
+both count. On a coding-harness box with no `document_store:` that means you see your own
+skills and nothing else: the shipped `org-*`, `new-session`, `graph-bootstrap`, and
+`project-update` all declare `targets: [hermes]`, and `gws` stays out until you wire its
+server. Nothing is deleted or hidden permanently — the **All** chip shows the full registry,
+so the org skills remain readable as reference. A fresh clone with no machine profile yet
+shows everything, so the quick-start browse still works.
+
 ## Commands
 
 Deploy, drift detection, and how you reconcile every state are the heart of Mitos — the full,

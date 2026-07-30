@@ -33,7 +33,7 @@ from . import commands, loader, render, staging as staging_mod
 from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
-from .planner import plan_machine, _project_repos
+from .planner import plan_machine, _project_repos, _selected_skills
 
 UI_DIR = Path(__file__).resolve().parent.parent / "review_ui"
 DECISIONS = "decisions.jsonl"
@@ -1420,6 +1420,47 @@ def _suppressed_example_partials(reg: Registry) -> set[str]:
     return hidden
 
 
+def _deploys_anywhere(reg: Registry) -> tuple[set[str], set[str], set[str]]:
+    """What at least one of the user's real machines would actually receive:
+    `(skill names, prompt names, partial rels)`.
+
+    ASKED of the functions deploy already uses — `planner._selected_skills` (which crosses a
+    skill's `targets:` with the machine's profile AND the `requires_server:`/`document_store:`
+    connection gate) and `Partial.visible_to` — never re-derived here. A second copy of that
+    logic would drift from the real deploy the moment either gate changed, and the whole
+    point of this is to show the operator what their machines get.
+
+    Consumed as a per-item `deploys_here` flag, not as a server-side filter: `prompt_index`
+    still returns everything, so the console's own "All" chip can reveal content this
+    machine cannot run (org skills stay readable as reference on a coding-harness box).
+
+    On a fresh clone with no real machines, `commands.real_machines` falls back to the
+    shipped examples, so everything reads as deployable — the same quick-start behaviour
+    `planner._suppressed_examples` gives sample projects.
+    """
+    # ponytail: re-walks every machine x target on each /api/state poll. Fine at fleet
+    # sizes in the low tens (a handful of machines, five targets, ~10 skills). If a large
+    # fleet ever makes the console feel slow, memoize per registry load — the result only
+    # changes when machine profiles or skills do, i.e. on "Reload from disk".
+    skills: set[str] = set()
+    partials: set[str] = set()
+    for name in commands.real_machines(reg):
+        machine = reg.machines.get(name) or {}
+        for target in machine.get("targets", []):
+            skills |= {s.name for s in _selected_skills(reg, {"include_target": target},
+                                                        machine)}
+            partials |= {p.rel for p in reg.partials.values() if p.visible_to(target)}
+    # A prompt with no `targets:` is console-only BY DESIGN (see registry/prompts/) — it was
+    # never meant to deploy, so "does a machine receive it" is the wrong question and it
+    # always reads as available. Ones that DO declare targets follow the same rule as skills.
+    prompts = {p.name for p in reg.prompts.values()
+               if not p.targets or any(
+                   t in p.targets
+                   for name in commands.real_machines(reg)
+                   for t in (reg.machines.get(name) or {}).get("targets", []))}
+    return skills, prompts, partials
+
+
 def prompt_index(reg: Registry) -> dict:
     """All registry prose organized into three sections for the Prompt Library tab.
 
@@ -1428,11 +1469,18 @@ def prompt_index(reg: Registry) -> dict:
     - partials: identity personas and context prose (minus example-project context once
       the user has their own projects — _suppressed_example_partials)
 
+    Every entry also carries `deploys_here` (see _deploys_anywhere): whether any of the
+    user's real machines would actually receive it. Nothing is filtered out server-side —
+    the console defaults its views to this flag and its "All" chip reveals the rest, so a
+    coding-harness box opens showing only its own content while the hermes-only org skills
+    stay readable as reference.
+
     Favorites are the user's pinned prompts, persisted in registry/local/prompt-favorites.yaml
     and surfaced so the UI can highlight them across sessions.
     """
     favorites = set(_load_favorites(reg.root))
     hidden_partials = _suppressed_example_partials(reg)
+    live_skills, live_prompts, live_partials = _deploys_anywhere(reg)
     prompts = [{
         "name": p.name,
         "description": p.frontmatter.get("description", ""),
@@ -1441,6 +1489,7 @@ def prompt_index(reg: Registry) -> dict:
         "body": p.body,
         "frontmatter": _meta_dict(p.frontmatter, _PROMPT_META_WHITELIST),
         "favorited": p.name in favorites,
+        "deploys_here": p.name in live_prompts,
     } for p in sorted(reg.prompts.values(), key=lambda p: (p.category, p.name))]
     skills = [{
         "name": s.name,
@@ -1459,6 +1508,7 @@ def prompt_index(reg: Registry) -> dict:
         # doesn't write project manifests (see docs/managing-state.md, invariant #3).
         "bound_projects": sorted(slug for slug, proj in reg.projects.items()
                                  if s.name in (proj.get("skills") or [])),
+        "deploys_here": s.name in live_skills,
     } for s in sorted(reg.skills.values(), key=lambda s: (s.category, s.name))]
     partials = [{
         "rel": p.rel,
@@ -1467,6 +1517,7 @@ def prompt_index(reg: Registry) -> dict:
                   else "context"),
         "audience": p.audience,
         "body": p.body,
+        "deploys_here": p.rel in live_partials,
     } for p in sorted(reg.partials.values(), key=lambda p: p.rel)
         if _partial_logical(p.rel) not in hidden_partials]
     return {"prompts": prompts, "skills": skills, "partials": partials}
@@ -2111,6 +2162,12 @@ def state(reg: Registry) -> dict:
         # templates step aside once the overlay defines a real machine; on a fresh clone
         # (no real machines yet) they show so the quick-start deploy rehearsal works
         "machines": sorted(commands.real_machines(reg)),
+        # The targets those machines actually declare. The Skills tab's filter chips read
+        # this instead of `known_targets` (the full adapter set), so a coding-harness box is
+        # not offered `hermes` as a filter for skills it can never receive. Empty only if a
+        # machine profile declares no targets at all.
+        "machine_targets": sorted({t for name in commands.real_machines(reg)
+                                   for t in (reg.machines.get(name) or {}).get("targets", [])}),
         "ops": {"compile": commands.compile_status(reg, reg.root / "dist")},
     }
 
