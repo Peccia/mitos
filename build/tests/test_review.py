@@ -41,7 +41,7 @@ def test_deploys_here_is_a_no_op_on_a_hermes_machine():
     unchanged, since every core skill targets hermes."""
     from agentic.review import prompt_index
 
-    rig = _one_machine_rig(targets=["hermes", "agents-md"], document_store="gws")
+    rig = _one_machine_rig(targets=["mitos-agent", "agents-md"], document_store="gws")
     idx = prompt_index(rig)
     assert all(s["deploys_here"] for s in idx["skills"])
     # the agentic tree's own prose reads as deployable here, and the coding persona does not
@@ -82,8 +82,8 @@ def test_state_exposes_machine_targets_separately_from_known_targets():
 
     st = state(_one_machine_rig(targets=["claude-code"]))
     assert st["machine_targets"] == ["claude-code"]
-    assert "hermes" in st["known_targets"], "authoring must still offer every adapter"
-    assert "hermes" not in st["machine_targets"]
+    assert "mitos-agent" in st["known_targets"], "authoring must still offer every adapter"
+    assert "mitos-agent" not in st["machine_targets"]
 
 
 def test_graph_index_lists_local_projects_regardless_of_drive_key():
@@ -267,7 +267,7 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     treg, tmp = _temp_registry()
     out = propose_new_skill(
         treg, "widget-helper",
-        {"description": "Helps with widgets.", "targets": ["hermes"], "category": "devops"},
+        {"description": "Helps with widgets.", "targets": ["mitos-agent"], "category": "devops"},
         "# Instructions\n\nDo the widget thing.", "")
     assert out["ok"], out
     assert out["registry_path"] == "local/skills/widget-helper/SKILL.md"
@@ -298,7 +298,7 @@ def test_propose_new_prompt_creates_kind_new_candidate_and_accepts_cleanly():
     treg, tmp = _temp_registry()
     out = propose_new_prompt(
         treg, "my-prompt",
-        {"description": "A test prompt.", "targets": ["hermes"], "category": "devops"},
+        {"description": "A test prompt.", "targets": ["mitos-agent"], "category": "devops"},
         "Prompt body text.", "")
     assert out["ok"], out
     assert out["registry_path"] == "local/prompts/my-prompt.md"
@@ -908,11 +908,11 @@ def test_propose_new_skill_rejects_name_collision_and_bad_shape():
     existing = next(iter(treg.skills))
 
     # name collision
-    out = propose_new_skill(treg, existing, {"targets": ["hermes"]}, "body")
+    out = propose_new_skill(treg, existing, {"targets": ["mitos-agent"]}, "body")
     assert not out["ok"]
 
     # bad slug shape (uppercase / underscore)
-    out = propose_new_skill(treg, "Bad_Name", {"targets": ["hermes"]}, "body")
+    out = propose_new_skill(treg, "Bad_Name", {"targets": ["mitos-agent"]}, "body")
     assert not out["ok"]
 
     # empty targets
@@ -942,7 +942,7 @@ def test_propose_new_org_domain_creates_domain_skill_and_accepts_cleanly():
     assert written.is_file()
     text = written.read_text(encoding="utf-8")
     assert "org_domain: finance" in text
-    assert "targets:" in text and "hermes" in text
+    assert "targets:" in text and "mitos-agent" in text
 
     reloaded = loadermod.load(tmp)
     assert loadermod.known_org_domains(reloaded) >= {"software", "design", "marketing", "finance"}
@@ -1229,7 +1229,7 @@ def test_propose_new_skill_with_extension_fields_validates_and_accepts():
     assert "org-software" in treg.skills
     out = propose_new_skill(
         treg, "org-data-science",
-        {"description": "Data science CTO extension.", "targets": ["hermes"],
+        {"description": "Data science CTO extension.", "targets": ["mitos-agent"],
         "category": "productivity", "extends_skill": "org-software",
         "extends_role": "CTO"},
         "Extra CTO guidance for data science work.", "")
@@ -1245,7 +1245,7 @@ def test_propose_new_skill_with_extension_fields_validates_and_accepts():
     # the extension never deploys standalone; it only appears spliced into the parent
     reloaded = loader.load(tmp)
     from agentic import planner as plannermod
-    selected = plannermod._selected_skills(reloaded, {"include_target": "hermes"})
+    selected = plannermod._selected_skills(reloaded, {"include_target": "mitos-agent"})
     assert "org-data-science" not in {s.name for s in selected}
     parent = reloaded.skills["org-software"]
     from agentic import render as rendermod
@@ -1258,7 +1258,7 @@ def test_propose_new_skill_rejects_extension_without_matching_role_field():
 
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "org-half-ext", {"targets": ["hermes"], "extends_skill": "org-software"},
+        treg, "org-half-ext", {"targets": ["mitos-agent"], "extends_skill": "org-software"},
         "body")
     assert not out["ok"]
     assert "must be specified together" in out["error"]
@@ -1270,7 +1270,7 @@ def test_propose_new_skill_rejects_extension_of_unknown_parent():
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
         treg, "org-bad-ext",
-        {"targets": ["hermes"], "extends_skill": "no-such-org", "extends_role": "CTO"},
+        {"targets": ["mitos-agent"], "extends_skill": "no-such-org", "extends_role": "CTO"},
         "body")
     assert not out["ok"]
     assert "is not a known skill" in out["error"]
@@ -1343,7 +1343,7 @@ def test_propose_new_skill_with_resources_writes_files_and_accepts():
 
     treg, tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-skill", {"targets": ["hermes"], "description": "d"},
+        treg, "res-skill", {"targets": ["mitos-agent"], "description": "d"},
         "# Instructions\n\nBody.", "",
         resources={"examples/sample.md": "expected output\n",
                   "scripts/validate.sh": "#!/bin/sh\necho ok\n"})
@@ -1365,7 +1365,7 @@ def test_propose_new_skill_rejects_invalid_resource_path():
 
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-skill-bad", {"targets": ["hermes"], "description": "d"}, "body",
+        treg, "res-skill-bad", {"targets": ["mitos-agent"], "description": "d"}, "body",
         resources={"not-allowed/x.md": "text"})
     assert not out["ok"]
     assert "invalid resource path" in out["error"]
@@ -1374,7 +1374,7 @@ def test_propose_new_skill_rejects_invalid_resource_path():
 def _make_res_skill(treg, tmp):
     from agentic.review import decide, propose_new_skill
     out = propose_new_skill(
-        treg, "res-abs-skill", {"targets": ["hermes"], "description": "d"}, "body",
+        treg, "res-abs-skill", {"targets": ["mitos-agent"], "description": "d"}, "body",
         resources={"examples/a.md": "a\n"})
     assert out["ok"], out
     acc = decide(loader.load(tmp), out["id"], "accept", "")
@@ -1435,7 +1435,7 @@ def test_load_candidates_surfaces_resources_and_provided_flag():
 
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-visible-skill", {"targets": ["hermes"], "description": "d"}, "body",
+        treg, "res-visible-skill", {"targets": ["mitos-agent"], "description": "d"}, "body",
         resources={"examples/x.md": "x\n"})
     assert out["ok"], out
     cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
@@ -1443,7 +1443,7 @@ def test_load_candidates_surfaces_resources_and_provided_flag():
     assert cand["resources"] == {"examples/x.md": "x\n"}
 
     out2 = propose_new_skill(
-        treg, "res-invisible-skill", {"targets": ["hermes"], "description": "d"}, "body")
+        treg, "res-invisible-skill", {"targets": ["mitos-agent"], "description": "d"}, "body")
     cand2 = next(c for c in load_candidates(treg) if c["id"] == out2["id"])
     assert cand2["resources_provided"] is False
 

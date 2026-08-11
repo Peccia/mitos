@@ -5,7 +5,7 @@ version: 1.0.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [hermes]
+targets: [mitos-agent]
 requires_server: gws       # reaches Drive through the gws MCP server
 category: devops
 hermes:
@@ -49,7 +49,7 @@ touches Drive; this enumeration is your job.
      registry_path: graph/<slug>.jsonld
      kind: graph
      project: <slug>
-     source: {machine: <this-box>, tool: hermes}
+     source: {machine: <this-box>, tool: mitos-agent}
      captured_at: <ISO-8601 UTC>
      note: <N> document mapping(s) discovered in Drive folder <folder>
      ```

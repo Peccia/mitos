@@ -76,7 +76,7 @@ let skillFilterTarget = "";     // filter by target slug, "" = all
 let skillFilterOrg = false;     // filter to only org-domain skills
 // Default view = only what this registry's machines would actually deploy (the server's
 // per-item `deploys_here`). A coding-harness box therefore opens on its own skills instead
-// of the hermes-only core ones it can never receive; the "All" chip reveals everything, so
+// of the mitos-agent-only core ones it can never receive; the "All" chip reveals everything, so
 // org skills stay readable as reference. Not persisted — a fresh session starts scoped.
 let skillShowAll = false;
 let orgSkillViewMode = {};      // skill name -> "role" | "agentsmd" per-skill
@@ -2322,7 +2322,7 @@ function renderChips() {
 
   // Scope toggle, mirroring the Skills tab (skillShowAll): the Library defaults to what
   // this registry's machines actually deploy, so a coding-harness box is not handed the
-  // hermes-only skill bodies and agentic-tree partials it can never use. Rendered only when
+  // mitos-agent-only skill bodies and agentic-tree partials it can never use. Rendered only when
   // something is actually being withheld — otherwise it is a control with no effect.
   const scoped = PROMPTS.filter(inScope);
   if (PROMPTS.some((p) => !p.deploysHere)) {
@@ -3210,7 +3210,7 @@ async function saveDraft(p, body, reason) {
 //                           for a machine you have not built yet.
 //   STATE.machine_targets — only what this registry's machines declare. Used by the FILTER
 //                           chips, which exist to narrow what you actually have.
-// Mixing them is what put a `hermes` filter chip on a coding-harness box.
+// Mixing them is what put a `mitos-agent` filter chip on a coding-harness box.
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n).trimEnd() + "…" : s;
@@ -3251,7 +3251,7 @@ function renderSkills() {
   const chipRow = el("div", "skill-filter-chips");
 
   // Scope toggle: what this registry's machines deploy (default) vs. everything. Shown only
-  // when something is actually withheld — on a fleet that includes a hermes box every core
+  // when something is actually withheld — on a fleet that includes a mitos-agent box every core
   // skill deploys somewhere, so the pair would be a control with no effect (matches the
   // Prompt Library's renderChips). A stuck `skillShowAll` is reset so the default view is
   // honest once nothing is withheld.
@@ -3274,10 +3274,10 @@ function renderSkills() {
   }
 
   // Target filter chips — in the scoped view they come from the targets this registry's
-  // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `hermes` as
+  // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `mitos-agent` as
   // a filter on a coding-harness box is a control that can only ever empty the list.
   const targetOpts = skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []);
-  // Drop a narrow left over from the other scope BEFORE rendering — e.g. `hermes` picked
+  // Drop a narrow left over from the other scope BEFORE rendering — e.g. `mitos-agent` picked
   // under All, then back to My machines. Without this the list empties with no active chip
   // on screen to explain why, which reads as a bug rather than a filter.
   if (skillFilterTarget && !targetOpts.includes(skillFilterTarget)) skillFilterTarget = "";
@@ -3600,7 +3600,7 @@ function renderSkillExtensionSection(s) {
 
 // ── skill-row scope assignment: global (default, deploys to every shared/global
 // directory a target offers — the antigravity_skills dir, the personal
-// claude_code_skills dir, hermes, claude-app) vs project (deploys ONLY to the
+// claude_code_skills dir, mitos-agent, claude-app) vs project (deploys ONLY to the
 // projects that name this skill in their manifest's `skills:` list, on whichever of
 // claude-code/antigravity it targets). Mirrors renderSkillExtensionSection's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
@@ -3619,7 +3619,7 @@ function renderSkillScopeSection(s) {
   section.append(header);
   section.append(el("div", "muted resources-hint",
     "Global (default): deploys to every shared directory this skill's targets offer. "
-    + "Project: deploys only to the projects below, on claude-code/antigravity — hermes and "
+    + "Project: deploys only to the projects below, on claude-code/antigravity — mitos-agent and "
     + "claude-app ignore this and always stay global."));
 
   function refreshActionState() {

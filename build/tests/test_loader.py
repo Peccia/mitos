@@ -159,8 +159,9 @@ def test_per_machine_server_url():
     # example-linux ships with no document_store — declare it, since MCP wiring is gated
     # on the machine actually having the connection (planner._gws)
     linux = planner.plan_machine(_connected_rig("example-linux", base=treg), "example-linux")
-    hermes_block = next(o for o in linux if o.kind == "yaml_merge")
-    assert "http://localhost:8000/mcp" in hermes_block.content
+    # Mitos Agent writes a whole-file mcp.json (kind="json"), not a yaml_merge block.
+    mcp_json = next(o for o in linux if o.deploy_path.endswith("mcp.json"))
+    assert "http://localhost:8000/mcp" in mcp_json.content
 
 def test_path_validation_control_characters():
     import copy
@@ -187,11 +188,11 @@ def test_path_validation_workspace_overlap():
     except RegistryError as e:
         assert "must not overlap with project 'example-project' workspace path" in str(e)
 
-def test_machine_role_exclusivity_hermes_vs_coding():
+def test_machine_role_exclusivity_assistant_vs_coding():
     import copy
     from agentic.loader import _validate, RegistryError
     rig = copy.deepcopy(reg)
-    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md", "claude-code"]
+    rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md", "claude-code"]
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError due to hermes + coding target on one machine")
@@ -199,19 +200,32 @@ def test_machine_role_exclusivity_hermes_vs_coding():
         assert "cannot share a machine with coding harness target(s)" in str(e)
         assert "claude-code" in str(e)
 
+def test_mitos_agent_requires_agents_md():
+    """The harness traverses the agents-md operating tree, so mitos-agent without agents-md
+    on the same machine is refused — it would install SOUL/skills/mcp with no tree to read."""
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.machines["example-linux"]["targets"] = ["mitos-agent"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError: mitos-agent needs agents-md")
+    except RegistryError as e:
+        assert "requires 'agents-md'" in str(e)
+
 def test_machine_role_agents_md_alone_is_not_a_coding_harness():
     """agents-md is the context format, not a harness — it may coexist with hermes
     (the agentic machine-mount combo) with no exclusivity violation."""
     import copy
     from agentic.loader import _validate
     rig = copy.deepcopy(reg)
-    rig.machines["example-linux"]["targets"] = ["hermes", "agents-md"]
+    rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md"]
     _validate(rig)  # must not raise
 
-def test_agents_md_without_hermes_never_leaks_org_routing():
+def test_agents_md_without_assistant_target_never_leaks_org_routing():
     """The actual bug this exists to prevent: `agents-md` alone (no `hermes` target) is a
     valid, common shape — example-windows.yaml ships exactly this (claude-code +
-    antigravity + claude-app + agents-md) — but org skills declare `targets: [hermes]`
+    antigravity + claude-app + agents-md) — but org skills declare `targets: [mitos-agent]`
     only, so they never deploy there. Both org-rendering surfaces (the agentic-graph
     reference mount via agentic_context_root, and the org-domain table on the
     agents-md/assistant tree) must therefore omit orgs entirely on such a machine, even
@@ -319,10 +333,10 @@ def test_overlay_precedence_last_layer_wins():
     local = tmp / "registry" / "local"
     (local / "identity").mkdir(parents=True)
     (local / "identity" / "comms-style.md").write_text(           # override same-key core
-        "---\naudience: [hermes]\n---\nOVERLAY comms rules\n", encoding="utf-8")
+        "---\naudience: [mitos-agent]\n---\nOVERLAY comms rules\n", encoding="utf-8")
     (local / "skills" / "extra").mkdir(parents=True)              # add a new local skill
     (local / "skills" / "extra" / "SKILL.md").write_text(
-        "---\nname: extra\ndescription: d\ntargets: [hermes]\ncategory: productivity\n---\n"
+        "---\nname: extra\ndescription: d\ntargets: [mitos-agent]\ncategory: productivity\n---\n"
         "body\n", encoding="utf-8")
     (local / "projects").mkdir(parents=True)                     # add a new local project
     (local / "projects" / "zeta.yaml").write_text(
@@ -393,7 +407,7 @@ def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
     """scaffold_machine writes a registry/local/machines/<name>.yaml whose `targets:` list
     matches the chosen use case, and — since org skills target hermes only and the
     org-domain table/routing lines render exclusively on the agents-md/hermes tree — only
-    the 'hermes' use case's plan carries orgs or an agents-md tree. 'workstation' and
+    the 'mitos-agent' use case's plan carries orgs or an agents-md tree. 'workstation' and
     'coding' must never deploy either, matching what a claude-code/antigravity-only user
     expects (the bug this wizard exists to prevent)."""
     from agentic import init as initmod
@@ -410,7 +424,7 @@ def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
         outputs = planner.plan_machine(reg2, "box")
         skill_paths = [o.deploy_path for o in outputs if "SKILL.md" in o.deploy_path]
         agents_md_tree = [o for o in outputs if o.target == "agents-md"]
-        if use_case == "hermes":
+        if use_case == "mitos-agent":
             assert any("org-software" in p for p in skill_paths)
             assert agents_md_tree
         else:
@@ -424,13 +438,13 @@ def test_scaffold_machine_never_clobbers_existing_profile():
                                        use_case="workstation")
     assert written == "local/machines/box.yaml"
     original = (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8")
-    again = initmod.scaffold_machine(tmp, name="box", os_name="linux", use_case="hermes")
+    again = initmod.scaffold_machine(tmp, name="box", os_name="linux", use_case="mitos-agent")
     assert again is None
     assert (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8") == original
     forced = initmod.scaffold_machine(tmp, name="box", os_name="linux",
-                                      use_case="hermes", overwrite=True)
+                                      use_case="mitos-agent", overwrite=True)
     assert forced == "local/machines/box.yaml"
-    assert "hermes" in (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8")
+    assert "mitos-agent" in (tmp / "registry/local/machines/box.yaml").read_text(encoding="utf-8")
 
 def test_scaffold_machine_rejects_unknown_use_case():
     from agentic import init as initmod
@@ -471,7 +485,7 @@ def test_scaffold_machine_accepts_any_coding_harness_subset():
 def test_scaffold_machine_rejects_illegal_target_sets():
     from agentic import init as initmod
     bad = (
-        {"targets": ["hermes", "claude-code"]},   # machine-role exclusivity (loader._validate)
+        {"targets": ["mitos-agent", "claude-code"]},   # machine-role exclusivity (loader._validate)
         {"targets": []},                          # nothing to deploy
         {"targets": ["no-such-tool"]},
         {},                                       # neither use_case nor targets
@@ -487,7 +501,7 @@ def test_scaffold_machine_rejects_illegal_target_sets():
         assert not (tmp / "registry/local/machines/box.yaml").exists(), \
             f"{kwargs}: refused, but still wrote a profile"
     # hermes pulls agents-md in with it — the tree is the point of that target
-    assert initmod.resolve_targets(targets=["hermes"]) == ["hermes", "agents-md"]
+    assert initmod.resolve_targets(targets=["mitos-agent"]) == ["mitos-agent", "agents-md"]
 
 def test_scaffold_machine_document_store_is_asked_not_assumed():
     """`document_store:` is written only when the user names a store. Omitting it is the
@@ -556,8 +570,8 @@ def test_overlay_machines_and_connections_precedence():
         "name: example-windows\nos: windows\ntargets: [claude-code]\n"
         'paths:\n  projects_root: "D:/Private"\n', encoding="utf-8")
     (local / "machines" / "home-server.yaml").write_text(
-        "name: home-server\nos: linux\ntargets: [hermes]\n"
-        'paths:\n  hermes_home: "~/.hermes"\n  hermes_config: "~/.hermes/config.yaml"\n',
+        "name: home-server\nos: linux\ntargets: [mitos-agent, agents-md]\n"
+        'paths:\n  assistant_root: "~/MitosAgent"\n',
         encoding="utf-8")
     # override the gws server URL with a private LAN address (synthetic, not real)
     (local / "connections").mkdir(parents=True, exist_ok=True)
@@ -581,12 +595,12 @@ def test_accept_routes_overlay_content_into_local_not_core():
     overlay = tmp / "registry" / "local" / "identity"
     overlay.mkdir(parents=True, exist_ok=True)
     (overlay / "comms-style.md").write_text(
-        "---\naudience: [hermes]\n---\nOVERLAY body line\n", encoding="utf-8")
+        "---\naudience: [mitos-agent]\n---\nOVERLAY body line\n", encoding="utf-8")
     treg = loader.load(tmp)
     assert treg.partials["identity/comms-style.md"].rel == "local/identity/comms-style.md"
 
     meta = {"registry_path": "identity/comms-style.md", "kind": "drift",
-            "source": {"machine": "rig", "tool": "hermes"}, "base_hash": "",
+            "source": {"machine": "rig", "tool": "mitos-agent"}, "base_hash": "",
             "deploy_path": "", "sources": ["identity/comms-style.md"],
             "captured_at": "t", "note": "n"}
     _plant_candidate(tmp, "t1--rig--comms", meta, "comms-style.md",
@@ -987,7 +1001,7 @@ def test_known_org_domains_discovers_new_domain_from_skill_frontmatter():
     rig = copy.deepcopy(reg)
     rig.skills["org-finance"] = Skill(
         name="org-finance", rel="local/skills/org-finance/SKILL.md",
-        frontmatter={"name": "org-finance", "targets": ["hermes"], "org_domain": "finance"},
+        frontmatter={"name": "org-finance", "targets": ["mitos-agent"], "org_domain": "finance"},
         body="# Instructions\n")
     assert known_org_domains(rig) == {"software", "design", "marketing", "finance"}
 
@@ -1057,7 +1071,7 @@ def test_validate_skill_extension_rejects_missing_anchor():
     from agentic.loader import Skill, validate_skill_extension
     rig = copy.deepcopy(reg)
     rig.skills["no-anchor"] = Skill(name="no-anchor", rel="skills/no-anchor/SKILL.md",
-                                    frontmatter={"targets": ["hermes"]}, body="# Instructions\n")
+                                    frontmatter={"targets": ["mitos-agent"]}, body="# Instructions\n")
     err = validate_skill_extension(
         rig, "x", {"extends_skill": "no-anchor", "extends_role": "CTO"})
     assert err and "has no" in err and "section to extend" in err
@@ -1068,7 +1082,7 @@ def test_validate_skill_extension_rejects_chained_extension():
     rig = copy.deepcopy(reg)
     rig.skills["ext-a"] = Skill(
         name="ext-a", rel="local/skills/ext-a/SKILL.md",
-        frontmatter={"targets": ["hermes"], "extends_skill": "org-software",
+        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
                     "extends_role": "CTO"},
         body="body")
     err = validate_skill_extension(
@@ -1087,7 +1101,7 @@ def test_registry_load_rejects_bad_extension_pair():
     rig = copy.deepcopy(reg)
     rig.skills["ext-bad"] = Skill(
         name="ext-bad", rel="local/skills/ext-bad/SKILL.md",
-        frontmatter={"targets": ["hermes"], "extends_skill": "no-such-skill",
+        frontmatter={"targets": ["mitos-agent"], "extends_skill": "no-such-skill",
                     "extends_role": "CTO"},
         body="body")
     try:
@@ -1116,7 +1130,7 @@ def test_project_cannot_bind_extension_skill_to_claude_code():
 # ── skill scope: global (default) | project ─────────────────────────────────────
 def test_skill_scope_defaults_global():
     from agentic.loader import Skill
-    s = Skill(name="x", rel="skills/x/SKILL.md", frontmatter={"targets": ["hermes"]}, body="")
+    s = Skill(name="x", rel="skills/x/SKILL.md", frontmatter={"targets": ["mitos-agent"]}, body="")
     assert s.scope == "global"
 
 def test_skill_scope_reads_frontmatter():
@@ -1143,7 +1157,7 @@ def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairin
     globally) rather than being flagged incompatible."""
     from agentic.loader import validate_skill_scope
     assert validate_skill_scope(
-        "x", {"targets": ["hermes", "antigravity"], "scope": "project"}) is None
+        "x", {"targets": ["mitos-agent", "antigravity"], "scope": "project"}) is None
     assert validate_skill_scope(
         "x", {"targets": ["claude-app", "claude-code"], "scope": "project"}) is None
     assert validate_skill_scope("x", {"targets": ["claude-app"], "scope": "project"}) is None
@@ -1179,7 +1193,7 @@ def test_project_cannot_bind_skill_with_no_project_scope_capable_target():
     rig = copy.deepcopy(reg)
     rig.skills["hermes-only"] = Skill(
         name="hermes-only", rel="local/skills/hermes-only/SKILL.md",
-        frontmatter={"targets": ["hermes"]}, body="body")
+        frontmatter={"targets": ["mitos-agent"]}, body="body")
     rig.projects["example-project"]["skills"] = ["hermes-only"]
     try:
         _validate(rig)
@@ -1195,7 +1209,7 @@ def test_skill_resources_loaded_from_examples_and_scripts():
     (skill_dir / "examples").mkdir(parents=True)
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: res-skill\ndescription: d\ntargets: [hermes]\ncategory: general\n---\n"
+        "---\nname: res-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "examples" / "sample.md").write_text("expected output\n", encoding="utf-8")
     (skill_dir / "scripts" / "validate.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
@@ -1215,7 +1229,7 @@ def test_skill_resources_loaded_from_all_harness_convention_dirs():
     for sub in ("references", "templates", "resources", "unrelated"):
         (skill_dir / sub).mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: conv-skill\ndescription: d\ntargets: [hermes]\ncategory: general\n---\n"
+        "---\nname: conv-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "references" / "api.md").write_text("api\n", encoding="utf-8")
     (skill_dir / "templates" / "config.yaml").write_text("k: v\n", encoding="utf-8")
@@ -1231,7 +1245,7 @@ def test_skill_resource_binary_file_rejected():
     skill_dir = tmp / "registry" / "skills" / "bin-skill"
     (skill_dir / "examples").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: bin-skill\ndescription: d\ntargets: [hermes]\ncategory: general\n---\n"
+        "---\nname: bin-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "examples" / "asset.bin").write_bytes(b"\xff\xfe\x00\x01binary")
     try:

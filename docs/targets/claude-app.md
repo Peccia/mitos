@@ -37,7 +37,7 @@ Claude Desktop reads its MCP server configuration from a JSON file Mitos can wri
 > explicit machine `home`) but does **not** expand environment variables — a literal
 > `%APPDATA%` would create a bogus folder by that name.
 
-**This is a connections concern, not a prompts concern** — it wires MCP servers into Desktop exactly as `connections/servers.yaml` + `targets/hermes.yaml` wires them into Hermes. The MCP half of `targets/claude-app.yaml` lives on the `--lane connections` deploy lane (the skills half is on `--lane content`).
+**This is a connections concern, not a prompts concern** — it wires MCP servers into Desktop exactly as `connections/servers.yaml` + `targets/mitos-agent.yaml` wires them into Mitos Agent. The MCP half of `targets/claude-app.yaml` lives on the `--lane connections` deploy lane (the skills half is on `--lane content`).
 
 > **Do not use "Add custom connector" in the Desktop UI for Mitos-managed servers.**
 > The Connectors UI (Desktop menu → Connectors → Add connectors) is for manually adding
@@ -110,7 +110,7 @@ constant intentionally — never widen it to a range.
 > endpoint (reverse proxy + TLS) so the Connectors UI accepts it, or doing without GWS
 > tools on Desktop. A one-time Node install is the lower-maintenance option.
 
-**Merge, not overwrite:** Claude Desktop keeps its own preferences (theme, layout, account state) in this *same* file, so a whole-file write would erase them. The target uses `kind: json_merge` owning the top-level `mcpServers` key (`owned_keys: [mcpServers]`) — the same mechanism as Hermes `config.yaml` and Antigravity `config.json` — splicing the Mitos server block in and leaving every other key untouched.
+**Merge, not overwrite:** Claude Desktop keeps its own preferences (theme, layout, account state) in this *same* file, so a whole-file write would erase them. The target uses `kind: json_merge` owning the top-level `mcpServers` key (`owned_keys: [mcpServers]`) — the same mechanism as Mitos Agent `config.yaml` and Antigravity `config.json` — splicing the Mitos server block in and leaving every other key untouched.
 
 ## Skills
 
@@ -155,7 +155,7 @@ paths:
 > Use the `~` form, never `%APPDATA%` — `io.expand()` does not expand environment variables.
 
 **MCP ownership:** `kind: json_merge` owning the top-level `mcpServers` key
-(`owned_keys: [mcpServers]`) — the same surgical-merge pattern as Hermes `config.yaml` and
+(`owned_keys: [mcpServers]`) — the same surgical-merge pattern as Mitos Agent `config.yaml` and
 Antigravity `config.json`. Claude Desktop stores its own preferences in this *same* file, so a
 whole-file write would erase them; owning just `mcpServers` splices the bridge in and
 leaves every sibling key intact. A user-added entry *inside* `mcpServers` is replaced on

@@ -23,18 +23,18 @@ OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 # of legal profiles: `scaffold_machine` also takes an arbitrary `targets=` list, which is
 # how `mitos init` offers the coding harnesses as an independent multi-select (there is
 # nothing special about the claude-code-only shape — it was simply the only single-harness
-# preset anyone had written down). `hermes` in a machine's targets excludes the
+# preset anyone had written down). `mitos-agent` in a machine's targets excludes the
 # coding-harness targets on that same machine (loader._validate's machine-role exclusivity
 # check), so "coding harnesses" and "full agentic assistant" are mutually exclusive by
 # construction, not just by this wizard's framing. Org skills
-# (`org-software`/`org-design`/`org-marketing`) declare `targets: [hermes]` only, and the
-# org-domain routing table/lines render solely on the agents-md/hermes tree
-# (render.org_domain_table, graph._effort_domain_line) — so only a hermes machine ever
+# (`org-software`/`org-design`/`org-marketing`) declare `targets: [mitos-agent]` only, and the
+# org-domain routing table/lines render solely on the agents-md/mitos-agent tree
+# (render.org_domain_table, graph._effort_domain_line) — so only a mitos-agent machine ever
 # deploys orgs; a coding-harness machine never does.
 MACHINE_USE_CASES: dict[str, list[str]] = {
     "workstation": ["claude-code"],
     "coding": ["antigravity", "claude-app", "claude-code"],
-    "hermes": ["hermes", "agents-md"],
+    "mitos-agent": ["mitos-agent", "agents-md"],
 }
 
 # The coding harnesses a user picks from independently, with the label the wizard shows.
@@ -52,22 +52,20 @@ _TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "antigravity": ("projects_root", "antigravity_config", "antigravity_skills"),
     "claude-app": ("claude_skills_staging",),
     "claude-code": ("projects_root", "claude_code_skills"),
-    "hermes": ("hermes_home", "hermes_config", "assistant_root"),
+    # ONE install root — SOUL/skills/mcp.json AND the agents-md tree share `assistant_root`.
+    "mitos-agent": ("assistant_root",),
     "agents-md": (),          # a context FORMAT, not a harness — owns no path of its own
 }
 
 # Stable emit order, so two profiles with overlapping targets read the same way.
 _PATH_ORDER = ("projects_root", "antigravity_config", "antigravity_skills",
-               "claude_code_skills", "claude_skills_staging",
-               "hermes_home", "hermes_config", "assistant_root")
+               "claude_code_skills", "claude_skills_staging", "assistant_root")
 
 _PATH_VALUES: dict[str, str] = {
     "antigravity_config": "~/.gemini/config",
     "antigravity_skills": "~/.gemini/config/skills",
     "claude_code_skills": "~/.claude/skills",
     "claude_skills_staging": "~/ClaudeSkills",
-    "hermes_home": "~/.hermes",
-    "hermes_config": "~/.hermes/config.yaml",
     "assistant_root": "~/MitosAgent",
 }
 
@@ -143,7 +141,7 @@ def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
         written.append(f"{LOCAL_OVERLAY}/{relpath}")
 
     # 1. Org template → overlay (optional). When provided, registry/local/identity/session-protocol.md
-    #    overrides the core session-protocol.md by key and flows into Hermes's SOUL.md. When None,
+    #    overrides the core session-protocol.md by key and flows into Mitos Agent's SOUL.md. When None,
     #    the core session protocol is used as-is — domain skills ship in core regardless.
     if org_template is not None:
         tdir = root / ORG_TEMPLATES_DIR / org_template
@@ -178,8 +176,8 @@ def _who_md(given_name: str, family_name: str, address: str) -> str:
     addr = address.strip() or given_name.strip() or full
     who = full or addr or "the owner"
     # Match the core who-i-am.md audience so the name/address reach every tool, not just
-    # Hermes — this overlay partial replaces the neutral core one by last-layer-wins.
-    return (f"---\naudience: [hermes, claude-code, antigravity, agents-md]\n---\n## About Me\n\n"
+    # Mitos Agent — this overlay partial replaces the neutral core one by last-layer-wins.
+    return (f"---\naudience: [mitos-agent, claude-code, antigravity, agents-md]\n---\n## About Me\n\n"
             f"You are {who}'s personal assistant, focused on truth, clarity, and usefulness "
             f"over politeness. Address me as \"{addr}\".\n")
 
@@ -220,7 +218,7 @@ def _overlay_readme(backend: str) -> str:
             "here with the same logical path/name as a core file replaces it; new files are "
             "added; core-only files remain.\n\n"
             "Your own skills live in `skills/<name>/SKILL.md` here — the skills that ship in "
-            "core target the agentic assistant (`hermes`), so a coding-harness machine "
+            "core target the agentic assistant (`mitos-agent`), so a coding-harness machine "
             "installs none of them. Author one by hand or from the console's Skills & Orgs "
             "tab (`python build/compile.py review`).\n\n"
             + store_note)
@@ -230,10 +228,11 @@ def resolve_targets(*, use_case: str | None = None,
                     targets: list[str] | None = None) -> list[str]:
     """The `targets:` list for a machine, from either a named preset or an explicit set.
     Exactly one of the two must be given. An explicit set is normalized (deduped, emitted
-    in `_TARGET_PATH_KEYS` order) and `hermes` pulls in `agents-md`, since the operating
+    in `_TARGET_PATH_KEYS` order) and `mitos-agent` pulls in `agents-md`, since the operating
     tree is the whole point of that target. Raises ValueError on an unknown name, an empty
-    set, or a hermes+coding mix — the last one mirrors `loader._validate`'s machine-role
-    exclusivity check, so the wizard refuses before writing a profile that cannot compile."""
+    set, or a mitos-agent+coding mix — the last one mirrors `loader._validate`'s machine-role
+    exclusivity check (KEPT, not retired), so the wizard refuses before writing a profile
+    that cannot compile."""
     if (use_case is None) == (targets is None):
         raise ValueError("pass exactly one of use_case= or targets=")
     if use_case is not None:
@@ -249,11 +248,11 @@ def resolve_targets(*, use_case: str | None = None,
     if unknown:
         raise ValueError(f"unknown target(s) {unknown}; available: "
                          f"{sorted(_TARGET_PATH_KEYS)}")
-    if "hermes" in chosen:
+    if "mitos-agent" in chosen:
         clash = sorted(chosen & set(CODING_TARGETS))
         if clash:
             raise ValueError(
-                f"'hermes' cannot share a machine with {clash} — an agentic machine is "
+                f"'mitos-agent' cannot share a machine with {clash} — an agentic machine is "
                 f"dedicated to that purpose. Use a project's `agentic_tree:` instead.")
         chosen.add("agents-md")
     return [t for t in _TARGET_PATH_KEYS if t in chosen]

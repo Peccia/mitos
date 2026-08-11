@@ -46,7 +46,7 @@ def test_lint_node_markdown_flags_reserved_out_of_order():
 
 def test_lint_node_markdown_skips_non_node_files():
     # SOUL.md (all-H2 system prompt) and CLAUDE.md stubs are not node files → not linted
-    assert _lint("x/.hermes/SOUL.md", "## About Me\n\n## How to work\n") == []
+    assert _lint("x/MitosAgent/SOUL.md", "## About Me\n\n## How to work\n") == []
     assert _lint("x/Projects/P/CLAUDE.md", "@AGENTS.md\n") == []
     assert _lint("x/SKILL.md", "# Instructions\n\n## Description\n") == []
 
@@ -64,12 +64,22 @@ def test_antigravity_grants_normalized():
     assert not any("draft_gmail_message" in a for a in allow)
     assert len(allow) == 31
 
-def test_hermes_mcp_flat_tool_count():
+def test_mitos_agent_mcp_config_shape():
+    # Whole-file mcp.json (not a merge block): one mcpServers entry per wired store, keyed
+    # by server name, carrying url/transport/flat-tools. Keep the flat-tool-count assertion.
     tools = render.flat_tools(reg.servers["servers"]["gws"])
     assert len(tools) == 31
     assert tools[0] == "list_calendars"
+    gws = dict(reg.servers["servers"]["gws"])
+    cfg = render.mitos_agent_mcp_config({"gws": gws})
+    assert set(cfg["mcpServers"]) == {"gws"}
+    assert cfg["mcpServers"]["gws"]["tools"] == tools
+    assert cfg["mcpServers"]["gws"]["url"] == gws["url"]
+    # multi-store: one entry per store (the §5.4 resolve regression)
+    cfg2 = render.mitos_agent_mcp_config({"gws": gws, "notion": {"url": "http://x", "tools": {}}})
+    assert set(cfg2["mcpServers"]) == {"gws", "notion"}
 
-def test_non_hermes_machine_coproduces_agents_md():
+def test_non_assistant_machine_coproduces_agents_md():
     """Claude-code machines without agents-md emit a co-located AGENTS.md (full graph
     context + prose) and a stub CLAUDE.md at each graph project's local_path.
     Hermes machines (with agents-md) are unaffected — the existing path applies."""
@@ -248,7 +258,7 @@ def test_multi_store_machine_connections_block_emits_one_section_per_store():
     assert block.count("## Google Workspace suite") == 1
     assert block.count("## Fake Store") == 1
 
-def test_project_agents_md_drops_identity_on_hermes_machines():
+def test_project_agents_md_drops_identity_on_assistant_machines():
     """On a machine that also deploys hermes, SOUL.md already carries the identity
     partials on every request — the project-root AGENTS.md (project_agents) must not
     repeat them. An agents-md machine WITHOUT hermes has no SOUL.md, so it keeps the
@@ -258,15 +268,17 @@ def test_project_agents_md_drops_identity_on_hermes_machines():
     def _rig(targets):
         rig = copy.deepcopy(reg)
         rig.machines["example-windows"]["targets"] = targets
-        # hermes needs a home for its own outputs; irrelevant to the assertion
-        rig.machines["example-windows"]["paths"]["hermes_home"] = "C:/hermes"
+        # the mitos-agent install root — a distinct dir from this machine's existing
+        # agentic_context_root (C:/MitosAgent) so the operating tree and the reference
+        # graph mount don't collide; irrelevant to the identity-drop assertion itself
+        rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/AssistantHome"
         rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
         return rig
 
     agents_path = "C:/Projects/Mitos/AGENTS.md"
 
     # hermes co-deployed → identity dropped, builder prose kept
-    outs = planner.plan_machine(_rig(["claude-code", "agents-md", "hermes"]),
+    outs = planner.plan_machine(_rig(["claude-code", "agents-md", "mitos-agent"]),
                                 "example-windows")
     out = next(o for o in outs if o.deploy_path == agents_path and o.target == "agents-md")
     assert "About Me" not in out.content, "identity must not duplicate SOUL.md"
@@ -361,9 +373,8 @@ def test_agentic_tree_no_effect_on_agentic_machine():
     second, redundant mount there."""
     import copy
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["hermes", "agents-md"]
+    rig.machines["example-windows"]["targets"] = ["mitos-agent", "agents-md"]
     rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/MitosAgent"
-    rig.machines["example-windows"]["paths"]["hermes_home"] = "C:/hermes"
     proj = rig.projects["example-project"]
     proj.pop("example", None)
     proj["agentic_tree"] = "MitosAgent"
@@ -448,15 +459,15 @@ def test_skill_selection_layers():
     # Curation (pull layer) now lives on the machine profile, not the target spec —
     # a personal choice belongs on the (overlayable) machine, never on core targets/*.yaml.
     from agentic.planner import _selected_skills
-    base = {"include_target": "hermes"}
+    base = {"include_target": "mitos-agent"}
     # `gws` declares requires_server: gws, so every layer below is exercised on a machine
     # that actually has the connection wired (see test_requires_server_gates_skill).
     wired = {"document_store": "gws"}
     all_hermes = {s.name for s in _selected_skills(reg, base, wired)}
     assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
-    only = _selected_skills(reg, base, {**wired, "skills": {"hermes": {"include": ["new-session", "gws"]}}})
+    only = _selected_skills(reg, base, {**wired, "skills": {"mitos-agent": {"include": ["new-session", "gws"]}}})
     assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
-    rest = _selected_skills(reg, base, {**wired, "skills": {"hermes": {"exclude": ["gws"]}}})
+    rest = _selected_skills(reg, base, {**wired, "skills": {"mitos-agent": {"exclude": ["gws"]}}})
     assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
     assert not _selected_skills(
@@ -469,7 +480,7 @@ def test_requires_server_gates_skill():
     coding-harness box (no workspace wired) used to receive the `gws` SKILL.md — a page
     of instructions for MCP tools it cannot call — as the ONLY thing deploy gave it."""
     from agentic.planner import _selected_skills
-    for tgt in ("hermes", "claude-code", "claude-app", "antigravity"):
+    for tgt in ("mitos-agent", "claude-code", "claude-app", "antigravity"):
         spec = {"include_target": tgt}
         if tgt not in reg.skills["gws"].targets:
             continue
@@ -481,7 +492,7 @@ def test_requires_server_gates_skill():
                          _selected_skills(reg, spec, {"document_store": ["gws"]})}
     # curation cannot smuggle it back in: the connection gate is not a preference
     assert "gws" not in {s.name for s in _selected_skills(
-        reg, {"include_target": "hermes"}, {"skills": {"hermes": {"include": ["gws"]}}})}
+        reg, {"include_target": "mitos-agent"}, {"skills": {"mitos-agent": {"include": ["gws"]}}})}
 
 def test_fresh_coding_machine_deploys_no_workspace_content():
     """End-to-end guard for the fresh-user path: a machine built from init's
@@ -515,7 +526,7 @@ def test_coding_harness_context_carries_no_assistant_persona():
     """A project's CLAUDE.md on a coding-harness box must not cast the agent as the
     owner's *personal assistant*, must not inline the owner's email/location (that file is
     normally committed to the repo), and must not claim a document store the machine never
-    declared. `identity/who-i-am.md` is [hermes, agents-md]; `who-i-am-coding.md` is the
+    declared. `identity/who-i-am.md` is [mitos-agent, agents-md]; `who-i-am-coding.md` is the
     [claude-code] counterpart, and audience picks exactly one."""
     import copy
 
@@ -549,7 +560,7 @@ def test_coding_harness_context_carries_no_assistant_persona():
             # the coding counterpart IS present — this is a swap, not a deletion
             assert "coding agent" in o.content, f"{use_case}: no identity header at all"
 
-def test_deployed_workspace_skill_names_no_hermes_machinery():
+def test_deployed_workspace_skill_names_no_assistant_machinery():
     """The `gws` skill is the one core skill a coding-harness box can receive. Its BODY
     must not reference machinery only the agentic harness has — `SOUL.md`, Hermes, or
     Hermes's `config.yaml` — since those name files that box does not have. (The gate in
@@ -560,7 +571,7 @@ def test_deployed_workspace_skill_names_no_hermes_machinery():
     rig = _connected_rig("example-windows")           # document_store: gws → skill deploys
     rig = copy.deepcopy(rig)
     outs = [o for o in planner.plan_machine(rig, "example-windows")
-            if "gws" in o.deploy_path and o.target != "hermes"]
+            if "gws" in o.deploy_path and o.target != "mitos-agent"]
     assert outs, "expected the gws skill on a wired coding-harness machine"
     for o in outs:
         body = "\n".join(o.zip_members.values()) if o.zip_members else o.content
@@ -576,7 +587,7 @@ def test_target_side_skill_curation_rejected():
     from agentic.loader import RegistryError, _validate
     for bad_skills in ({"include": ["gws"]}, {"exclude": ["gws"]}):
         reg2 = copy.deepcopy(reg)
-        reg2.targets["hermes"]["skills"].update(bad_skills)
+        reg2.targets["mitos-agent"]["skills"].update(bad_skills)
         try:
             _validate(reg2)
             raise AssertionError(f"expected RegistryError for {bad_skills}")
@@ -588,8 +599,8 @@ def test_machine_side_skill_curation_validation():
 
     from agentic.loader import RegistryError, _validate
     bad_cases = (
-        {"hermes": {"include": ["no-such-skill"]}},
-        {"hermes": {"include": ["gws"], "exclude": ["gws"]}},
+        {"mitos-agent": {"include": ["no-such-skill"]}},
+        {"mitos-agent": {"include": ["gws"], "exclude": ["gws"]}},
         {"not-a-target": {"include": ["gws"]}},
     )
     for bad in bad_cases:
@@ -602,7 +613,7 @@ def test_machine_side_skill_curation_validation():
             pass
     # a valid machine-side curation block passes
     reg2 = copy.deepcopy(reg)
-    reg2.machines["example-linux"]["skills"] = {"hermes": {"include": ["gws"]}}
+    reg2.machines["example-linux"]["skills"] = {"mitos-agent": {"include": ["gws"]}}
     _validate(reg2)
 
 def test_deselect_then_prune():
@@ -617,7 +628,7 @@ def test_deselect_then_prune():
     assert dest.exists()
 
     # deselect via machine-side exclude: deploy reports an orphan but keeps the file
-    reg2.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
+    reg2.machines["example-linux"]["skills"] = {"mitos-agent": {"exclude": ["gws"]}}
     assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
     assert dest.exists(), "without --prune the deployed copy must remain"
     import json as _json
@@ -903,7 +914,7 @@ def test_domain_org_skills_deploy_and_effort_domain_line_in_project_agents_md():
     # 1. Core skills exist and target hermes
     for skill_name in ("org-software", "org-design", "org-marketing"):
         assert skill_name in reg.skills, f"{skill_name} must be a core registry skill"
-        assert "hermes" in reg.skills[skill_name].targets
+        assert "mitos-agent" in reg.skills[skill_name].targets
 
     # 2. The tagged effort's org line appears in per-project AGENTS.md; the retired
     # project-level Domain line never does
@@ -1081,35 +1092,10 @@ def test_machine_sync_git_needs_hub():
                                             "git": {"hub": "ssh://h/overlay.git"}}
     _validate(ok)   # well-formed → no raise
 
-def test_machine_hermes_settings_validation():
-    import copy
-
-    from agentic.loader import RegistryError, _validate
-    bad_cases = [
-        {"memory_enabled": "yes"},                # bool key, wrong type
-        {"max_turns": "150"},                      # int key, wrong type
-        {"disabled_toolsets": "image_gen"},         # list key, not a list
-        {"session_reset_mode": 0},                  # string key, wrong type
-        {"fallback_model": ["gemini"]},              # mapping key, wrong type
-    ]
-    for bad_hs in bad_cases:
-        bad = copy.deepcopy(reg)
-        bad.machines["example-linux"]["hermes_settings"] = bad_hs
-        try:
-            _validate(bad)
-            raise AssertionError(f"expected RegistryError for {bad_hs}")
-        except RegistryError:
-            pass
-
-    ok = copy.deepcopy(reg)
-    ok.machines["example-linux"]["hermes_settings"] = {
-        "memory_enabled": True, "user_profile_enabled": False,
-        "max_turns": 150, "restart_drain_timeout": 180,
-        "disabled_toolsets": ["image_gen"], "platform_toolsets_cli": ["file"],
-        "session_reset_mode": "none", "fallback_providers": ["a:b"],
-        "fallback_model": {"provider": "gemini"}, "custom_providers": [{"name": "a"}],
-    }
-    _validate(ok)   # well-formed → no raise
+# (removed) test_machine_hermes_settings_validation — the hermes_settings validation lane
+# retired with Hermes (mitos-agent owns its config file whole; no settings-leaf merge). A
+# leftover hermes_settings: in a profile is now silently ignored, not an error (see
+# loader._validate note 5).
 
 def test_git_sync_init_creates_bare_hub_and_pushes():
     if not _git_available():
@@ -1765,7 +1751,7 @@ def test_compose_skill_body_splices_extension_under_anchor_never_mutates_registr
     rig = copy.deepcopy(reg)
     rig.skills["org-data-science"] = Skill(
         name="org-data-science", rel="local/skills/org-data-science/SKILL.md",
-        frontmatter={"targets": ["hermes"], "extends_skill": "org-software",
+        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
                     "extends_role": "CTO"},
         body="Extra CTO guidance for data science work.")
     parent = rig.skills["org-software"]
@@ -1790,7 +1776,7 @@ def test_compose_skill_resources_merges_and_extension_wins_on_collision():
         text="base\n", rel="skills/org-software/examples/base.md")}
     rig.skills["org-ext"] = Skill(
         name="org-ext", rel="local/skills/org-ext/SKILL.md",
-        frontmatter={"targets": ["hermes"], "extends_skill": "org-software",
+        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
                     "extends_role": "CTO"},
         body="ext body",
         resources={
@@ -1811,10 +1797,10 @@ def test_selected_skills_excludes_extension_skills():
     rig = copy.deepcopy(reg)
     rig.skills["org-ext2"] = Skill(
         name="org-ext2", rel="local/skills/org-ext2/SKILL.md",
-        frontmatter={"targets": ["hermes"], "extends_skill": "org-software",
+        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
                     "extends_role": "CFO"},
         body="ext body")
-    selected = plannermod._selected_skills(rig, {"include_target": "hermes"})
+    selected = plannermod._selected_skills(rig, {"include_target": "mitos-agent"})
     names = {s.name for s in selected}
     assert "org-ext2" not in names
     assert "org-software" in names
@@ -1895,16 +1881,16 @@ def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
     assert "example-project" in matches[0].deploy_path.replace("\\", "/")
     assert "Mitos" not in matches[0].deploy_path
 
-def test_hermes_ignores_scope_and_still_deploys_project_scoped_skill_globally():
+def test_mitos_agent_ignores_scope_and_still_deploys_project_scoped_skill_globally():
     """Hermes deliberately does not participate in scoping — a scope: project skill
     that also targets hermes still ships to the global hermes skills dir."""
     treg, tmp = _temp_registry()
     treg.skills["proj-and-hermes"] = loader.Skill(
         name="proj-and-hermes", rel="local/skills/proj-and-hermes/SKILL.md",
-        frontmatter={"name": "proj-and-hermes", "targets": ["hermes", "antigravity"],
+        frontmatter={"name": "proj-and-hermes", "targets": ["mitos-agent", "antigravity"],
                     "scope": "project"}, body="body")
     outputs = planner.plan_machine(treg, "rig")
-    matches = [o for o in outputs if o.target == "hermes" and "proj-and-hermes" in o.deploy_path]
+    matches = [o for o in outputs if o.target == "mitos-agent" and "proj-and-hermes" in o.deploy_path]
     assert len(matches) == 1, "hermes must still deploy a scope:project skill globally"
 
 def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
@@ -1962,9 +1948,9 @@ def test_skill_deploy_warnings_flags_machine_curated_exclusion():
     """A skill compatible with a target (its own frontmatter says so) but filtered out
     by this machine's curation is reported as a warning — the filter is never silent."""
     r = _connected_rig("example-linux")   # gws is otherwise filtered by requires_server
-    r.machines["example-linux"]["skills"] = {"hermes": {"exclude": ["gws"]}}
+    r.machines["example-linux"]["skills"] = {"mitos-agent": {"exclude": ["gws"]}}
     warnings = planner.skill_deploy_warnings(r, "example-linux")
-    assert any("'gws'" in w and "'hermes'" in w and "curation" in w for w in warnings)
+    assert any("'gws'" in w and "'mitos-agent'" in w and "curation" in w for w in warnings)
 
 def test_skill_deploy_warnings_name_the_missing_connection():
     """A requires_server drop is reported as such, not misattributed to curation — the
@@ -1994,7 +1980,7 @@ def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
 
 
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
-def test_plan_hermes_emits_skill_resource_outputs():
+def test_plan_mitos_agent_emits_skill_resource_outputs():
     from agentic.loader import SkillResource
     treg, tmp = _temp_registry()
     skill = treg.skills["gws"]
@@ -2004,7 +1990,7 @@ def test_plan_hermes_emits_skill_resource_outputs():
                                           rel="skills/gws/scripts/check.sh"),
     }
     outs = planner.plan_machine(treg, "rig")
-    skill_md = next(o for o in outs if o.target == "hermes"
+    skill_md = next(o for o in outs if o.target == "mitos-agent"
                     and o.deploy_path.endswith("gws/SKILL.md"))
     base_dir = skill_md.deploy_path.rsplit("/", 1)[0]
     example_out = next(o for o in outs if o.deploy_path == f"{base_dir}/examples/sample.md")

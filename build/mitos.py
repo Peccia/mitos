@@ -99,20 +99,19 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     email = _ask("Your email: ")
     location = _ask("Location (optional): ")
 
-    # Use case gates everything below it: org routing is meaningless outside the hermes
-    # use case (org skills declare targets: [hermes] only — see MACHINE_USE_CASES), so
+    # Use case gates everything below it: org routing is meaningless outside the mitos-agent
+    # use case (org skills declare targets: [mitos-agent] only — see MACHINE_USE_CASES), so
     # asking it unconditionally is what previously left claude-code/antigravity-only users
     # with a machine profile that never asked "do you even want orgs?" in the first place.
     print("\nHow will you run Mitos on this machine?")
     print("  [1] Coding harnesses only (Claude Code / Antigravity / Claude Desktop) — skills")
     print("      and prompts inside your existing editor. No org routing, no agentic tree.")
-    print("  [2] Full agentic assistant (Hermes) — the standalone agentic harness, with the")
-    print("      operating tree (assistant_root) and the org-domain routing model.")
+    print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org routing).")
     use_choice = _ask("Choice [1]: ") or "1"
-    is_hermes = use_choice == "2"
+    is_agent = use_choice == "2"
 
     org = None
-    if is_hermes:
+    if is_agent:
         templates = initmod.org_templates(REPO_ROOT)
         print("\nOrg routing (optional):")
         print("  blank (recommended) — dynamic multi-org router: all three domain orgs are")
@@ -142,14 +141,14 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
 
     # Machine profile — the file that actually decides what deploy() materializes (init
     # alone never did; targets came only from copying a machines/example-*.yaml template
-    # by hand, which is how a coding-only checkout could end up with agents-md/hermes).
+    # by hand, which is how a coding-only checkout could end up with agents-md/mitos-agent).
     from agentic.commands import _local_os
     print("\nNow let's set up this machine's profile (registry/local/machines/<name>.yaml) — "
           "the file that decides what actually deploys here.")
     use_case, targets = (None, None)
-    if is_hermes:
-        use_case = "hermes"
-        print("Full agentic assistant selected — this profile will target [hermes, agents-md].")
+    if is_agent:
+        use_case = "mitos-agent"
+        print("Mitos Agent selected — this profile will target [mitos-agent, agents-md].")
     else:
         targets = _ask_coding_targets(initmod)
     default_name = "my-machine"
@@ -173,8 +172,8 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         print(f"\nNext: stand up the {store} MCP server (see docs/connectors/), point the "
               f"`{store}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
-    elif not is_hermes:
-        # No connection, and every core skill but `gws` is hermes-only — so this box's
+    elif not is_agent:
+        # No connection, and every core skill but `gws` is mitos-agent-only — so this box's
         # first deploy carries no skills at all. Say so, and point at the two ways to
         # add one, rather than letting an empty skills directory read as a broken install.
         print("\nNo connection declared, so nothing connection-bound deploys here yet. The "

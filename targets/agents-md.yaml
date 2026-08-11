@@ -1,5 +1,5 @@
 # Target: AGENTS.md — the generic, tool-neutral context format.
-# Consumed by anything that reads AGENTS.md (Antigravity IDE, Hermes assistant tree,
+# Consumed by anything that reads AGENTS.md (Antigravity IDE, Mitos Agent assistant tree,
 # Claude Code as a fallback). Renders one or more context trees from registry partials.
 #
 # An "output" = one rendered file: a template fed by registry sources, deployed to a
@@ -12,10 +12,10 @@ target: agents-md
 
 # Tree 1 — the personal-assistant context tree. Two mount kinds render this same tree
 # shape (Navigation/Workflows/Skills, roster, dynamic branches): a MACHINE mount at
-# `root_key` (a path in machines/*.yaml — the Hermes/agentic-machine combo), or a
+# `root_key` (a path in machines/*.yaml — the Mitos Agent/agentic-machine combo), or a
 # PROJECT mount inside a project's own checkout (a workstation's `agentic_tree:` in
 # registry/projects/<slug>.yaml — the counterpart for e.g. Antigravity operating against
-# one project the way Hermes operates against a whole machine). project_mountable opts
+# one project the way Mitos Agent operates against a whole machine). project_mountable opts
 # this tree into the second kind; drift_policy: protect applies to both — every mount is
 # an operating surface whose edits reconcile back to the registry (contrast the
 # `agentic_context_root`/agentic-graph lane, which is drift_policy: generated — a
@@ -44,7 +44,7 @@ project_agents:
   drift_policy: protect
   # filename at the project's local_path root:
   filename: AGENTS.md
-  # On machines that also deploy hermes, the identity/* sources are dropped at plan
+  # On machines that also deploy mitos-agent, the identity/* sources are dropped at plan
   # time (planner._plan_agents_md): SOUL.md already carries the persona on every
   # request, so repeating it here would only tax context.
   sources: [identity/who-i-am.md, identity/security.md, identity/comms-style.md, identity/operating-rules.md, "{project.context.builder}"]

@@ -1000,7 +1000,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # ── structured metadata editing (Track A — no raw YAML ever reaches the operator) ──
 # Per-kind editable whitelist: `name` is deliberately never editable (it must stay in
 # sync with the skill's folder / the prompt's registered identity). Everything else in
-# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `hermes:` block)
+# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `hermes:`/`mitos_agent:` tag block)
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
@@ -1307,7 +1307,7 @@ def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict
         "description": f"Run a substantive request through the simulated {title} "
                        f"organization — CEO (intent), VP (plan), Assistant (execution).",
         "category": "productivity",
-        "targets": ["hermes"],
+        "targets": ["mitos-agent"],
     }
     return propose_new_skill(reg, name, fields, body, reason=reason, org_domain=domain)
 
@@ -1472,7 +1472,7 @@ def prompt_index(reg: Registry) -> dict:
     Every entry also carries `deploys_here` (see _deploys_anywhere): whether any of the
     user's real machines would actually receive it. Nothing is filtered out server-side —
     the console defaults its views to this flag and its "All" chip reveals the rest, so a
-    coding-harness box opens showing only its own content while the hermes-only org skills
+    coding-harness box opens showing only its own content while the mitos-agent-only org skills
     stay readable as reference.
 
     Favorites are the user's pinned prompts, persisted in registry/local/prompt-favorites.yaml
@@ -2164,7 +2164,7 @@ def state(reg: Registry) -> dict:
         "machines": sorted(commands.real_machines(reg)),
         # The targets those machines actually declare. The Skills tab's filter chips read
         # this instead of `known_targets` (the full adapter set), so a coding-harness box is
-        # not offered `hermes` as a filter for skills it can never receive. Empty only if a
+        # not offered `mitos-agent` as a filter for skills it can never receive. Empty only if a
         # machine profile declares no targets at all.
         "machine_targets": sorted({t for name in commands.real_machines(reg)
                                    for t in (reg.machines.get(name) or {}).get("targets", [])}),

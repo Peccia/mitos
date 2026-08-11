@@ -24,6 +24,7 @@ Guides for configuring Mitos to deploy custom context, skills, and prompts into 
 - **[Claude Code target](targets/claude-code.md)** — Integrating per-project `CLAUDE.md`, skills, and slash-command prompts.
 - **[Antigravity target](targets/antigravity.md)** — MCP server access, tool permissions, native `AGENTS.md` context, and global/project-scoped skill delivery (`antigravity` target — covers Antigravity IDE + CLI, and Gemini CLI until it retires 2026-06-18; see [the legacy Gemini CLI note](targets/gemini-cli.md)).
 - **[Claude app target](targets/claude-app.md)** — The claude.ai account surface (web + Desktop): staging skill zips for manual upload, and the `npx mcp-remote` bridge for LAN/HTTP MCP servers on Desktop.
+- **[Mitos Agent target](targets/mitos-agent.md)** — The first-party agentic planning harness (`mitos-agent`): `SOUL.md`, a skills tree, and a whole-file `mcp.json`, deployed into `assistant_root` alongside the `agents-md` tree — one install root the harness reads. Includes the end-to-end install→deploy→run sequence. Replaces the retired `hermes` target.
 
 ---
 

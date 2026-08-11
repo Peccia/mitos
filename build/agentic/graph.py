@@ -510,7 +510,7 @@ def _concise_entry(d: Document) -> str:
     document type when known — the tool-selection hint), then description and tags only
     when present. No URL — the document store resolves by ID.
     Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference,
-    so the claude-code and hermes surfaces render identically."""
+    so the claude-code and mitos-agent surfaces render identically."""
     meta = f"{d.date_modified} · {d.doc_type}" if d.doc_type else d.date_modified
     line = f"- **{d.name}** `{d.drive_id}` ({meta})"
     if d.description:
@@ -525,10 +525,10 @@ def _effort_domain_line(e: CreativeWork, *, org_routing: bool = True) -> list[st
     governs work on this effort. This — not any project-level field — is how a session
     knows which org to load; untagged efforts route by the nature of the request.
 
-    Org skills declare `targets: [hermes]` only, so this line is meaningful exclusively
-    on the agents-md/hermes tree, where those skills are actually deployed. `org_routing`
+    Org skills declare `targets: [mitos-agent]` only, so this line is meaningful exclusively
+    on the agents-md/mitos-agent tree, where those skills are actually deployed. `org_routing`
     is the caller's declaration of whether that's true for the surface being rendered —
-    `project_full_markdown` (the non-hermes claude-code workstation path) passes False so
+    `project_full_markdown` (the non-mitos-agent claude-code workstation path) passes False so
     a claude-code-only checkout is never told to load a skill that was never deployed."""
     if not e.org_domain or not org_routing:
         return []
@@ -619,7 +619,7 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
     connection section is the file's own identity.
 
     `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`) —
-    callers pass `"hermes" in machine.targets` (org skills deploy only on a hermes machine;
+    callers pass `deploys_org_content(machine)` (org skills deploy only on a mitos-agent machine;
     `agents-md` alone, e.g. a claude-code workstation with an `agentic_context_root` mount,
     is not sufficient)."""
     intro = ("Document titles from the knowledge graph. Full details (document IDs, links, "
@@ -683,8 +683,8 @@ def project_full_markdown(pg: ProjectGraph,
     (the project's prose already opened it).
 
     `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`).
-    This renderer is also used by non-hermes claude-code workstations (`planner._plan_claude_code`),
-    which pass `org_routing=False` since org skills never deploy there — the agents-md/hermes
+    This renderer is also used by non-mitos-agent claude-code workstations (`planner._plan_claude_code`),
+    which pass `org_routing=False` since org skills never deploy there — the agents-md/mitos-agent
     tree keeps the default `True`.
 
     Returns only the GENERATED block; a project's human-authored prose is prepended by the

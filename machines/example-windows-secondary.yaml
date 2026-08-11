@@ -2,7 +2,7 @@
 # Desktop), no agentic tree, no orgs. A secondary Windows device (minimal config).
 # Compare with example-workstation.yaml (use case 1 — Claude Code only) and
 # example-linux.yaml (use case 3 — the full agentic assistant). Adding `agents-md` or
-# `hermes` to `targets` below is what turns on the agentic tree and orgs — see
+# `mitos-agent` to `targets` below is what turns on the agentic tree and orgs — see
 # registry/README.md's "Choosing your setup".
 # Copy to registry/local/machines/ and customize for your setup.
 name: example-windows-secondary

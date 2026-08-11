@@ -136,11 +136,12 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
     - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
-      tree the persona navigates — `assistant_root` (Hermes assistant tree) over
-      `agentic_context_root` (the Hermes-machine context tree) over `projects_root`
-      (plain workstation checkouts).
-    - `skills_root`: where deployed skills live — `<hermes_home>/skills` (matches the
-      hermes target's `skills.subdir` prefix).
+      tree the persona navigates — `assistant_root` (the single Mitos Agent install root,
+      holding both the tree and the harness's own files) over `agentic_context_root` (the
+      agents-md-machine context tree) over `projects_root` (plain workstation checkouts).
+    - `skills_root`: where deployed skills live — `<assistant_root>/skills` (matches the
+      mitos-agent target's `skills.subdir` prefix; SOUL/skills/mcp share the install root
+      with the tree).
     """
     if not paths:
         return None
@@ -151,7 +152,7 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
                 return str(val).rstrip("/")
         return None
     if key == "skills_root":
-        home = paths.get("hermes_home")
+        home = paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
     return None
 
@@ -445,7 +446,7 @@ def connections_block(servers: dict, machine: dict, user: dict) -> str:
 
 def skills_block(skills: list) -> str:
     """The `<generated>` "## Skills" section for the operating root: one bullet per
-    general-purpose (non org-domain) skill selected for this machine's Hermes
+    general-purpose (non org-domain) skill selected for this machine's Mitos Agent
     deployment, sourced from each skill's frontmatter `description` — the single place
     that text lives now (mirrors org_domain_table, which does the same for org-domain
     skills in their own table)."""
@@ -499,7 +500,7 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
     never mutating the loaded Skill (see the R1 design decision)."""
     fm = skill.frontmatter
     b = body if body is not None else skill.body
-    if target == "hermes":
+    if target == "mitos-agent":
         meta = {
             "name": fm["name"],
             "description": fm.get("description", ""),
@@ -508,9 +509,14 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
-        hermes_meta = fm.get("hermes")
-        if hermes_meta:
-            meta["metadata"] = {"hermes": hermes_meta}
+        # The per-skill tag block is still authored under the legacy `hermes:` key in
+        # registry SKILL.md frontmatter — inert metadata (tags), not a target reference —
+        # so the rename deliberately left those files alone (decision 4). Emitted under the
+        # current name; rename the authored key when Mitos Agent defines its own skill
+        # frontmatter (B-Stage 5b).
+        tag_meta = fm.get("mitos_agent") or fm.get("hermes")
+        if tag_meta:
+            meta["metadata"] = {"mitos_agent": tag_meta}
         return _frontmatter_doc(meta, b)
     if target in ("claude-code", "claude-app", "antigravity"):
         # Agent Skills standard frontmatter: name + description. Antigravity follows
@@ -559,60 +565,16 @@ def flat_tools(server: dict) -> list[str]:
     return tools
 
 
-def hermes_mcp_block(server: dict, alias: str) -> dict:
-    """The mcp_servers.<alias> value Hermes expects (url + tools.include)."""
-    return {alias: {"url": server["url"], "tools": {"include": flat_tools(server)}}}
-
-
-# hermes_settings key -> dotted config.yaml leaf path it fills in (see hermes_settings_block).
-# Every value here is set-once infrastructure Mitos can safely reassert on every deploy —
-# deliberately excludes model.default/model.provider, which a `/model` switch may persist
-# back to config.yaml at any time; owning that leaf would fight normal daily use.
-_HERMES_SETTINGS_LEAVES = {
-    "memory_enabled": "memory.memory_enabled",
-    "user_profile_enabled": "memory.user_profile_enabled",
-    "max_turns": "agent.max_turns",
-    "restart_drain_timeout": "agent.restart_drain_timeout",
-    "disabled_toolsets": "agent.disabled_toolsets",
-    "platform_toolsets_cli": "platform_toolsets.cli",
-    "platform_toolsets_telegram": "platform_toolsets.telegram",
-    "session_reset_mode": "session_reset.mode",
-}
-# hermes_settings key -> top-level config.yaml key it wholly owns — self-contained blocks
-# with no Hermes/user-managed sibling fields, so whole-key ownership (like mcp_servers) is
-# simpler than a leaf path here.
-_HERMES_SETTINGS_WHOLE_KEYS = {
-    "fallback_providers": "fallback_providers",
-    "fallback_model": "fallback_model",
-    "custom_providers": "custom_providers",
-}
-
-
-def hermes_settings_block(paths: dict, hermes_settings: dict) -> dict:
-    """Leaf/whole-key values a hermes config.yaml settings merge can offer.
-
-    `terminal.cwd` mirrors the machine's `paths.assistant_root` — the existing source of
-    truth for the project root — so there is exactly one place to change it, instead of
-    a second hand-authored copy that can drift out of sync. Everything else comes from
-    the machine's own `hermes_settings:` block. What actually lands in config.yaml is
-    still gated by the target spec's `owned_keys` (targets/hermes.yaml's `settings:`
-    block) — a key rendered here but not declared there is never merged.
-    """
-    block: dict = {}
-    if paths.get("assistant_root"):
-        block["terminal"] = {"cwd": paths["assistant_root"]}
-    for hs_key, dotted in _HERMES_SETTINGS_LEAVES.items():
-        if hs_key not in hermes_settings:
-            continue
-        node = block
-        parts = dotted.split(".")
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = hermes_settings[hs_key]
-    for hs_key, top_key in _HERMES_SETTINGS_WHOLE_KEYS.items():
-        if hs_key in hermes_settings:
-            block[top_key] = hermes_settings[hs_key]
-    return block
+def mitos_agent_mcp_config(servers: dict) -> dict:
+    """The whole mcp.json Mitos Agent reads: one entry per wired store (keyed by server
+    name), each carrying its transport, the URL as seen from this machine, and the flat
+    tool list. A one-store machine yields a single entry — the same shape Hermes had, minus
+    the surgical merge. See planner._agent_servers for the server map this consumes."""
+    return {"mcpServers": {alias: {
+        "url": server["url"],
+        "transport": server.get("transport", "streamable-http"),
+        "tools": flat_tools(server),
+    } for alias, server in servers.items()}}
 
 
 def antigravity_mcp_config(server: dict, alias: str) -> dict:

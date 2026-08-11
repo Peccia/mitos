@@ -212,14 +212,12 @@ def _temp_registry():
     conn.write_text(conn.read_text(encoding="utf-8").replace(
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
-        "name": "rig", "os": _local_os(), "targets": ["hermes", "agents-md"],
+        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "agents-md"],
         # rig is the fully-wired rig: it hosts gws AND declares the connection, so
-        # connection-gated output (MCP merge, the `requires_server: gws` skills) is
+        # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
         "document_store": "gws",
-        "paths": {"hermes_home": f"{home}/.hermes",
-                  "hermes_config": f"{home}/.hermes/config.yaml",
-                  "assistant_root": f"{home}/MitosAgent",
+        "paths": {"assistant_root": f"{home}/MitosAgent",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
     (tmp / "machines" / "rig.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
@@ -235,7 +233,7 @@ def _plant_candidate(tmp, cid, meta, payload_name, payload_text):
 
 def _skill_meta(rp="skills/gws/SKILL.md"):
     return {"registry_path": rp, "kind": "drift",
-            "source": {"machine": "rig", "tool": "hermes"}, "base_hash": "",
+            "source": {"machine": "rig", "tool": "mitos-agent"}, "base_hash": "",
             "deploy_path": "", "sources": [rp], "captured_at": "2026-06-12T00:00:00Z",
             "note": "test candidate"}
 

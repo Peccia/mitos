@@ -2,7 +2,7 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Hermes assistant, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Mitos Agent, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
 
 The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -20,7 +20,7 @@ flowchart TB
 
     COMPILE --> CC["Claude Code"]
     COMPILE --> AG["Antigravity"]
-    COMPILE --> HE["Hermes assistant"]
+    COMPILE --> HE["Mitos Agent"]
 
     CC --> HARNESS["Any agentic harness<br/>your setup, deployed everywhere"]
     AG --> HARNESS
@@ -131,7 +131,7 @@ materializes. The first question is the one that matters:
 | Role | `targets:` | What deploys | Orgs? |
 |---|---|---|---|
 | **Coding harnesses** | any subset of `[claude-code, antigravity, claude-app]` | Skills + prompts inside the editors you already use. No agentic tree. | No |
-| **Full agentic assistant (Hermes)** | `[hermes, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** |
+| **Mitos Agent — the planning harness** | `[mitos-agent, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** |
 
 Pick the coding role and init then asks **which** harnesses, as an independent multi-select
 — each is its own target with its own deploy paths, so any non-empty subset is a legal
@@ -139,16 +139,16 @@ machine (Antigravity alone, Claude Desktop alone, all three). The `paths:` block
 from whatever you pick. Three of those combinations ship as copyable templates:
 [`example-workstation.yaml`](machines/example-workstation.yaml) (`[claude-code]`),
 [`example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) (all three), and
-[`example-linux.yaml`](machines/example-linux.yaml) (the Hermes shape).
+[`example-linux.yaml`](machines/example-linux.yaml) (the Mitos Agent shape).
 
-**Orgs (`org-software`/`org-design`/`org-marketing`) require `hermes` literally in
+**Orgs (`org-software`/`org-design`/`org-marketing`) require `mitos-agent` literally in
 `targets:`.** They never deploy on a coding-harness machine — the three org skills declare
-`targets: [hermes]` only, and the org-domain table + per-effort routing lines render
-exclusively on the hermes/agents-md tree. `agents-md` by itself (e.g. a workstation using
+`targets: [mitos-agent]` only, and the org-domain table + per-effort routing lines render
+exclusively on the mitos-agent/agents-md tree. `agents-md` by itself (e.g. a workstation using
 `agentic_context_root` or a project's `agentic_tree:` mount) is a context-format choice,
-not an org trigger — see [`docs/org-templates.md`](docs/org-templates.md). Mixing `hermes`
+not an org trigger — see [`docs/org-templates.md`](docs/org-templates.md). Mixing `mitos-agent`
 with a coding-harness target on one machine is rejected at compile time (see **machine**
-under [Core concepts](#core-concepts)) — the Hermes role is a dedicated machine, not an
+under [Core concepts](#core-concepts)) — the Mitos Agent role is a dedicated machine, not an
 add-on. `init` refuses the mix before it writes anything.
 
 **Workspace connections are asked for, never assumed.** Init offers the servers defined in
@@ -211,15 +211,15 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |
 | **connections/** | MCP server definitions + env templates. Wiring, not content — it deploys on its own `--lane connections`. |
 | **target** | An adapter (`targets/<tool>.yaml`): how one tool consumes the registry — what to emit and where. |
-| **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. Roles are exclusive: `hermes` (the agentic harness) cannot share a machine with a coding harness (`antigravity`/`claude-app`/`claude-code`) — an agentic machine is dedicated to that purpose. Rejected at compile time. `agents-md` itself is not a harness (it's the context format below), so it's never part of this exclusion. |
+| **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. Roles are exclusive: `mitos-agent` (the agentic harness) cannot share a machine with a coding harness (`antigravity`/`claude-app`/`claude-code`) — an agentic machine is dedicated to that purpose. Rejected at compile time. `agents-md` itself is not a harness (it's the context format below), so it's never part of this exclusion. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy refuses), `harvest` (captured as a proposal), or `generated` (regenerated each deploy). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The intake queue. Everything a tool proposes lands here as a candidate; **only you** merge it — usually via the operator console. |
 | **Operating mount vs. reference mount** | Two agents-md/agentic-graph lanes with opposite edit semantics, easy to conflate because both render a `Projects/<name>/` doc tree. An **operating mount** (`assistant_root`, or a project's `agentic_tree:` below) is the full prose tree — Navigation/Workflows/Skills, roster, dynamic branches — `drift_policy: protect`: edit it, and the edit becomes drift that reconciles back into the registry via `adopt`. A **reference mount** (`agentic_context_root` below) is a roster + per-project doc index generated purely from `registry/graph/`, `drift_policy: generated`: edits are silently overwritten on the next deploy — never an editing surface. Rule of thumb: never hand-edit a reference mount. |
-| **assistant_root** | *(operating mount, machine-wide)* The folder (default `~/MitosAgent`) where your assistant's compiled context lives — the proven Hermes combo. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. Only valid on an agentic (`hermes`) machine. |
-| **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts the SAME operating tree `assistant_root` renders (identical shape: Navigation/Workflows/Skills, full roster, dynamic branches), but rooted at `<local_path>/<subdir>/` inside that one project's own checkout instead of a whole machine. The workstation-side counterpart to `assistant_root`: lets a coding harness like Antigravity operate against a single project the way Hermes operates against a dedicated machine. Workstation-only — a no-op on an agentic machine, which already has the tree at its machine root. |
+| **assistant_root** | *(operating mount, machine-wide)* The folder (default `~/MitosAgent`) where your assistant's compiled context lives — the proven agentic combo. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. Only valid on an agentic (`mitos-agent`) machine. |
+| **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts the SAME operating tree `assistant_root` renders (identical shape: Navigation/Workflows/Skills, full roster, dynamic branches), but rooted at `<local_path>/<subdir>/` inside that one project's own checkout instead of a whole machine. The workstation-side counterpart to `assistant_root`: lets a coding harness like Antigravity operate against a single project the way Mitos Agent operates against a dedicated machine. Workstation-only — a no-op on an agentic machine, which already has the tree at its machine root. |
 | **Dynamic branch** | A custom folder under an operating mount's root (e.g. `family/`) that you extend without forking `targets/agents-md.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. Applies identically to a machine mount or a project's `agentic_tree` mount. |
-| **agentic_context_root** | *(reference mount, machine-wide)* A workstation path key (`machines/<name>.yaml`) that materializes a lightweight, read-only doc map — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. No prose, no Workflows/Skills. Independent of `agents-md`/`hermes` — a plain coding workstation can use it. |
-| **project checkouts** | Deployed files at each project's `local_path` directory. On **workstation machines** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` (inline doc index from the knowledge graph + project prose) plus a thin `CLAUDE.md` stub → `@AGENTS.md`. On **Hermes machines** (agents-md also in targets), `CLAUDE.md` carries identity + repo context and the graph materializes separately in the Agentic Context tree. |
+| **agentic_context_root** | *(reference mount, machine-wide)* A workstation path key (`machines/<name>.yaml`) that materializes a lightweight, read-only doc map — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. No prose, no Workflows/Skills. Independent of `agents-md`/`mitos-agent` — a plain coding workstation can use it. |
+| **project checkouts** | Deployed files at each project's `local_path` directory. On **workstation machines** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` (inline doc index from the knowledge graph + project prose) plus a thin `CLAUDE.md` stub → `@AGENTS.md`. On **agentic machines** (agents-md also in targets), `CLAUDE.md` carries identity + repo context and the graph materializes separately in the Agentic Context tree. |
 
 ## How skills reach a tool
 
@@ -231,7 +231,7 @@ the thing most worth understanding up front:
 | **Compatibility** | *Can* this skill run on tool X? | the skill's own `targets:` frontmatter |
 | **Scope** | Does it deploy everywhere, or only to specific projects? | the skill's own `scope: global \| project` frontmatter (default `global`) |
 
-**Why only Claude Code and Antigravity need the second axis:** Hermes and claude.ai each have one
+**Why only Claude Code and Antigravity need the second axis:** Mitos Agent and claude.ai each have one
 *global* skills location only — a skill targeting either is simply available everywhere on it, no
 scoping possible, so one axis (compatibility) is enough there; they ignore `scope` entirely. Claude
 Code and Antigravity each offer **two** surfaces — a personal/global directory
@@ -242,8 +242,8 @@ it lands in on those two tools.
 `scope: project` skills reach a project's checkout via that project manifest's `skills:` list —
 **the skill must also list `claude-code` or `antigravity`** (whichever has the project-scoped
 surface you want) in its own `targets:`. The manifest decides *which projects*; the skill decides
-*which tools*. A Hermes-only skill (one calling an MCP server that isn't in a Claude Code checkout)
-lives globally on Hermes and never appears in a project manifest — binding it there is a category
+*which tools*. A Mitos-Agent-only skill (one calling an MCP server that isn't in a Claude Code checkout)
+lives globally on Mitos Agent and never appears in a project manifest — binding it there is a category
 error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
 Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
@@ -264,7 +264,7 @@ frontmatter names the tools it's for:
 ---
 name: changelog
 description: "Draft a release changelog from the git log"
-targets: [claude-code, hermes]
+targets: [claude-code, mitos-agent]
 ---
 # ...your instructions...
 ```
@@ -419,7 +419,7 @@ showing only what a machine in your registry would actually deploy — asked of 
 logic `deploy` uses, so a skill's `targets:` *and* its `requires_server:` connection gate
 both count. On a coding-harness box with no `document_store:` that means you see your own
 skills and nothing else: the shipped `org-*`, `new-session`, `graph-bootstrap`, and
-`project-update` all declare `targets: [hermes]`, and `gws` stays out until you wire its
+`project-update` all declare `targets: [mitos-agent]`, and `gws` stays out until you wire its
 server. Nothing is deleted or hidden permanently — the **All** chip shows the full registry,
 so the org skills remain readable as reference. A fresh clone with no machine profile yet
 shows everything, so the quick-start browse still works.
@@ -457,7 +457,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # the moat — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, hermes, antigravity, agents-md, claude-app)
+targets/         # one adapter per tool (claude-code, mitos-agent, antigravity, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

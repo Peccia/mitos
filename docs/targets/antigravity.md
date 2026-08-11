@@ -82,7 +82,7 @@ Each skill deploys as an Agent Skills standard folder: `<name>/SKILL.md` with `n
 `description` frontmatter (the description is what Antigravity's discovery matches against),
 plus any supporting files (`examples/`, `scripts/`, `references/`, `templates/`,
 `resources/`) alongside it. Extension skills (`extends_skill`) are spliced into the parent's
-body at render time, exactly as on hermes/claude-code.
+body at render time, exactly as on mitos-agent/claude-code.
 
 #### Skill scope: global vs. project
 Skills targeting `antigravity` deploy to one of two scopes (a skill's `scope:` frontmatter key —

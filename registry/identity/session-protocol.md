@@ -1,5 +1,5 @@
 ---
-audience: [hermes]
+audience: [mitos-agent]
 ---
 ## Session Protocol
 

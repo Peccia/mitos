@@ -80,7 +80,7 @@ Each line of a `deploy`/`diff` plan is `[state]  <path> — <detail>  <flag>`. T
 | `drift` | File was edited in place; registry unchanged. | Depends on **policy** (below): capture+overwrite, or block. |
 | `conflict` | Either edited-in-place **and** registry-changed, **or** an untracked existing file that differs. | Depends on **policy**: capture+overwrite, or block. |
 | `resolved` | Live already matches the registry but the lock was stale (e.g. right after `adopt`). | Re-locks; **never** needs `--force`. |
-| `merge` | A tool-owned config file (Antigravity `config.json`, Hermes `config.yaml`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
+| `merge` | A tool-owned config file (Antigravity `config.json`, Antigravity/Claude-Desktop `config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
 | `orphan` | Previously deployed by Mitos, no longer in the plan (a deselected skill, a retired project). | Kept on disk until you `--prune`. |
 | `clone` | A project repo to clone into the Agentic Context tree. | Clones if absent; never touches an existing checkout. |
 
@@ -99,11 +99,11 @@ when its deployed copy drifts:
   staged skill zips). If it drifts, **deploy refuses the whole run** (exit 1) and tells you to
   resolve it. Nothing is overwritten until you decide. Override for one run with `--force` (which
   still captures the drift to `inbox/` first, unless the file is exempt — see below).
-- **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill Hermes tunes).
+- **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill the assistant tunes).
   On drift, deploy **captures the edit to `inbox/` and then overwrites** (registry wins), so the
   proposal is preserved for you to accept later, and the machine still converges on the registry.
 - **`generated`** — knowledge-graph-derived files with no human prose: the Agentic Context
-  **roster** (`AGENTS.md` at the tree root) and, on the agents-md/Hermes side, each project's
+  **roster** (`AGENTS.md` at the tree root) and, on the agents-md/Mitos-Agent side, each project's
   `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
   **overwritten silently** and are **non-adoptable** (there's no registry partial to route an edit
   back to — edit `registry/graph/<slug>.jsonld` instead).
@@ -121,13 +121,13 @@ source is your `.local/` overlay), staged `.zip` skills (binary build artifacts)
 
 **Skill supporting files.** A skill's `examples/` and `scripts/` files deploy alongside
 `SKILL.md` as their own separately-tracked outputs, each carrying the skill's own drift
-policy (`harvest` on hermes/claude-code) — an edited script drifts, captures, and
+policy (`harvest` on mitos-agent/claude-code) — an edited script drifts, captures, and
 adopts/harvests **back to its own file**, never to `SKILL.md`. Deploy also sets the executable
 bit on files under `scripts/` when the target machine isn't Windows.
 
 ## Worked example: a first deploy onto a populated machine
 
-This is the exact plan from a first real deploy where the machine already had Antigravity/Hermes files:
+This is the exact plan from a first real deploy where the machine already had Antigravity/Mitos-Agent files:
 
 ```
 deploy plan for windows-laptop (apply):
@@ -194,13 +194,23 @@ deployed files become orphans — **kept** on every deploy (and reported) until 
 `deploy --prune`, which deletes them (capturing any drifted ones to `inbox/` first). Deletion is
 never a silent side effect.
 
-**7. Tool-owned configs (`merge`).** Antigravity `config.json` and Hermes `config.yaml` are never
-overwritten — Mitos owns only specific keys and splices them in, preserving everything else you have
-in those files. Ownership can be a whole top-level key (the MCP server entries) or, for a handful of
-Hermes runtime knobs (`terminal.cwd`, `memory.memory_enabled`), a single dotted LEAF path inside an
-otherwise Hermes/user-owned block — so sibling settings in that same block (`terminal.timeout`,
-`agent.max_turns`, ...) are never touched. Several merge blocks may target the same file (Hermes's
-`config.yaml` carries both); compile refuses if their owned keys ever overlap.
+**7. Third-party configs (`merge`).** Antigravity `config.json` and Claude Desktop `config.json` are
+never overwritten — Mitos owns only specific keys and splices them in, preserving everything else you
+have in those files. Ownership can be a whole top-level key (the MCP server entries) or a single
+dotted LEAF path inside an otherwise tool/user-owned block — so sibling settings in that same block
+are never touched. Several merge blocks may target the same file; compile refuses if their owned keys
+ever overlap.
+
+> **Merge residue on retirement (a known asymmetry).** A `merge` output is never recorded in the
+> lockfile — the deploy write loop `continue`s before the lock entry is built (`build/agentic/commands.py`).
+> So a retired merge (e.g. the old Hermes `config.yaml` `mcp_servers`/settings lane, removed when the
+> `hermes` target became `mitos-agent`) leaves its keys **in** the third-party file, and — because
+> orphans are computed as lockfile-paths minus planned-paths — those keys never surface as a
+> reportable orphan and `--prune` cannot reach them. Invariant #9's "deletion is explicit" holds; its
+> companion "orphans are reported" does not, because merges live outside the orphan mechanism. Removing
+> a retired merge's keys is a manual edit of the tool's config file. (Mitos Agent avoids this for its
+> own wiring by owning `mcp.json` as a whole file, not a merge.) A separate change to lockfile-track
+> merge outputs so retirement becomes reportable is tracked but not yet implemented.
 
 ## The reconciliation toolbox
 

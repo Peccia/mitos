@@ -11,15 +11,15 @@ from pathlib import Path
 
 import yaml
 
-KNOWN_TARGETS = {"hermes", "claude-code", "antigravity", "agents-md", "claude-app"}
+KNOWN_TARGETS = {"mitos-agent", "claude-code", "antigravity", "agents-md", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 VALID_SKILL_SCOPES = {"global", "project"}
 # Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
 # antigravity: <local_path>/.agents/skills/) — the only targets a project's `skills:` list
-# binds a skill for, and the only targets where `scope: project` changes anything. hermes and
-# claude-app have no project-scoped surface at all (account-wide/global only) and simply
-# IGNORE `scope` — always global, on any skill, regardless of value — the same way hermes
-# always did before this feature existed. See validate_skill_scope / Skill.scope.
+# binds a skill for, and the only targets where `scope: project` changes anything. mitos-agent
+# and claude-app have no project-scoped surface at all (account-wide/global only) and simply
+# IGNORE `scope` — always global, on any skill, regardless of value — the same way the assistant
+# harness always did before this feature existed. See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
 # The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
@@ -40,7 +40,7 @@ EXTENSION_ANCHOR = "## Extended C-suite Roles"
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
 # The set is the union of the harnesses' documented conventions: examples/ + scripts/
-# (Claude Code, Antigravity), references/ + templates/ (Hermes), resources/
+# (Claude Code, Antigravity), references/ + templates/ (the assistant harness), resources/
 # (Antigravity). A whitelist rather than "any file" — it keeps the console's
 # Supporting Files panel and adopt routing over a known, enumerable surface.
 _SKILL_RESOURCE_DIRS = ("examples", "scripts", "references", "templates", "resources")
@@ -134,9 +134,9 @@ class Skill:
     @property
     def scope(self) -> str:
         """`global` (default): deploys to every global surface a target offers
-        (hermes, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
+        (mitos-agent, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
         into the project checkouts that bind it via that project's `skills:` list —
-        never a global directory. Hermes deliberately ignores this field (it has no
+        never a global directory. mitos-agent deliberately ignores this field (it has no
         project-scoped skill surface); see validate_skill_scope."""
         return self.frontmatter.get("scope", "global")
 
@@ -547,7 +547,7 @@ def _check_document_store(label: str, ds, known: set[str]) -> None:
 def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
     """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
     when valid. No per-target incompatibility to check: a target with no project-scoped
-    surface (hermes, claude-app) simply ignores `scope` and always deploys globally, so
+    surface (mitos-agent, claude-app) simply ignores `scope` and always deploys globally, so
     `scope: project` is always a legal value regardless of which targets a skill declares
     — see PROJECT_SCOPE_CAPABLE_TARGETS."""
     scope = frontmatter.get("scope", "global")
@@ -695,7 +695,7 @@ def _validate(reg: Registry) -> None:
             resolve_local_path(mname, reg.machines[mname], raw)  # fails loudly if a
             # relative entry has no projects_root to resolve against
         # agentic_tree (optional): mounts the full agents-md operating tree (the same
-        # Navigation/Workflows/Skills/roster shape a Hermes machine gets at its
+        # Navigation/Workflows/Skills/roster shape a mitos-agent machine gets at its
         # assistant_root) inside this project's own checkout, at
         # <local_path>/<agentic_tree>/ — the workstation-side counterpart to a machine
         # mount, e.g. so Antigravity can operate against a project like an agentic
@@ -782,22 +782,33 @@ def _validate(reg: Registry) -> None:
         bad = targets - KNOWN_TARGETS
         if bad:
             raise RegistryError(f"machine {name}: unknown target(s) {sorted(bad)}")
-        # Machine roles are exclusive: an agentic-harness machine (hermes) is dedicated
+        # Machine roles are exclusive: an agentic-harness machine (mitos-agent) is dedicated
         # to that purpose — it does not also run coding harnesses. This keeps every
         # machine's operating-mount tree (assistant_root) unambiguous and lets the
-        # planner's role checks key off "hermes in targets" alone. agents-md itself is
+        # planner's role checks key off "mitos-agent in targets" alone. agents-md itself is
         # NOT a harness (it's the context format both roles can consume — a reference
         # mount via agentic_context_root, or an operating mount via assistant_root or a
-        # project's agentic_tree:), so it is never part of this exclusion.
+        # project's agentic_tree:), so it is never part of this exclusion. Kept, not retired:
+        # nothing needs a both-classes machine and the planner's role checks assume one class
+        # per machine (mitos-agent-platform.md §4.4).
         _CODING_TARGETS = {"antigravity", "claude-app", "claude-code"}
-        if "hermes" in targets:
+        if "mitos-agent" in targets:
             coding_present = targets & _CODING_TARGETS
             if coding_present:
                 raise RegistryError(
-                    f"machine {name}: 'hermes' (the agentic harness) cannot share a "
+                    f"machine {name}: 'mitos-agent' (the agentic harness) cannot share a "
                     f"machine with coding harness target(s) {sorted(coding_present)}. "
                     f"An agentic machine is dedicated to that purpose — put coding "
                     f"harnesses on a separate machine profile.")
+            # The harness traverses the operating AGENTS.md tree, which is the agents-md
+            # target's output — so mitos-agent REQUIRES agents-md on the same machine
+            # (both deploy into the one `assistant_root` install root). Without it the
+            # harness would install SOUL.md/skills/mcp.json with no tree to read.
+            if "agents-md" not in targets:
+                raise RegistryError(
+                    f"machine {name}: 'mitos-agent' requires 'agents-md' on the same machine "
+                    f"(it traverses the operating tree that target emits) — add 'agents-md' "
+                    f"to targets.")
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
         # shape/validation as a project's document_store.
@@ -856,29 +867,12 @@ def _validate(reg: Registry) -> None:
             if "ssh_key" in git_cfg and not isinstance(git_cfg["ssh_key"], str):
                 raise RegistryError(
                     f"machine {name}: sync.git.ssh_key must be a string path to the private key")
-        # 5. hermes_settings (optional): a few Hermes config.yaml runtime knobs this
-        #    machine wants Mitos to own via targets/hermes.yaml's `settings:` merge.
-        #    terminal.cwd needs no field here — it derives from paths.assistant_root.
-        hs = m.get("hermes_settings")
-        if hs is not None:
-            if not isinstance(hs, dict):
-                raise RegistryError(f"machine {name}: 'hermes_settings' must be a mapping")
-            for k in ("memory_enabled", "user_profile_enabled"):
-                if k in hs and not isinstance(hs[k], bool):
-                    raise RegistryError(f"machine {name}: hermes_settings.{k} must be true/false")
-            for k in ("max_turns", "restart_drain_timeout"):
-                if k in hs and not isinstance(hs[k], int):
-                    raise RegistryError(f"machine {name}: hermes_settings.{k} must be an integer")
-            for k in ("disabled_toolsets", "platform_toolsets_cli", "platform_toolsets_telegram",
-                      "fallback_providers", "custom_providers"):
-                if k in hs and not isinstance(hs[k], list):
-                    raise RegistryError(f"machine {name}: hermes_settings.{k} must be a list")
-            if "session_reset_mode" in hs and not isinstance(hs["session_reset_mode"], str):
-                raise RegistryError(
-                    f"machine {name}: hermes_settings.session_reset_mode must be a string")
-            if "fallback_model" in hs and not isinstance(hs["fallback_model"], dict):
-                raise RegistryError(
-                    f"machine {name}: hermes_settings.fallback_model must be a mapping")
+        # 5. (retired) The `hermes_settings` validation block went with the Hermes settings
+        #    lane — Mitos Agent owns its own config file whole (targets/mitos-agent.yaml), so
+        #    there is no third-party config.yaml to reach settings leaves into. A leftover
+        #    `hermes_settings:` in a profile is silently ignored (machine keys are not a
+        #    closed set), so the machine profiles drop it explicitly rather than relying on a
+        #    validation error to catch it.
         # 6. skills (optional): per-target curation of the compatible skill set —
         #    `{<target>: {include: [...] | exclude: [...]}}`. The overlayable home for
         #    what target-side skills.include/exclude used to do (rejected above); this

@@ -1,0 +1,58 @@
+# Target: Mitos Agent — the first-party agentic planning harness.
+# Replaces the retired `hermes` target. Consumes SOUL.md, a skills tree, mcp.json, and the
+# assistant AGENTS.md tree (produced by the agents-md target — REQUIRED on the same machine,
+# loader._validate; see machines/example-linux.yaml).
+#
+# ONE INSTALL ROOT: every Mitos Agent file lands in `assistant_root` (e.g. ~/MitosAgent) —
+# the SAME directory the agents-md tree mounts at, so a machine has a single install folder:
+#   ~/MitosAgent/SOUL.md  mcp.json  skills/  AGENTS.md  Assistant/  Projects/  .local-memory/
+# (`.local-memory/` is the harness's RUNTIME state, written by the harness, never by Mitos —
+# the traversal engine ignores dot-directories; see mitos-agent-platform.md §7.) The former
+# separate `mitos_agent_home` key was collapsed into `assistant_root`.
+#
+# Every output here is a WHOLE FILE: Mitos Agent's config belongs to Mitos, so invariant #7
+# (surgical merges for tool-owned config) does not apply to this lane. The merge-residue
+# caveat that leaves keys behind on retirement is documented in docs/managing-state.md.
+target: mitos-agent
+
+# SOUL.md — Mitos Agent's system prompt, from the universal identity partials.
+# Order is deliberate (the less-is-more lesson from the pre-Mitos PoC): persona first,
+# the core working rules immediately after, then security/comms, session protocol last.
+context_file:
+  sources: [identity/who-i-am.md, identity/operating-rules.md, identity/security.md, identity/comms-style.md, identity/session-protocol.md]
+  deploy_to_key: assistant_root          # the single install root (resolved per machine)
+  filename: SOUL.md
+  drift_policy: protect
+
+# Skills — copied (not symlinked) so the curator can mutate deployed copies;
+# those mutations are harvested back, never silently lost.
+skills:
+  include_target: mitos-agent            # ship skills whose `targets:` contains "mitos-agent"
+  # Optional curation (pull side) — limit this tool's skill set in ONE place instead
+  # of editing each skill's `targets:` frontmatter (push side). This is a PERSONAL
+  # choice, not compiler spec, so it lives on the machine profile (overlayable), not
+  # here (core, not overlayable). In machines/<name>.yaml (or registry/local/machines/):
+  #   skills:
+  #     mitos-agent: {include: [plan, gws]}       # ONLY these (of the compatible ones)
+  #     # mitos-agent: {exclude: [example-ops-logs]}  # all compatible ones EXCEPT these
+  # Names are validated against registry/skills/ at compile. After deselecting, run
+  # `deploy --machine <m> --prune` to remove the already-deployed copies.
+  mode: copy
+  deploy_to_key: assistant_root
+  subdir: skills/{category}/{name}       # preserves the devops/productivity grouping
+  # Emit Mitos-Agent-native frontmatter: name, description, version, author, license,
+  # platforms, and metadata.mitos_agent.tags (reconstructed from the canonical tag key
+  # merged with `category`).
+  frontmatter: mitos-agent
+  drift_policy: harvest
+
+# MCP — a WHOLE mcp.json Mitos owns (invariant #7 does not apply: this is Mitos Agent's
+# own config file, not a third party's). The output carries EVERY store in the machine's
+# `document_store:` list, keyed by server name (planner._agent_servers), so §5.4's
+# resolve(id, store) can pick the right server for a multi-store project. No `server_alias:`
+# — a single hard-coded alias would defeat that.
+mcp:
+  filename: mcp.json
+  deploy_to_key: assistant_root
+  render: mitos_agent_mcp_config
+  drift_policy: protect

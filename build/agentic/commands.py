@@ -443,7 +443,7 @@ def compute_deploy_plan(reg: Registry, machine: str, root: Path | None = None,
     blocked = [s for s in statuses
                if s.state in ("drift", "conflict") and s.output.drift_policy == "protect"]
     # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
-    # targets (hermes/claude-app) receiving a scope: project skill. Warn-only — nothing
+    # targets (mitos-agent/claude-app) receiving a scope: project skill. Warn-only — nothing
     # here changes what deploys, it just makes a previously silent filter visible.
     skill_warnings = (skill_deploy_warnings(reg, machine)
                        if target is None and lane in ("all", "content") else [])
