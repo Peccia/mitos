@@ -688,6 +688,28 @@ def _validate(reg: Registry) -> None:
                 if not isinstance(val, str) or not val.strip():
                     raise RegistryError(
                         f"project {slug}: repo_notes[{key!r}] must be a non-empty string")
+        # `repo_branches:` (optional): a branch to check out per repo, keyed by the repo's
+        # checkout basename — same identity/validation as `repo_notes:`. Absent = the repo's
+        # default branch. Deploy checks out the named branch on clone and fast-forwards it on
+        # subsequent deploys (commands._git_clone/_git_pull); the harness never writes a repo.
+        branches_raw = proj.get("repo_branches")
+        if branches_raw is not None and branches_raw != {}:
+            if not isinstance(branches_raw, dict):
+                raise RegistryError(f"project {slug}: 'repo_branches' must be a mapping "
+                                    f"of repo basename to branch name")
+            known_basenames = {
+                _repo_basename(u) for u in (
+                    repo_raw if isinstance(repo_raw, list)
+                    else ([repo_raw] if isinstance(repo_raw, str) and repo_raw.strip()
+                          else []))}
+            for key, val in branches_raw.items():
+                if key not in known_basenames:
+                    raise RegistryError(
+                        f"project {slug}: repo_branches key {key!r} does not match any "
+                        f"'repo' checkout basename; known: {sorted(known_basenames)}")
+                if not isinstance(val, str) or not val.strip():
+                    raise RegistryError(
+                        f"project {slug}: repo_branches[{key!r}] must be a non-empty string")
         for mname, raw in (proj.get("local_path") or {}).items():
             if mname not in reg.machines:
                 raise RegistryError(

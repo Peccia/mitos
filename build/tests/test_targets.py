@@ -813,17 +813,21 @@ def test_project_node_without_repos_has_no_navigation_roster():
     assert [s for s, _ in node.section_bodies].count(
         "context/projects/example-project.md") == 1
 
-def test_plan_clones_gated_on_claude_code_env_and_repo():
+def test_plan_clones_lands_in_the_right_tree_per_machine():
     from agentic.planner import plan_clones
-    assert plan_clones(reg, "example-linux") == []          # no claude-code target
-    clones = plan_clones(reg, "example-windows")
-    slugs = [c.slug for c in clones]
-    # mitos has a non-empty repo → included; example-project's is "" → excluded
-    assert "mitos" in slugs
-    assert "example-project" not in slugs
-    c = next(c for c in clones if c.slug == "mitos")
-    assert c.dest.endswith("MitosAgent/Projects/mitos/mitos")
-    assert c.repo == "git@github.com:Peccia/mitos.git"
+    # mitos-agent machine: clones land beside the OPERATING tree's project node, keyed by the
+    # project NAME (_emit_tree uses the name), so the harness resolves a checkout structurally.
+    linux = plan_clones(reg, "example-linux")
+    lslugs = [c.slug for c in linux]
+    assert "mitos" in lslugs                                # non-empty repo → included
+    assert "example-project" not in lslugs                 # repo "" → excluded
+    lc = next(c for c in linux if c.slug == "mitos")
+    assert lc.dest.endswith("MitosAgent/Projects/Mitos/mitos")   # project NAME "Mitos"
+    assert lc.repo == "git@github.com:Peccia/mitos.git"
+    # claude-code + agents-md machine: clones land in the reference tree, keyed by the SLUG.
+    win = plan_clones(reg, "example-windows")
+    wc = next(c for c in win if c.slug == "mitos")
+    assert wc.dest.endswith("MitosAgent/Projects/mitos/mitos")   # project SLUG "mitos"
 
 def test_clone_is_idempotent_and_nondestructive():
     from agentic import commands
@@ -832,7 +836,7 @@ def test_clone_is_idempotent_and_nondestructive():
     from agentic.planner import plan_clones
     calls: list = []
 
-    def fake_clone(repo, dest):
+    def fake_clone(repo, dest, branch=""):
         calls.append(repo)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / ".git").write_text("fake", encoding="utf-8")
@@ -863,7 +867,7 @@ def test_clone_failure_is_reported_not_fatal():
     from agentic.io import safe_rel
     from agentic.planner import plan_clones
 
-    def failing_clone(repo, dest):
+    def failing_clone(repo, dest, branch=""):
         return 1, "fatal: could not read Username (auth)"
 
     dest_rel = safe_rel(plan_clones(reg, "example-windows")[0].dest)

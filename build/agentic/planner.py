@@ -322,6 +322,7 @@ class CloneSpec:
     slug: str
     repo: str          # git URL from the manifest
     dest: str          # POSIX checkout dir — under agentic_context_root or local_path
+    branch: str = ""   # branch to check out / fast-forward (repo_branches:); "" = default
 
 
 def _project_repos(proj: dict) -> list[str]:
@@ -346,49 +347,81 @@ def _project_repo_entries(proj: dict) -> list[tuple[str, str, str]]:
             for url in _project_repos(proj)]
 
 
+def _repo_branch(proj: dict, basename: str) -> str:
+    """The branch to check out for a repo, keyed by checkout basename (`repo_branches:`).
+    Empty string means the repo's default branch."""
+    return str((proj.get("repo_branches") or {}).get(basename, "")).strip()
+
+
 def _reg_root_norm(reg: Registry) -> str:
     """Normalised, slash-terminated registry root for guard comparisons."""
     return str(reg.root).replace("\\", "/").rstrip("/")
 
 
 def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
-    """Repos to clone on Claude Code environments, absent-only / non-destructive.
+    """Repos to clone (and keep current) on machines that host a project tree, absent-only
+    for the clone / fast-forward-only for the pull — never destructive.
 
-    Two lanes:
+    Three lanes:
+    - assistant_root (mitos-agent machines): clone into
+      <assistant_root>/Projects/<name>/<basename> — a SIBLING of the operating tree's
+      project node (_emit_tree uses the project NAME for that folder), so the planning
+      harness resolves a checkout structurally from the node's own directory.
     - agentic_context_root (agents-md + claude-code machines): clone into
-      <agentic_context_root>/Projects/<slug>/<basename> — the separate context tree.
-    - local_path (non-agents-md claude-code machines, i.e. agents-md NOT in targets):
-      clone into <local_path>/<basename> — co-located with the project workspace.
+      <agentic_context_root>/Projects/<slug>/<basename> — the reference context tree
+      (_plan_graph_tree uses the SLUG for that folder).
+    - local_path (non-agents-md claude-code machines): clone into <local_path>/<basename>,
+      co-located with the project workspace.
 
-    The deploy executor clones each only when its checkout is ABSENT — never pulling,
-    resetting, or deleting an existing tree (design rule #8). Planning-only machines
-    (no claude-code target) get nothing.
+    The deploy executor clones each only when its checkout is ABSENT, and fast-forwards an
+    existing checkout (never resetting or deleting one — design rule #8). Machines that host
+    no project tree (no mitos-agent and no claude-code target) get nothing.
     """
     machine = reg.machines.get(machine_name) or {}
     targets = machine.get("targets", [])
-    if "claude-code" not in targets:
-        return []
+    paths = machine.get("paths") or {}
+    suppressed = _suppressed_examples(reg)
+
+    def _repo_specs(slug: str, proj: dict, parent: str) -> list[CloneSpec]:
+        specs: list[CloneSpec] = []
+        for repo in _project_repos(proj):
+            bn = _repo_basename(repo)
+            specs.append(CloneSpec(slug=slug, repo=repo, dest=f"{parent}/{bn}",
+                                   branch=_repo_branch(proj, bn)))
+        return specs
 
     out: list[CloneSpec] = []
 
+    # assistant_root lane (mitos-agent operating tree — clones beside the project node,
+    # which _emit_tree names with the project NAME). Suppressed examples step aside, exactly
+    # as the operating tree itself does when real overlay projects exist.
+    if "mitos-agent" in targets:
+        aroot = paths.get("assistant_root")
+        if aroot:
+            aroot = str(aroot).rstrip("/")
+            for slug, proj in sorted(reg.projects.items()):
+                if slug in suppressed:
+                    continue
+                name = proj.get("name", slug)
+                out += _repo_specs(slug, proj, f"{aroot}/Projects/{name}")
+
+    if "claude-code" not in targets:
+        return out
+
     # agentic_context_root lane (agents-md machines that also run claude-code)
-    root = (machine.get("paths") or {}).get("agentic_context_root")
+    root = paths.get("agentic_context_root")
     if root:
         root = str(root).rstrip("/")
         for slug, proj in sorted(reg.projects.items()):
-            for repo in _project_repos(proj):
-                dest = f"{root}/Projects/{slug}/{_repo_basename(repo)}"
-                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+            out += _repo_specs(slug, proj, f"{root}/Projects/{slug}")
 
     # local_path lane (workstation machines without agents-md)
     if "agents-md" not in targets:
         reg_root = _reg_root_norm(reg)
-        suppressed = _suppressed_examples(reg)
         for slug, proj in sorted(reg.projects.items()):
             if slug in suppressed:
                 continue
-            repos = _project_repos(proj)
-            if not repos:
+            if not _project_repos(proj):
                 continue
             local = _local(reg, machine_name, proj)
             if not local:
@@ -396,9 +429,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
             local_norm = local.replace("\\", "/").rstrip("/")
             if local_norm == reg_root:
                 continue  # guard: never clone into the Mitos repo itself
-            for repo in repos:
-                dest = f"{local_norm}/{_repo_basename(repo)}"
-                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+            out += _repo_specs(slug, proj, local_norm)
 
     return out
 
@@ -1001,6 +1032,12 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
     if ctx_key:
         from . import graph as graphmod
         suppressed = _suppressed_examples(reg)
+        # On a mitos-agent operating tree, plan_clones drops each repo checkout beside this
+        # project node (<assistant_root>/Projects/<name>/<basename>), so the generated
+        # `## Navigation` repo roster is real here — the harness resolves a checkout from the
+        # node's own directory. On an agentic_tree mount (a claude-code workstation, no
+        # mitos-agent target) the checkouts land beside the MOUNT, not inside it, so no roster.
+        clone_siblings = "mitos-agent" in machine.get("targets", [])
         for slug, proj in sorted(reg.projects.items()):
             if slug in suppressed:
                 continue
@@ -1015,21 +1052,22 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
                 continue
             deploy_path = f"{root.rstrip('/')}/{rel_file}"
             pg = reg.graphs.get(slug)
-            if pg:
-                # prose header (protected) + lightweight titles index (generated);
-                # full per-document detail lives in the companion AGENTS_DETAILS.md.
-                prose_body = render.plain_document(sections).rstrip("\n")
-                # No generated `## Navigation` repo roster here, unlike the workstation
-                # project nodes: this tree's checkouts are never siblings of this file (a
-                # mitos-agent machine excludes claude-code, so plan_clones yields nothing for
-                # it; an agentic_tree mount puts clones beside the MOUNT, not inside it).
+            prose_body = render.plain_document(sections).rstrip("\n")
+            # Lightweight titles index (generated); full per-document detail lives in the
+            # companion AGENTS_DETAILS.md. Empty when the project has no graph.
+            gen_body = _project_doc_block(
+                reg, proj, pg, graphmod.project_index_markdown, level=2,
+                emit_heading=_connection_emit(proj, prose_body),
+                org_routing=org_routing) if pg else ""
+            if clone_siblings and _project_repo_entries(proj):
+                # prose interleaved with the generated nav roster + doc index
+                regions = _project_node_regions(proj, src_rel, prose_body, gen_body)
+                outputs.append(_mixed_doc_output(
+                    "agents-md", deploy_path, regions, src_rel, policy))
+            elif pg:
                 outputs.append(_mixed_doc_output(
                     "agents-md", deploy_path,
-                    [(src_rel, prose_body),
-                     (render.GENERATED_SECTION, _project_doc_block(
-                         reg, proj, pg, graphmod.project_index_markdown, level=2,
-                         emit_heading=_connection_emit(proj, prose_body),
-                         org_routing=org_routing))],
+                    [(src_rel, prose_body), (render.GENERATED_SECTION, gen_body)],
                     src_rel, policy))
             else:
                 outputs.append(Output(

@@ -82,7 +82,7 @@ Each line of a `deploy`/`diff` plan is `[state]  <path> — <detail>  <flag>`. T
 | `resolved` | Live already matches the registry but the lock was stale (e.g. right after `adopt`). | Re-locks; **never** needs `--force`. |
 | `merge` | A tool-owned config file (Antigravity `config.json`, Antigravity/Claude-Desktop `config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
 | `orphan` | Previously deployed by Mitos, no longer in the plan (a deselected skill, a retired project). | Kept on disk until you `--prune`. |
-| `clone` | A project repo to clone into the Agentic Context tree. | Clones if absent; never touches an existing checkout. |
+| `clone` | A project repo to check out beside its project node. | Clones if absent; fast-forwards an existing clean checkout on its manifest branch; never resets, stashes, re-checks-out, or deletes one (a dirty/detached/diverged checkout is skipped and reported). |
 
 The two flags you'll see on `drift`/`conflict` lines:
 

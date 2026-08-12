@@ -353,30 +353,73 @@ def _capture_to_inbox(reg: Registry, machine: str, s: Status, lock: dict,
 
 
 # ── repo auto-clone (the deployed project-tree design) ───────────────────────────
-def _git_clone(repo: str, dest: Path) -> tuple[int, str]:
-    """Clone `repo` into `dest`. A FULL clone, not shallow: these are working checkouts,
-    and a `--depth 1` clone is implicitly single-branch (fetch refspec pinned to the
-    default branch), which silently breaks `git checkout <other-branch>` later.
-    Non-interactive (GIT_TERMINAL_PROMPT=0) so a private repo without ambient
-    credentials FAILS fast instead of prompting for one.
-    Returns (returncode, error-tail). Module-level so tests can substitute it."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
+def _git(args: list[str], *, cwd: Path | None = None,
+         timeout: int = 600) -> tuple[int, str, str]:
+    """Run a git command non-interactively (GIT_TERMINAL_PROMPT=0 so a private repo without
+    ambient creds FAILS fast instead of prompting). Returns (rc, stdout, stderr-tail).
+    Module-level so tests can substitute it."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        proc = subprocess.run(["git", "clone", repo, str(dest)],
-                              capture_output=True, text=True, timeout=600, env=env)
+        proc = subprocess.run(["git", *args], capture_output=True, text=True,
+                              timeout=timeout, env=env,
+                              cwd=str(cwd) if cwd else None)
     except FileNotFoundError:
-        return 1, "git not found on PATH"
+        return 1, "", "git not found on PATH"
     except subprocess.TimeoutExpired:
-        return 1, "git clone timed out"
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return proc.returncode, (tail[-1] if tail else "git clone failed")
-    return 0, ""
+        return 1, "", "git timed out"
+    tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return proc.returncode, (proc.stdout or "").strip(), (tail[-1] if tail else "")
+
+
+def _git_clone(repo: str, dest: Path, branch: str = "") -> tuple[int, str]:
+    """Clone `repo` into `dest`, optionally onto `branch`. A FULL clone, not shallow: these
+    are working checkouts, and a `--depth 1` clone is implicitly single-branch (fetch refspec
+    pinned to the default branch), which silently breaks `git checkout <other-branch>` later.
+    Returns (returncode, error-tail). Module-level so tests can substitute it."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    args = ["clone"]
+    if branch:
+        args += ["--branch", branch]
+    args += [repo, str(dest)]
+    rc, _out, err = _git(args)
+    return rc, ("" if rc == 0 else (err or "git clone failed"))
+
+
+def _git_pull(dest: Path, branch: str = "") -> tuple[str, str]:
+    """Fast-forward an existing checkout to its upstream — read-only-ish and NON-destructive
+    (design rule #8). Never resets, stashes, checks out over local work, or force-updates.
+    Skips (with a reason) when the tree is dirty, detached, on a different branch than the
+    manifest names, has no upstream, or has diverged. Returns (outcome, detail) where outcome
+    is one of 'pulled' | 'skipped' | 'failed'."""
+    # A dirty working tree is the owner's — never touch it.
+    rc, out, err = _git(["status", "--porcelain"], cwd=dest)
+    if rc != 0:
+        return "failed", err or "git status failed"
+    if out.strip():
+        return "skipped", "working tree has uncommitted changes"
+    # Current branch (empty => detached HEAD).
+    rc, cur, err = _git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=dest)
+    if rc != 0 or not cur:
+        return "skipped", "detached HEAD (not on a branch)"
+    if branch and cur != branch:
+        return "skipped", f"on branch {cur!r}, manifest names {branch!r}"
+    # Must have an upstream to fast-forward toward.
+    rc, _up, _err = _git(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd=dest)
+    if rc != 0:
+        return "skipped", f"branch {cur!r} has no upstream"
+    rc, _out, err = _git(["fetch", "--quiet"], cwd=dest)
+    if rc != 0:
+        return "failed", err or "git fetch failed"
+    # Fast-forward ONLY — a diverged branch is left exactly as it is.
+    rc, _out, err = _git(["merge", "--ff-only", "@{upstream}"], cwd=dest)
+    if rc != 0:
+        return "skipped", "cannot fast-forward (diverged or ahead of upstream)"
+    return "pulled", cur
 
 
 def _checkout_present(dest: Path) -> bool:
-    """A checkout we must never touch: the dir exists and is non-empty."""
+    """A checkout we must never re-clone over: the dir exists and is non-empty."""
     return dest.exists() and any(dest.iterdir())
 
 
@@ -503,12 +546,13 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         for w in skill_warnings:
             print(f"  [warn     ] {w}")
     if clones:
-        print(f"  {len(clones)} repo clone(s) (clone-if-absent; existing checkouts left "
-              f"untouched):")
+        print(f"  {len(clones)} repo checkout(s) (clone-if-absent; existing checkouts "
+              f"fast-forwarded, never reset):")
         for c in clones:
-            here = "present, untouched" if _checkout_present(_dest(c.dest, root)) \
-                else "absent -> will clone"
-            print(f"  [clone    ] {c.dest} — {here}")
+            onto = f" @{c.branch}" if c.branch else ""
+            here = "present -> fast-forward if clean" \
+                if _checkout_present(_dest(c.dest, root)) else "absent -> will clone"
+            print(f"  [clone    ] {c.dest}{onto} — {here}")
 
     if blocked and not force:
         print(f"\nrefusing to deploy: {len(blocked)} protected file(s) drifted. "
@@ -608,25 +652,39 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         files_record[o.deploy_path] = entry
     lockfile.record(lock, machine, _now(), files_record)
     lockfile.save(lock_base, lock)
-    # clone repos AFTER files land. Clone-if-absent and non-destructive (design rule #8):
-    # an existing checkout is never pulled, reset, or deleted. A clone failure (e.g. a
-    # private repo without ambient creds) is reported, never fatal — the deploy succeeded.
-    cloned = clone_failed = 0
+    # clone repos AFTER files land. NON-destructive (design rule #8): an absent checkout is
+    # cloned (onto its manifest branch); an existing one is fast-forwarded only — never reset,
+    # stashed, re-checked-out, or deleted. A clone failure (e.g. a private repo without ambient
+    # creds) or a skipped pull is reported, never fatal — the deploy succeeded.
+    cloned = clone_failed = pulled = pull_skipped = 0
     for c in clones:
         dest = _dest(c.dest, root)
         if _checkout_present(dest):
+            outcome, detail = _git_pull(dest, c.branch)
+            if outcome == "pulled":
+                pulled += 1
+                print(f"  pulled {c.slug} ({detail}) <- upstream")
+            elif outcome == "skipped":
+                pull_skipped += 1
+                print(f"  pull skipped for {c.slug}: {detail} — left untouched")
+            else:
+                clone_failed += 1
+                print(f"  pull failed for {c.slug}: {detail} — reported, not fatal")
             continue
-        rc_c, err = _git_clone(c.repo, dest)
+        rc_c, err = _git_clone(c.repo, dest, c.branch)
         if rc_c == 0:
             cloned += 1
-            print(f"  cloned {c.repo} -> {c.dest}")
+            onto = f" (branch {c.branch})" if c.branch else ""
+            print(f"  cloned {c.repo} -> {c.dest}{onto}")
         else:
             clone_failed += 1
             print(f"  clone failed for {c.slug} ({c.repo}): {err} — reported, not fatal")
     tail = f"; captured {captured} inbox candidate(s)" if captured else ""
     tail += f"; pruned {pruned} orphan(s)" if pruned else ""
     tail += f"; cloned {cloned} repo(s)" if cloned else ""
-    tail += f"; {clone_failed} clone(s) failed (reported)" if clone_failed else ""
+    tail += f"; pulled {pulled} repo(s)" if pulled else ""
+    tail += f"; {pull_skipped} pull(s) skipped" if pull_skipped else ""
+    tail += f"; {clone_failed} clone/pull(s) failed (reported)" if clone_failed else ""
     print(f"\ndeployed {written} file(s); updated {lockfile.LOCK_NAME}{tail}")
     return 0
 

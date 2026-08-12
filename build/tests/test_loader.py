@@ -288,6 +288,85 @@ def test_agentic_tree_collides_with_repo_checkout_dir():
     except RegistryError as e:
         assert "collides with the checkout dir of repo" in str(e)
 
+def test_repo_branches_validates_against_checkout_basenames():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "git@github.com:example/thing.git"
+    # a branch keyed by a basename that isn't one of the project's repos → loud error
+    rig.projects["example-project"]["repo_branches"] = {"nope": "main"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown repo_branches key")
+    except RegistryError as e:
+        assert "does not match any 'repo' checkout basename" in str(e)
+    # a valid basename + a non-empty branch validates cleanly
+    rig.projects["example-project"]["repo_branches"] = {"thing": "develop"}
+    _validate(rig)
+    # an empty branch value is rejected
+    rig.projects["example-project"]["repo_branches"] = {"thing": ""}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty branch")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_repo_branches_threads_into_clonespec():
+    import copy
+    from agentic.planner import plan_clones
+    rig = copy.deepcopy(reg)
+    rig.projects["mitos"]["repo_branches"] = {"mitos": "release/0.1.4"}
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.branch == "release/0.1.4"
+    # a project without a repo_branches entry carries an empty branch (its default)
+    rig.projects["mitos"].pop("repo_branches")
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.branch == ""
+
+def test_git_pull_is_fast_forward_only_and_nondestructive():
+    """_git_pull refuses to touch a dirty or diverged checkout — it only ever fast-forwards
+    a clean, tracking branch. Driven by a stubbed `_git` so no real repo is needed."""
+    from agentic import commands
+    git_pull = commands._real_git_pull   # the real impl (conftest stubs the module attr)
+    calls: list[list[str]] = []
+
+    def make_git(status="", branch="main", upstream_ok=True, ff_ok=True):
+        def _git(args, cwd=None, timeout=600):
+            calls.append(args)
+            if args[:1] == ["status"]:
+                return 0, status, ""
+            if args[:1] == ["symbolic-ref"]:
+                return (0, branch, "") if branch else (1, "", "detached")
+            if args[:1] == ["rev-parse"]:
+                return (0, "origin/main", "") if upstream_ok else (1, "", "no upstream")
+            if args[:1] == ["fetch"]:
+                return 0, "", ""
+            if args[:1] == ["merge"]:
+                return (0, "", "") if ff_ok else (1, "", "not ff")
+            return 0, "", ""
+        return _git
+
+    orig = commands._git
+    try:
+        commands._git = make_git(status=" M file.py")     # dirty tree
+        assert git_pull(Path("x"))[0] == "skipped"
+        commands._git = make_git(branch="")               # detached HEAD
+        assert git_pull(Path("x"))[0] == "skipped"
+        commands._git = make_git(branch="feature")        # wrong branch vs manifest
+        assert git_pull(Path("x"), "main")[0] == "skipped"
+        commands._git = make_git(upstream_ok=False)       # no upstream
+        assert git_pull(Path("x"))[0] == "skipped"
+        commands._git = make_git(ff_ok=False)             # diverged — cannot ff
+        assert git_pull(Path("x"))[0] == "skipped"
+        commands._git = make_git()                        # clean, tracking, ff-able
+        outcome, detail = git_pull(Path("x"), "main")
+        assert outcome == "pulled" and detail == "main"
+        # a fast-forward run never issues a destructive verb
+        flat = [a for c in calls for a in c]
+        assert "reset" not in flat and "checkout" not in flat and "stash" not in flat
+    finally:
+        commands._git = orig
+
 def test_planner_output_path_collision():
     import copy
     from agentic import planner

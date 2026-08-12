@@ -114,6 +114,17 @@ to keep one current.)
 Re-run step 3 whenever registry content changes — that is the whole update story. The harness reads
 the tree fresh on every session, so a `deploy` is picked up by the next run with nothing to restart.
 
+### Project source under the tree
+
+A project that declares `repo:` (and optionally `repo_branches:`) in its manifest has each repo
+cloned into `<assistant_root>/Projects/<name>/<basename>/` — a sibling of that project's `AGENTS.md`
+node, listed in the node's generated `## Navigation` roster. This is what lets the planning harness
+"dig deep into source code": the project lane resolves a checkout from the node's own directory,
+read-only. **Mitos owns the checkout's lifecycle, never the harness** — `deploy` clones an absent
+repo onto its branch and fast-forwards an existing clean one; a dirty, detached, or diverged checkout
+is left exactly as it is and reported. The harness only ever reads these files; it never writes,
+commits, or runs git in them. So `deploy` is also how project source is kept current for planning.
+
 ## Retirement note
 
 The `hermes` target it replaced merged eleven owned keys into a third-party `config.yaml` (an

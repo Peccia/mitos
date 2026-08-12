@@ -15,15 +15,26 @@ from agentic import loader, planner, render  # noqa: E402
 from agentic import commands
 from agentic.commands import classify_output  # noqa: E402
 
-# Globally mock _git_clone for all tests to prevent real network calls and clone operations.
-# Individual tests can still override this temporarily by monkeypatching commands._git_clone.
-def _test_safe_git_clone(repo: str, dest: Path) -> tuple[int, str]:
+# Globally mock _git_clone/_git_pull for all tests to prevent real network calls and clone
+# operations. Individual tests can still override these by monkeypatching commands._git_clone
+# / commands._git_pull.
+def _test_safe_git_clone(repo: str, dest: Path, branch: str = "") -> tuple[int, str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     (dest / ".git").mkdir(parents=True, exist_ok=True)
     (dest / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
     return 0, ""
 
+def _test_safe_git_pull(dest: Path, branch: str = "") -> tuple[str, str]:
+    # Existing checkouts are left untouched in tests — report a clean no-op skip so the
+    # non-destructive contract holds without touching a real git tree.
+    return "skipped", "test stub — checkout left untouched"
+
+# Preserve the real implementations so unit tests can exercise them directly (driving the
+# lower-level `commands._git` with a stub) even though the deploy path uses the safe stubs.
+commands._real_git_clone = commands._git_clone
+commands._real_git_pull = commands._git_pull
 commands._git_clone = _test_safe_git_clone
+commands._git_pull = _test_safe_git_pull
 
 reg = loader.load(REPO_ROOT, ignore_local=True)
 
