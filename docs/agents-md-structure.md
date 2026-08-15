@@ -83,10 +83,10 @@ back. A hand-edit to the roster is silently regenerated; a hand-edit to the pros
 is still ordinary, adoptable drift.
 
 Only project nodes whose checkouts are actually siblings of the file get a roster — the
-workstation `local_path` node and the `agentic_context_root` reference mount. The Mitos Agent
-operating tree never does: a mitos-agent machine excludes `claude-code`, so `plan_clones` yields
-nothing there, and an `agentic_tree:` mount puts clones beside the mount rather than inside
-it.
+workstation `local_path` node, the `agentic_context_root` reference mount, and the `mitos-agent`
+operating tree (which clones repos into `<assistant_root>/Projects/<name>/<basename>/` as
+siblings of the project node). An `agentic_tree:` mount puts clones beside the mount rather
+than inside it.
 
 ## Skills
 

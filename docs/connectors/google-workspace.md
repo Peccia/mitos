@@ -44,7 +44,8 @@ Any MCP-compatible client can connect to the running server:
 
 For Mitos-managed tools you do **not** copy any config by hand: `deploy --machine <name>`
 renders the `gws` server into each tool's native MCP config (for Antigravity, a surgical
-`json_merge` into `~/.gemini/config`; for Mitos Agent, a `yaml_merge` into its `config.yaml`).
+`json_merge` into `~/.gemini/config`; for Mitos Agent, a whole-file JSON config at
+`<assistant_root>/mcp.json`).
 Run a deploy and the wiring lands automatically. Only connect manually if you're using a
 client Mitos doesn't manage.
 

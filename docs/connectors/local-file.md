@@ -42,8 +42,8 @@ operator console (`python build/compile.py review`). Nothing is written to the r
 ## Identifier stability
 
 The SHA-1 id is derived from the file's **absolute path**. If you move the file to a different
-directory, the id changes and the old mapping becomes stale. Moving files within the same
-directory (a rename) preserves the id. Re-running `mitos connect` and accepting the new candidate
+directory or rename it in-place, its absolute path changes, producing a new id and rendering
+the previous mapping stale. Re-running `mitos connect` and accepting the new candidate
 upserts the corrected mapping.
 
 ## No binding required

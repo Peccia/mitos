@@ -67,6 +67,8 @@ All commands below run the project's virtualenv interpreter directly to avoid sy
 
 ### Linux / macOS
 
+On Debian/Ubuntu, ensure `python3-venv` is installed: `sudo apt update && sudo apt install -y python3 python3-venv git`.
+
 ```bash
 # Step 1: Clone the repository and navigate into it
 git clone https://github.com/Peccia/mitos.git && cd mitos
@@ -87,6 +89,8 @@ build/.venv/bin/python build/compile.py review
 ```
 
 ### Windows (PowerShell)
+
+If PowerShell script execution is restricted, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
 ```powershell
 # Step 1: Clone the repository and navigate into it
@@ -110,7 +114,7 @@ build/.venv/Scripts/python.exe build/compile.py review
 > [!NOTE]
 > The compiler validates machine profiles against your host OS before writing files. Rehearse any cross-machine deployments safely using the `--root <dir>` flag to write into a sandbox directory.
 >
-> In later commands, `python build/...` is used as shorthand for the virtual environment interpreter (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`). Ensure you use the venv path when running them.
+> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. In later commands, `python build/...` is used as shorthand for the virtual environment interpreter (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`). Ensure you use the venv path when running them.
 
 > [!TIP]
 > **Staying up to date.** When you run `mitos.py init` or `mitos.py sync`, Mitos checks whether

@@ -41,15 +41,14 @@ Claude Code consumes), so Mitos treats it like the other harnesses — one skill
 
 ## ⚙️ Configuration & machine setup
 
-To deploy assets for Antigravity, list both the `antigravity` and `agents-md` targets in your
-machine profile, and define the paths where Antigravity reads them.
+To deploy assets for Antigravity on a coding workstation, list the `antigravity` target (and optionally `agents-md` if deploying project-level agentic context trees) in your machine profile, and define the paths where Antigravity reads them.
 
 Add the following to your machine profile (`registry/local/machines/<name>.yaml`):
 
 ```yaml
 targets:
   - antigravity
-  - agents-md
+  # - agents-md       # optional: include if mounting an agentic tree (agentic_tree: in project manifests)
 
 paths:
   # Antigravity's GLOBAL skills directory (all workspaces) — per the official
@@ -57,15 +56,16 @@ paths:
   # <workspace-root>/.agents/skills/ and are covered by scope: project bindings below.
   antigravity_skills: "~/.gemini/config/skills"
 
-  # The root directory for your personal assistant context tree
-  assistant_root: "~/MitosAgent"
-
   # The base directory where your codebase checkouts reside
   projects_root: "~/Projects"
 
   # MCP connections + tool permissions — shared with classic Gemini CLI until it retires
   antigravity_config: "~/.gemini/config"
 ```
+
+> **Note on `assistant_root`:** The standalone `mitos-agent` planning harness owns the dedicated
+> `assistant_root` operating tree on agentic machines. On coding workstations, Antigravity operates
+> within project workspaces (`projects_root`) and project-scoped agentic trees (`agentic_tree:`).
 
 ---
 

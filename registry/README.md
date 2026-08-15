@@ -135,8 +135,8 @@ local_path:
   linux-box: ~/code/acme      # absolute (~, /, or D:/…) passes through unchanged
 exclude_folders:              # optional; folder names or IDs to skip during `mitos connect` staging
   - Archive
-skills: [plan]                # optional; each skill must exist AND target claude-code
-agents: [code-reviewer]       # optional; each agent must exist in registry/agents/
+skills: [plan]                # optional; each skill must exist AND target claude-code or antigravity
+prompts: [bug-report]         # optional; each prompt must exist AND target claude-code
 context:                      # label → registry-relative partial (must resolve to a real file)
   assistant: registry/context/projects/acme-redesign.md
 ```
@@ -151,8 +151,8 @@ context:                      # label → registry-relative partial (must resolv
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
 | `exclude_folders` | no | List of folder **names or IDs** to skip during `mitos connect` staging. Merged with any `exclude_folders` defined on the server in `connections/servers.yaml` (server entries first, then project entries, deduped). |
-| `skills` | no | Skills bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/skills/`). Each must exist **and** list `claude-code` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
-| `agents` | no | Subagents bound to this project's checkout (`.claude/agents/`). Each must exist in `registry/agents/`. |
+| `skills` | no | Skills bound to *this project's* checkout (deployed to `<checkout>/.claude/skills/` or `.agents/skills/`). Each must exist **and** list `claude-code` or `antigravity` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
+| `prompts` | no | Prompts bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/commands/<name>.md`). Each must exist **and** list `claude-code` in its own `targets:`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
@@ -210,7 +210,6 @@ sync:                                   # optional — consumed only by `mitos s
 | `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). claude-app has no project-scoped surface — it ignores a skill's `scope` and always stages every skill it targets. |
 | `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |
 | `assistant_root` | mitos-agent + agents-md | The ONE Mitos Agent install root — `SOUL.md`, the `skills/` tree, a whole-file `mcp.json`, AND the operating `AGENTS.md` tree all share it. The harness writes runtime state to `<assistant_root>/.local-memory/`. |
-| `assistant_root` | mitos-agent | Where Mitos Agent's operating context tree (the `agents-md` output) lands. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
 
 #### Workstation vs Agentic: two claude-code deploy modes
@@ -302,7 +301,7 @@ Anything you don't override falls through to the public core defaults.
 
 ## What is *not* in this repo
 
-The overlay repo is intentionally narrow — three things stay out of it:
+The overlay repo is intentionally narrow — two things stay out of it:
 
 - **The public core.** `registry/identity/`, `registry/skills/`, … (the neutral defaults and the
   compiler) live in the **main Mitos repo**, which you update with a plain `git pull`. The overlay
@@ -311,7 +310,8 @@ The overlay repo is intentionally narrow — three things stay out of it:
   merged in at deploy time — **never** committed, never synced (invariant #6). Only
   `connections/env/*.env.example` *templates* are tracked, and those are in the public core, not
   here.
-- **The inbox.** Proposals captured by your tools land in `inbox/` (inside the overlay), which travels directly with your overlay repository.
+
+Proposals captured by your tools land in `registry/local/inbox/` (inside the overlay), which travels directly with your overlay repository so you can review them on any machine.
 
 So the worst case if this repo leaked is your overlay prose and machine layout — no keys, no tokens.
 
