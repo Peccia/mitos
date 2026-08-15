@@ -362,7 +362,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     """Repos to clone (and keep current) on machines that host a project tree, absent-only
     for the clone / fast-forward-only for the pull — never destructive.
 
-    Three lanes:
+    Two lanes:
     - assistant_root (mitos-agent machines): clone into
       <assistant_root>/Projects/<name>/<basename> — a SIBLING of the operating tree's
       project node (_emit_tree uses the project NAME for that folder), so the planning
@@ -370,12 +370,10 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     - agentic_context_root (agents-md + claude-code machines): clone into
       <agentic_context_root>/Projects/<slug>/<basename> — the reference context tree
       (_plan_graph_tree uses the SLUG for that folder).
-    - local_path (non-agents-md claude-code machines): clone into <local_path>/<basename>,
-      co-located with the project workspace.
 
     The deploy executor clones each only when its checkout is ABSENT, and fast-forwards an
     existing checkout (never resetting or deleting one — design rule #8). Machines that host
-    no project tree (no mitos-agent and no claude-code target) get nothing.
+    no project tree (no mitos-agent and no claude-code + agents-md reference tree) get nothing.
     """
     machine = reg.machines.get(machine_name) or {}
     targets = machine.get("targets", [])
@@ -405,7 +403,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
                 name = proj.get("name", slug)
                 out += _repo_specs(slug, proj, f"{aroot}/Projects/{name}")
 
-    if "claude-code" not in targets:
+    if "claude-code" not in targets or "agents-md" not in targets:
         return out
 
     # agentic_context_root lane (agents-md machines that also run claude-code)
@@ -414,22 +412,6 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
         root = str(root).rstrip("/")
         for slug, proj in sorted(reg.projects.items()):
             out += _repo_specs(slug, proj, f"{root}/Projects/{slug}")
-
-    # local_path lane (workstation machines without agents-md)
-    if "agents-md" not in targets:
-        reg_root = _reg_root_norm(reg)
-        for slug, proj in sorted(reg.projects.items()):
-            if slug in suppressed:
-                continue
-            if not _project_repos(proj):
-                continue
-            local = _local(reg, machine_name, proj)
-            if not local:
-                continue
-            local_norm = local.replace("\\", "/").rstrip("/")
-            if local_norm == reg_root:
-                continue  # guard: never clone into the Mitos repo itself
-            out += _repo_specs(slug, proj, local_norm)
 
     return out
 

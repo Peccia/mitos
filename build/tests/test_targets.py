@@ -386,9 +386,9 @@ def test_agentic_tree_no_effect_on_agentic_machine():
     assert f"{mount_root}/AGENTS.md" not in paths, \
         "agentic_tree must be a no-op on an agentic machine"
 
-def test_non_hermes_clone_uses_local_path():
-    """plan_clones returns local_path-based destinations on non-Hermes claude-code machines,
-    absent-only — never nesting into the Mitos repo root."""
+def test_workstation_produces_no_clones_and_context_root_produces_clones():
+    """Workstations (claude-code without agents-md) never auto-clone or pull checkouts.
+    agentic_context_root machines produce clones in the reference tree."""
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
@@ -399,24 +399,20 @@ def test_non_hermes_clone_uses_local_path():
     rig.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
 
     clones = planner.plan_clones(rig, "example-windows")
-    apoc_clone = next((c for c in clones if c.slug == "apoc"), None)
-    assert apoc_clone is not None, "apoc with repo + local_path must produce a CloneSpec"
-    assert apoc_clone.dest == "C:/Projects/apocalyptic_adventure/apoc"
-    assert apoc_clone.repo == "git@github.com:Peccia/apoc.git"
+    assert clones == [], "workstations must never auto-clone into local_path"
 
-    # agentic_context_root lane still works when both are present on the same machine
+    # agentic_context_root lane fires when agentic_context_root + agents-md are present
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
         rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
-    rig2.machines["example-windows"]["targets"] = ["claude-code"]
+    rig2.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     rig2.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
     clones2 = planner.plan_clones(rig2, "example-windows")
     dests = {c.dest for c in clones2 if c.slug == "apoc"}
-    # both lanes produce a dest for apoc: one under the context root, one under local_path
-    assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must still fire"
-    assert any("apocalyptic_adventure" in d for d in dests), "local_path lane must also fire"
+    assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must fire"
+    assert not any("apocalyptic_adventure" in d for d in dests), "local_path lane must not fire"
 
 def test_claude_app_target_stages_uploadable_zip():
     import copy
@@ -828,6 +824,10 @@ def test_plan_clones_lands_in_the_right_tree_per_machine():
     win = plan_clones(reg, "example-windows")
     wc = next(c for c in win if c.slug == "mitos")
     assert wc.dest.endswith("MitosAgent/Projects/mitos/mitos")   # project SLUG "mitos"
+    # workstation machine (claude-code only / no agents-md): workstation checkouts are
+    # never auto-cloned or pulled.
+    workstation = plan_clones(reg, "example-workstation")
+    assert workstation == [], "workstations must never auto-clone or pull checkouts"
 
 def test_clone_is_idempotent_and_nondestructive():
     from agentic import commands

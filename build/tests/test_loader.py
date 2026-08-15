@@ -1039,18 +1039,15 @@ def test_document_stores_helper_normalizes_str_list_none():
 
 # ── multi-repo clone planning ──────────────────────────────────────────────────────────────
 
-def test_plan_clones_multi_repo_local_path_lane():
+def test_plan_clones_multi_repo():
     import copy
     rig = copy.deepcopy(reg)
-    # Use example-windows (no agents-md, no agentic_context_root) — local_path lane
-    rig.machines["example-windows"]["targets"] = ["claude-code"]
-    rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    # Use example-linux (assistant_root lane)
     rig.projects["example-project"]["repo"] = [
         "https://github.com/you/frontend.git",
         "https://github.com/you/backend.git",
     ]
-    clones = planner.plan_clones(rig, "example-windows")
+    clones = planner.plan_clones(rig, "example-linux")
     ep_clones = [c for c in clones if c.slug == "example-project"]
     assert len(ep_clones) == 2
     dests = {c.dest for c in ep_clones}
@@ -1062,11 +1059,8 @@ def test_plan_clones_multi_repo_local_path_lane():
 def test_plan_clones_single_string_repo_still_works():
     import copy
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["claude-code"]
-    rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     rig.projects["example-project"]["repo"] = "https://github.com/you/myapp.git"
-    clones = planner.plan_clones(rig, "example-windows")
+    clones = planner.plan_clones(rig, "example-linux")
     ep_clones = [c for c in clones if c.slug == "example-project"]
     assert len(ep_clones) == 1
     assert "myapp" in ep_clones[0].dest
