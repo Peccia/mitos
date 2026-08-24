@@ -24,7 +24,7 @@ def test_idea_revision_targeting():
 def test_classify_create_for_absent_path():
     o = planner.plan_machine(reg, "example-linux")[0]
     st = classify_output(reg, "example-linux", o, {"machines": {}})
-    # ~/.hermes/... does not exist on this box → create
+    # ~/MitosAgent/... does not exist on this box → create
     assert st.state in ("create", "merge")
 
 def test_plain_document_is_clean_concatenation():
@@ -81,7 +81,7 @@ def test_split_live_sections_attributes_an_edit_after_a_generated_region():
 
 def test_strip_frontmatter():
     skill = next(iter(reg.skills.values()))
-    rendered = render.render_skill(skill, "hermes")
+    rendered = render.render_skill(skill, "mitos-agent")
     assert rendered.startswith("---")
     body = render.strip_frontmatter(rendered)
     assert not body.lstrip().startswith("---")
@@ -96,12 +96,12 @@ def test_rewrite_registry_body_preserves_frontmatter(tmp_path=None):
     tmp = Path(tempfile.mkdtemp())
     f = tmp / "registry" / "identity" / "x.md"
     f.parent.mkdir(parents=True)
-    f.write_text("---\naudience: [hermes]\n---\nold body line\n", encoding="utf-8")
+    f.write_text("---\naudience: [mitos-agent]\n---\nold body line\n", encoding="utf-8")
     stub = loader.Registry(root=tmp, partials={}, skills={}, servers={},
                            projects={}, targets={}, machines={})
     _rewrite_registry_body(stub, "identity/x.md", "new body line")
     out = f.read_text(encoding="utf-8")
-    assert "audience: [hermes]" in out          # frontmatter preserved
+    assert "audience: [mitos-agent]" in out          # frontmatter preserved
     assert "new body line" in out and "old body line" not in out
 
 def test_machine_guard_refuses_cross_os():
@@ -249,7 +249,7 @@ def test_adopt_round_trips_a_skill_edit():
     from agentic.commands import cmd_adopt, cmd_deploy, cmd_harvest
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    deployed = tmp / "home/.hermes/skills/productivity/gws/SKILL.md"
+    deployed = tmp / "home/MitosAgent/skills/productivity/gws/SKILL.md"
     deployed.write_text(deployed.read_text(encoding="utf-8")
                         + "\n## Learned in the field\nnew guidance\n",
                         encoding="utf-8", newline="\n")
@@ -265,7 +265,7 @@ def test_adopt_routes_multipartial_section_edit():
     from agentic.commands import cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/.hermes/SOUL.md"                     # 4 identity partials
+    soul = tmp / "home/MitosAgent/SOUL.md"                     # 4 identity partials
     text = soul.read_text(encoding="utf-8")
     assert "DO NOT EDIT" not in text and "begin:" not in text   # clean artifact
     # derive the edit anchor from the registry itself — identity prose is rewritten
@@ -335,7 +335,7 @@ def test_protect_drift_blocks_then_force_captures():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/.hermes/SOUL.md"                     # drift_policy: protect
+    soul = tmp / "home/MitosAgent/SOUL.md"                     # drift_policy: protect
     soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue edit\n",
                     encoding="utf-8", newline="\n")
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 1   # refused
@@ -416,7 +416,7 @@ def test_review_candidate_listing_and_staleness():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    deployed = tmp / "home/.hermes/skills/productivity/gws/SKILL.md"
+    deployed = tmp / "home/MitosAgent/skills/productivity/gws/SKILL.md"
     deployed.write_text(deployed.read_text(encoding="utf-8")
                         + "\n## Field note\nrefined by the curator\n",
                         encoding="utf-8", newline="\n")
@@ -517,7 +517,7 @@ def test_review_multisource_capture_and_accept():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/.hermes/SOUL.md"
+    soul = tmp / "home/MitosAgent/SOUL.md"
     live = soul.read_text(encoding="utf-8")
     anchor = treg.partials["identity/who-i-am.md"].body.splitlines()[0]
     soul.write_text(live.replace(anchor, anchor + " EDITED-VIA-CONSOLE", 1),
@@ -630,7 +630,7 @@ def test_review_reload_endpoint_rereads_disk_and_survives_a_broken_registry():
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text(
             "---\nname: late-skill\ndescription: added after startup\n"
-            "version: 0.1.0\ncategory: general\ntargets: [hermes]\n---\n\nBody.\n",
+            "version: 0.1.0\ncategory: general\ntargets: [mitos-agent]\n---\n\nBody.\n",
             encoding="utf-8")
         conn.request("GET", "/api/state")
         cached = _json.loads(conn.getresponse().read())
@@ -665,121 +665,14 @@ def test_deploy_refuses_example_template_but_allows_sandbox():
     # sandboxing it (--root) is allowed — the quick-start rehearsal path
     assert cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=root) == 0
 
-def test_yaml_merge_preserves_user_entries():
-    import tempfile
+# (removed) test_yaml_merge_preserves_user_entries — the mcp yaml_merge into Hermes's
+# config.yaml became a whole-file mcp.json (kind='json'); merge-preservation is still
+# covered for the json_merge lane by test_json_merge_preserves_user_entries.
 
-    import yaml as _yaml
-
-    from agentic.commands import _apply_yaml_merge
-    from agentic.io import safe_rel
-
-    # pull the real yaml_merge output the same way test_json_merge_preserves_user_entries
-    # does — on a rig that declares the connection, since the mcp block is gated on it
-    perm = next(o for o in planner.plan_machine(_connected_rig("example-linux"), "example-linux")
-                if o.kind == "yaml_merge")
-
-    root = Path(tempfile.mkdtemp(prefix="ae-yamlmerge-"))
-    tgt = root / safe_rel(perm.target_file)
-    tgt.parent.mkdir(parents=True)
-
-    live = {
-        "mcp_servers": {"old-server": {"url": "http://stale"}},
-        "user_custom_key": "must-survive",
-    }
-    tgt.write_text(_yaml.dump(live), encoding="utf-8")
-
-    assert _apply_yaml_merge(perm, root)
-
-    merged = _yaml.safe_load(tgt.read_text(encoding="utf-8"))
-    assert "gws" in merged["mcp_servers"]              # Mitos-owned key updated
-    assert "old-server" not in merged["mcp_servers"]   # stale entry replaced
-    assert merged.get("user_custom_key") == "must-survive"  # user key preserved
-
-    # absent target file returns False without raising
-    absent_root = Path(tempfile.mkdtemp(prefix="ae-yamlmerge-abs-"))
-    assert _apply_yaml_merge(perm, absent_root) is False
-
-def test_yaml_merge_leaf_path_preserves_siblings():
-    import tempfile
-
-    import yaml as _yaml
-
-    from agentic.commands import _apply_yaml_merge
-    from agentic.io import expand, safe_rel
-
-    rig = _connected_rig("example-linux")   # the mcp block below needs a wired connection
-    rig.machines["example-linux"]["hermes_settings"] = {"memory_enabled": True}
-    outs = planner.plan_machine(rig, "example-linux")
-    settings = next(o for o in outs if o.kind == "yaml_merge" and "terminal.cwd" in o.owned_keys)
-    # the mcp block is still the FIRST yaml_merge output (a `next(kind == "yaml_merge")`
-    # lookup elsewhere in the suite must keep finding it, not this one)
-    assert outs.index(next(o for o in outs if o.kind == "yaml_merge")) < outs.index(settings)
-
-    root = Path(tempfile.mkdtemp(prefix="ae-yamlmerge-leaf-"))
-    tgt = root / safe_rel(settings.target_file)
-    tgt.parent.mkdir(parents=True)
-
-    live = {
-        "terminal": {"cwd": "/home/paul/MyAssistant", "timeout": 180},
-        "memory": {"memory_enabled": False, "memory_char_limit": 2200},
-        "agent": {"max_turns": 150},
-    }
-    tgt.write_text(_yaml.dump(live), encoding="utf-8")
-
-    assert _apply_yaml_merge(settings, root)
-
-    merged = _yaml.safe_load(tgt.read_text(encoding="utf-8"))
-    assert merged["terminal"]["cwd"] == str(expand("~/MitosAgent"))  # updated + ~-expanded
-    assert merged["terminal"]["timeout"] == 180                            # sibling preserved
-    assert merged["memory"]["memory_enabled"] is True                      # updated
-    assert merged["memory"]["memory_char_limit"] == 2200                   # sibling preserved
-    assert merged["agent"]["max_turns"] == 150                             # untouched block preserved
-
-def test_yaml_merge_whole_key_settings_preserve_unrelated_top_level():
-    import copy
-    import tempfile
-
-    import yaml as _yaml
-
-    from agentic.commands import _apply_yaml_merge
-    from agentic.io import safe_rel
-
-    rig = copy.deepcopy(reg)
-    rig.machines["example-linux"]["hermes_settings"] = {
-        "disabled_toolsets": ["image_gen", "tts"],
-        "platform_toolsets_cli": ["file", "terminal"],
-        "session_reset_mode": "none",
-        "fallback_providers": ["OllamaWorkstation:gemma4:26b"],
-        "fallback_model": {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-        "custom_providers": [{"name": "OllamaWorkstation", "model": "gemma4:26b"}],
-    }
-    settings = next(o for o in planner.plan_machine(rig, "example-linux")
-                    if o.kind == "yaml_merge" and "agent.disabled_toolsets" in o.owned_keys)
-
-    root = Path(tempfile.mkdtemp(prefix="ae-yamlmerge-whole-"))
-    tgt = root / safe_rel(settings.target_file)
-    tgt.parent.mkdir(parents=True)
-
-    live = {
-        "agent": {"max_turns": 60, "verbose": False},           # max_turns not owned here
-        "platform_toolsets": {"cli": ["hermes-cli"], "discord": ["hermes-discord"]},
-        "toolsets": ["hermes-cli"],                              # unrelated top-level key
-        "fallback_providers": ["old-fallback"],
-        "custom_providers": [{"name": "old-provider"}],
-    }
-    tgt.write_text(_yaml.dump(live), encoding="utf-8")
-
-    assert _apply_yaml_merge(settings, root)
-
-    merged = _yaml.safe_load(tgt.read_text(encoding="utf-8"))
-    assert merged["agent"]["disabled_toolsets"] == ["image_gen", "tts"]   # leaf updated
-    assert merged["agent"]["max_turns"] == 60                              # untouched leaf preserved
-    assert merged["agent"]["verbose"] is False                             # untouched leaf preserved
-    assert merged["platform_toolsets"]["cli"] == ["file", "terminal"]      # leaf updated
-    assert merged["platform_toolsets"]["discord"] == ["hermes-discord"]    # sibling preserved
-    assert merged["toolsets"] == ["hermes-cli"]                            # unrelated key preserved
-    assert merged["fallback_providers"] == ["OllamaWorkstation:gemma4:26b"]  # whole key replaced
-    assert merged["custom_providers"] == [{"name": "OllamaWorkstation", "model": "gemma4:26b"}]
+# (removed) test_yaml_merge_leaf_path_preserves_siblings and
+# test_yaml_merge_whole_key_settings_preserve_unrelated_top_level — the Hermes
+# config.yaml settings/mcp yaml_merge lane retired with Hermes. Mitos Agent writes a
+# whole-file mcp.json (kind='json'); no target emits kind='yaml_merge' anymore.
 
 def test_cmd_diff_smoke():
     import contextlib
@@ -874,9 +767,9 @@ def test_cli_compile_and_mitos_entrypoints():
     orig_compile = compile_mod.commands.cmd_compile
     compile_mod.commands.cmd_compile = lambda reg, dist, target: (captured.update(t=target) or 0)
     try:
-        rc = compile_mod.main(["compile", "--target", "hermes"])
+        rc = compile_mod.main(["compile", "--target", "mitos-agent"])
         assert rc == 0
-        assert captured.get("t") == "hermes"
+        assert captured.get("t") == "mitos-agent"
     finally:
         compile_mod.commands.cmd_compile = orig_compile
 

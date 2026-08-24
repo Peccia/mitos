@@ -24,6 +24,34 @@ from .loader import (Registry, RegistryError, resolve_local_path, _repo_basename
 # assistant tree without forking targets/agents-md.yaml, which is not overlayable).
 _BRANCH_RE = re.compile(r"^context/([^/]+)/AGENTS\.md$")
 
+# The single assistant-harness target. Three predicates below all test it today, but they
+# ask genuinely different questions and must not be collapsed into one — see
+# docs/concepts/mitos-agent-platform.md §4.1. NOTE a FOURTH gate lives in _plan_claude_code
+# (`is_assistant_tree_machine = "agents-md" in targets`); it keys off `agents-md`, NOT this
+# target, decides graph-AGENTS.md vs CLAUDE.md-stub, and is deliberately kept separate.
+ASSISTANT_TARGET = "mitos-agent"
+
+
+def deploys_org_content(machine) -> bool:
+    """Question A — do org skills actually land on this machine? Gates the org-domain table
+    and every per-effort routing line. A machine can reach the tree without deploying org
+    skills, and must then render `orgDomain` as inert metadata rather than a routing line
+    pointing at a skill that was never deployed."""
+    return ASSISTANT_TARGET in machine.get("targets", [])
+
+
+def hosts_assistant_tree(machine) -> bool:
+    """Question B — does this machine already host the operating tree at its root, with a
+    SOUL.md carrying the persona? Nothing to do with orgs."""
+    return ASSISTANT_TARGET in machine.get("targets", [])
+
+
+def deploys_assistant_skills(reg, machine) -> bool:
+    """Question C — does this machine deploy the assistant's skill set? Needs the target
+    spec, not just a boolean."""
+    return bool(ASSISTANT_TARGET in machine.get("targets", [])
+                and (reg.targets.get(ASSISTANT_TARGET) or {}).get("skills"))
+
 
 @dataclass
 class Output:
@@ -64,8 +92,8 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
         spec = reg.targets[target]
         if target == "agents-md":
             outputs += _plan_agents_md(reg, machine_name, spec, paths)
-        elif target == "hermes":
-            outputs += _plan_hermes(reg, machine_name, spec, paths)
+        elif target == "mitos-agent":
+            outputs += _plan_mitos_agent(reg, machine_name, spec, paths)
         elif target == "claude-code":
             outputs += _plan_claude_code(reg, machine_name, spec, paths)
         elif target == "antigravity":
@@ -79,7 +107,7 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
     # Validate output path collisions (prevent two targets/rules from deploying to the
     # same file). Merge kinds (yaml_merge/json_merge) are exempt from the single-owner
     # rule — several merge blocks legitimately splice into the same tool-owned file
-    # (e.g. hermes's config.yaml carries both the mcp: and settings: merges) — but their
+    # (e.g. antigravity's config.json carries both a json output and a json_merge) — but their
     # owned_keys must not overlap (exactly, or as a dotted prefix of one another), or two
     # blocks would fight over the same leaf.
     def _dotted_overlap(a: str, b: str) -> bool:
@@ -294,6 +322,7 @@ class CloneSpec:
     slug: str
     repo: str          # git URL from the manifest
     dest: str          # POSIX checkout dir — under agentic_context_root or local_path
+    branch: str = ""   # branch to check out / fast-forward (repo_branches:); "" = default
 
 
 def _project_repos(proj: dict) -> list[str]:
@@ -318,59 +347,71 @@ def _project_repo_entries(proj: dict) -> list[tuple[str, str, str]]:
             for url in _project_repos(proj)]
 
 
+def _repo_branch(proj: dict, basename: str) -> str:
+    """The branch to check out for a repo, keyed by checkout basename (`repo_branches:`).
+    Empty string means the repo's default branch."""
+    return str((proj.get("repo_branches") or {}).get(basename, "")).strip()
+
+
 def _reg_root_norm(reg: Registry) -> str:
     """Normalised, slash-terminated registry root for guard comparisons."""
     return str(reg.root).replace("\\", "/").rstrip("/")
 
 
 def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
-    """Repos to clone on Claude Code environments, absent-only / non-destructive.
+    """Repos to clone (and keep current) on machines that host a project tree, absent-only
+    for the clone / fast-forward-only for the pull — never destructive.
 
     Two lanes:
-    - agentic_context_root (Hermes + claude-code machines): clone into
-      <agentic_context_root>/Projects/<slug>/<basename> — the separate context tree.
-    - local_path (non-Hermes claude-code machines, i.e. agents-md NOT in targets):
-      clone into <local_path>/<basename> — co-located with the project workspace.
+    - assistant_root (mitos-agent machines): clone into
+      <assistant_root>/Projects/<name>/<basename> — a SIBLING of the operating tree's
+      project node (_emit_tree uses the project NAME for that folder), so the planning
+      harness resolves a checkout structurally from the node's own directory.
+    - agentic_context_root (agents-md + claude-code machines): clone into
+      <agentic_context_root>/Projects/<slug>/<basename> — the reference context tree
+      (_plan_graph_tree uses the SLUG for that folder).
 
-    The deploy executor clones each only when its checkout is ABSENT — never pulling,
-    resetting, or deleting an existing tree (design rule #8). Planning-only machines
-    (no claude-code target) get nothing.
+    The deploy executor clones each only when its checkout is ABSENT, and fast-forwards an
+    existing checkout (never resetting or deleting one — design rule #8). Machines that host
+    no project tree (no mitos-agent and no claude-code + agents-md reference tree) get nothing.
     """
     machine = reg.machines.get(machine_name) or {}
     targets = machine.get("targets", [])
-    if "claude-code" not in targets:
-        return []
+    paths = machine.get("paths") or {}
+    suppressed = _suppressed_examples(reg)
+
+    def _repo_specs(slug: str, proj: dict, parent: str) -> list[CloneSpec]:
+        specs: list[CloneSpec] = []
+        for repo in _project_repos(proj):
+            bn = _repo_basename(repo)
+            specs.append(CloneSpec(slug=slug, repo=repo, dest=f"{parent}/{bn}",
+                                   branch=_repo_branch(proj, bn)))
+        return specs
 
     out: list[CloneSpec] = []
 
-    # agentic_context_root lane (Hermes machines that also run claude-code)
-    root = (machine.get("paths") or {}).get("agentic_context_root")
+    # assistant_root lane (mitos-agent operating tree — clones beside the project node,
+    # which _emit_tree names with the project NAME). Suppressed examples step aside, exactly
+    # as the operating tree itself does when real overlay projects exist.
+    if "mitos-agent" in targets:
+        aroot = paths.get("assistant_root")
+        if aroot:
+            aroot = str(aroot).rstrip("/")
+            for slug, proj in sorted(reg.projects.items()):
+                if slug in suppressed:
+                    continue
+                name = proj.get("name", slug)
+                out += _repo_specs(slug, proj, f"{aroot}/Projects/{name}")
+
+    if "claude-code" not in targets or "agents-md" not in targets:
+        return out
+
+    # agentic_context_root lane (agents-md machines that also run claude-code)
+    root = paths.get("agentic_context_root")
     if root:
         root = str(root).rstrip("/")
         for slug, proj in sorted(reg.projects.items()):
-            for repo in _project_repos(proj):
-                dest = f"{root}/Projects/{slug}/{_repo_basename(repo)}"
-                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
-
-    # local_path lane (workstation machines without agents-md)
-    if "agents-md" not in targets:
-        reg_root = _reg_root_norm(reg)
-        suppressed = _suppressed_examples(reg)
-        for slug, proj in sorted(reg.projects.items()):
-            if slug in suppressed:
-                continue
-            repos = _project_repos(proj)
-            if not repos:
-                continue
-            local = _local(reg, machine_name, proj)
-            if not local:
-                continue
-            local_norm = local.replace("\\", "/").rstrip("/")
-            if local_norm == reg_root:
-                continue  # guard: never clone into the Mitos repo itself
-            for repo in repos:
-                dest = f"{local_norm}/{_repo_basename(repo)}"
-                out.append(CloneSpec(slug=slug, repo=repo, dest=dest))
+            out += _repo_specs(slug, proj, f"{root}/Projects/{slug}")
 
     return out
 
@@ -412,10 +453,10 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
             content=content, drift_policy="generated", sources=[])
 
     # This tree fires on ANY claude-code machine that sets agentic_context_root, whether
-    # or not agents-md/hermes is also present (the gate above is claude-code + the path
-    # key alone — see the docstring). Org skills deploy only when `hermes` is literally
+    # or not agents-md/mitos-agent is also present (the gate above is claude-code + the path
+    # key alone — see the docstring). Org skills deploy only when `mitos-agent` is literally
     # a target, so the org routing line must key off that, not off reaching this tree.
-    org_routing = "hermes" in machine.get("targets", [])
+    org_routing = deploys_org_content(machine)
     outputs: list[Output] = [
         _generated(f"{root}/AGENTS.md",
                    graphmod.roster_markdown(list(active_graphs.values())))]
@@ -632,10 +673,10 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
     return None, ""
 
 
-# hermes and claude-app have no project-scoped surface (loader.PROJECT_SCOPE_CAPABLE_
+# mitos-agent and claude-app have no project-scoped surface (loader.PROJECT_SCOPE_CAPABLE_
 # TARGETS is the other two) — they IGNORE `scope: project` and always deploy globally.
 # Kept in sync with loader.KNOWN_TARGETS - loader.PROJECT_SCOPE_CAPABLE_TARGETS.
-SCOPE_IGNORING_SKILL_TARGETS = {"hermes", "claude-app"}
+SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent", "claude-app"}
 
 
 def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
@@ -742,7 +783,7 @@ def _local(reg: Registry, machine_name: str, proj: dict) -> str | None:
 
 def _gws(reg: Registry, machine_name: str) -> dict | None:
     """The gws server definition with its URL resolved for the consuming machine
-    (the server is hosted on the Hermes laptop; other machines reach it over LAN).
+    (the server is hosted on the assistant laptop; other machines reach it over LAN).
 
     None when this machine never declared the connection in its `document_store:` — a
     box with no Google Workspace must not get a gws server spliced into its harness
@@ -755,6 +796,26 @@ def _gws(reg: Registry, machine_name: str) -> dict | None:
     return server
 
 
+def _agent_servers(reg: Registry, machine_name: str) -> dict:
+    """Every MCP server this machine's assistant is wired to, keyed by server name — the
+    whole `mcp.json` Mitos Agent reads (design §3.1). Generalizes _gws from one hard-coded
+    server to the machine's full `document_store:` list, resolving each server's per-machine
+    URL the same way. `none`/unset yields {} (no mcp.json). A one-store machine yields
+    {"gws": <server>} — identical in effect to what _gws did for Hermes."""
+    machine = reg.machines[machine_name]
+    servers: dict = {}
+    for name in document_stores(machine.get("document_store")):
+        if name == "none":
+            continue
+        src = (reg.servers.get("servers") or {}).get(name)
+        if not src:
+            continue
+        server = dict(src)
+        server["url"] = (server.get("urls") or {}).get(machine_name, server["url"])
+        servers[name] = server
+    return servers
+
+
 # ── agents-md ────────────────────────────────────────────────────────────────
 def _plan_agentic_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
     """Project-mounted operating trees (agentic_tree: on a project manifest) — the
@@ -762,14 +823,14 @@ def _plan_agentic_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
     unconditionally from plan_machine (like _plan_graph_tree), deliberately independent
     of whether THIS machine lists agents-md as a target: agents-md is a context format a
     project opts into, not a harness a machine opts into, so one project's mount must not
-    require a machine-wide target-list edit (which would also flip is_hermes_machine for
-    every OTHER project's co-located AGENTS.md in _plan_claude_code).
+    require a machine-wide target-list edit (which would also flip is_assistant_tree_machine
+    for every OTHER project's co-located AGENTS.md in _plan_claude_code).
 
-    No-op on an agentic (hermes) machine — it already hosts this tree at its machine
+    No-op on an agentic (mitos-agent) machine — it already hosts this tree at its machine
     root; a project mount there would be a redundant second reconciliation surface over
     the exact same content."""
     machine = reg.machines[machine_name]
-    if "hermes" in machine.get("targets", []):
+    if hosts_assistant_tree(machine):
         return []
     spec = reg.targets.get("agents-md") or {}
     outputs: list[Output] = []
@@ -788,7 +849,7 @@ def _plan_agentic_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
     return outputs
 
 
-def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Output]:
+def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Output]:
     """Render one agents-md tree at `root` — a machine's tree-root path key, or a
     project's agentic_tree mount inside its own checkout. Mount-point-agnostic: the
     output (Navigation/Workflows/Skills, roster, dynamic branches, per-project doc
@@ -799,10 +860,10 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
     policy = tree.get("drift_policy", "protect")
     # This tree renders whenever agents-md is a target (the machine-wide assistant_root
     # mount) or a project opts into agentic_tree: (workstation mount, independent of
-    # agents-md) — neither requires `hermes`. Org skills deploy only when `hermes` is
-    # literally a target, so both the org-domain table and every per-effort routing line
+    # agents-md) — neither requires `mitos-agent`. Org skills deploy only when `mitos-agent`
+    # is literally a target, so both the org-domain table and every per-effort routing line
     # below must key off that, not off reaching this tree.
-    org_routing = "hermes" in machine.get("targets", [])
+    org_routing = deploys_org_content(machine)
 
     # Dynamic branches (the dynamic-branches design): any partial matching
     # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch — the
@@ -883,7 +944,7 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
             # Reserved section order: `## Skills`, then the connection section, then the
             # dynamic-branches roster (navigation appendix).
             gen_parts = []
-            sk_block = render.skills_block(hermes_selected_skills)
+            sk_block = render.skills_block(agent_selected_skills)
             if sk_block:
                 gen_parts.append(sk_block.rstrip("\n"))
             conn_block = render.connections_block(
@@ -953,6 +1014,12 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
     if ctx_key:
         from . import graph as graphmod
         suppressed = _suppressed_examples(reg)
+        # On a mitos-agent operating tree, plan_clones drops each repo checkout beside this
+        # project node (<assistant_root>/Projects/<name>/<basename>), so the generated
+        # `## Navigation` repo roster is real here — the harness resolves a checkout from the
+        # node's own directory. On an agentic_tree mount (a claude-code workstation, no
+        # mitos-agent target) the checkouts land beside the MOUNT, not inside it, so no roster.
+        clone_siblings = "mitos-agent" in machine.get("targets", [])
         for slug, proj in sorted(reg.projects.items()):
             if slug in suppressed:
                 continue
@@ -967,21 +1034,22 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
                 continue
             deploy_path = f"{root.rstrip('/')}/{rel_file}"
             pg = reg.graphs.get(slug)
-            if pg:
-                # prose header (protected) + lightweight titles index (generated);
-                # full per-document detail lives in the companion AGENTS_DETAILS.md.
-                prose_body = render.plain_document(sections).rstrip("\n")
-                # No generated `## Navigation` repo roster here, unlike the workstation
-                # project nodes: this tree's checkouts are never siblings of this file (a
-                # hermes machine excludes claude-code, so plan_clones yields nothing for
-                # it; an agentic_tree mount puts clones beside the MOUNT, not inside it).
+            prose_body = render.plain_document(sections).rstrip("\n")
+            # Lightweight titles index (generated); full per-document detail lives in the
+            # companion AGENTS_DETAILS.md. Empty when the project has no graph.
+            gen_body = _project_doc_block(
+                reg, proj, pg, graphmod.project_index_markdown, level=2,
+                emit_heading=_connection_emit(proj, prose_body),
+                org_routing=org_routing) if pg else ""
+            if clone_siblings and _project_repo_entries(proj):
+                # prose interleaved with the generated nav roster + doc index
+                regions = _project_node_regions(proj, src_rel, prose_body, gen_body)
+                outputs.append(_mixed_doc_output(
+                    "agents-md", deploy_path, regions, src_rel, policy))
+            elif pg:
                 outputs.append(_mixed_doc_output(
                     "agents-md", deploy_path,
-                    [(src_rel, prose_body),
-                     (render.GENERATED_SECTION, _project_doc_block(
-                         reg, proj, pg, graphmod.project_index_markdown, level=2,
-                         emit_heading=_connection_emit(proj, prose_body),
-                         org_routing=org_routing))],
+                    [(src_rel, prose_body), (render.GENERATED_SECTION, gen_body)],
                     src_rel, policy))
             else:
                 outputs.append(Output(
@@ -1008,41 +1076,41 @@ def _emit_tree(reg, machine_name, tree, root, hermes_selected_skills) -> list[Ou
 def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
-    # General-purpose skills selected for THIS machine's Hermes deployment (the same
-    # selection _plan_hermes uses) — feeds the operating root's generated Skills block.
-    # Empty on a machine with no hermes target: skill files never physically land there,
+    # General-purpose skills selected for THIS machine's Mitos Agent deployment (the same
+    # selection _plan_mitos_agent uses) — feeds the operating root's generated Skills block.
+    # Empty on a machine with no mitos-agent target: skill files never physically land there,
     # so listing them would be a claim the machine can't back up.
-    hermes_sk_spec = (reg.targets.get("hermes") or {}).get("skills") or {}
-    hermes_selected_skills = (
-        _selected_skills(reg, hermes_sk_spec, machine)
-        if "hermes" in machine.get("targets", []) and hermes_sk_spec else [])
-    # Org skills deploy only when `hermes` is literally a target — agents-md alone
+    agent_sk_spec = (reg.targets.get("mitos-agent") or {}).get("skills") or {}
+    agent_selected_skills = (
+        _selected_skills(reg, agent_sk_spec, machine)
+        if deploys_assistant_skills(reg, machine) else [])
+    # Org skills deploy only when `mitos-agent` is literally a target — agents-md alone
     # (this whole function's gate) is not sufficient. Threaded into the builder-context
     # branch below; _emit_tree computes its own copy for the tree branch above.
-    org_routing = "hermes" in machine.get("targets", [])
+    org_routing = deploys_org_content(machine)
     # tree: assistant — the machine mount (root_key resolves in this machine's paths).
     # Project mounts (agentic_tree: on a project manifest) are a SEPARATE, unconditional
     # call site (_plan_agentic_tree_mounts, below) — deliberately not gated on "agents-md"
     # being one of THIS machine's targets, since agents-md is a context format a project
     # opts into, not a harness a machine opts into. Keeping it here would tie a project's
     # own mount to a machine-wide target-list edit that also reshapes every OTHER
-    # project's co-located AGENTS.md on that machine (is_hermes_machine in
+    # project's co-located AGENTS.md on that machine (is_assistant_tree_machine in
     # _plan_claude_code) — a blast radius far wider than one project's own field.
     for tree_name, tree in (spec.get("trees") or {}).items():
         root_key = tree["root_key"]
         if root_key in paths:
-            outputs += _emit_tree(reg, machine_name, tree, paths[root_key], hermes_selected_skills)
+            outputs += _emit_tree(reg, machine_name, tree, paths[root_key], agent_selected_skills)
 
     # per-project root AGENTS.md (builder context)
     pa = spec.get("project_agents")
     if pa:
         reg_root = _reg_root_norm(reg)
-        # On a machine that also deploys hermes, SOUL.md (the system prompt) already
+        # On a machine that also deploys mitos-agent, SOUL.md (the system prompt) already
         # carries the identity partials — repeating them at the top of every project
         # AGENTS.md would tax context with prose the model has on every request. Drop
         # them here; agents-md-only machines (no SOUL.md) keep the full persona header.
         pa_sources = pa["sources"]
-        if "hermes" in machine.get("targets", []):
+        if hosts_assistant_tree(machine):
             pa_sources = [s for s in pa_sources if not str(s).startswith("identity/")]
         for slug, proj in reg.projects.items():
             local = _local(reg, machine_name, proj)
@@ -1064,7 +1132,7 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
             if pg and local_norm != reg_root:
                 # A builder-context project (e.g. Mitos self-hosting) still gets the same
                 # lightweight titles-index + companion AGENTS_DETAILS.md that every other
-                # project in this Hermes tree gets (the ctx_key branch above) — the bound
+                # project in this agents-md tree gets (the ctx_key branch above) — the bound
                 # document store's connection heading + document titles in AGENTS.md, full
                 # per-document detail on demand — so declaring `builder` instead of
                 # `assistant` context never costs it its knowledge-graph docs.
@@ -1116,18 +1184,18 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
     return outputs
 
 
-# ── hermes ───────────────────────────────────────────────────────────────────
-def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
+# ── mitos-agent ──────────────────────────────────────────────────────────────
+def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
-    home = paths.get("hermes_home")
+    home = paths.get("assistant_root")   # the single install root (SOUL/skills/mcp + the tree)
     # SOUL.md
     cf = spec["context_file"]
     if home:
-        sections = _sections(reg, cf["sources"], "hermes")
+        sections = _sections(reg, cf["sources"], "mitos-agent")
         deploy_path = f"{home.rstrip('/')}/{cf['filename']}"
         outputs.append(Output(
-            target="hermes", kind="text", deploy_path=deploy_path,
-            dist_rel=f"hermes/{safe_rel(deploy_path)}",
+            target="mitos-agent", kind="text", deploy_path=deploy_path,
+            dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
             content=render.plain_document(sections),
             drift_policy=cf.get("drift_policy", "protect"), sources=cf["sources"],
             section_bodies=_multi(sections),
@@ -1143,46 +1211,26 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
             resources = render.compose_skill_resources(reg, skill)
             deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
-                target="hermes", kind="text", deploy_path=deploy_path,
-                dist_rel=f"hermes/{safe_rel(deploy_path)}",
-                content=render.render_skill(skill, "hermes", body=body),
+                target="mitos-agent", kind="text", deploy_path=deploy_path,
+                dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
+                content=render.render_skill(skill, "mitos-agent", body=body),
                 drift_policy=policy, sources=[skill.rel],
             ))
-            outputs += _skill_resource_outputs(skill, resources, "hermes", base_dir, policy)
-    # mcp merge
+            outputs += _skill_resource_outputs(skill, resources, "mitos-agent", base_dir, policy)
+    # mcp.json — a WHOLE file Mitos owns (invariant #7 does not apply to this lane), carrying
+    # every wired store keyed by server name so §5.4's resolve(id, store) can pick the right
+    # server for a multi-store project. No surgical merge, no owned_keys.
     mcp = spec["mcp"]
-    cfg = paths.get(mcp["file_key"]) or paths.get("hermes_config")
-    gws = _gws(reg, machine_name)
-    if cfg and gws:
-        block = {"mcp_servers": render.hermes_mcp_block(gws, mcp["server_alias"])}
+    servers = _agent_servers(reg, machine_name)
+    if home and servers:
+        deploy_path = f"{home.rstrip('/')}/{mcp['filename']}"
         outputs.append(Output(
-            target="hermes", kind="yaml_merge", deploy_path=cfg,
-            dist_rel=f"hermes/{safe_rel(cfg)}.mcp_servers.yaml",
-            content=yaml.safe_dump(block, sort_keys=False, allow_unicode=True),
+            target="mitos-agent", kind="json", deploy_path=deploy_path,
+            dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
+            content=_json(render.mitos_agent_mcp_config(servers)),
             drift_policy=mcp.get("drift_policy", "protect"), lane="connections",
-            sources=["connections/servers.yaml"], owned_keys=mcp["owned_keys"],
-            target_file=cfg,
+            sources=["connections/servers.yaml"],
         ))
-    # settings merge — leaf-path ownership of a few machine-declared runtime knobs.
-    # Unlike the mcp merge above (whole-key ownership of mcp_servers), this owns
-    # individual leaf paths inside otherwise Hermes/user-owned blocks (terminal.*,
-    # memory.*, ...), so sibling settings (terminal.timeout, agent.max_turns, ...)
-    # are left untouched. Declared after the mcp block so a `next(kind == yaml_merge)`
-    # lookup still finds the mcp block first.
-    st = spec.get("settings")
-    if st:
-        cfg = paths.get(st["file_key"]) or paths.get("hermes_config")
-        machine = reg.machines[machine_name]
-        block = render.hermes_settings_block(paths, machine.get("hermes_settings") or {})
-        if cfg and block:
-            outputs.append(Output(
-                target="hermes", kind="yaml_merge", deploy_path=cfg,
-                dist_rel=f"hermes/{safe_rel(cfg)}.settings.yaml",
-                content=yaml.safe_dump(block, sort_keys=False, allow_unicode=True),
-                drift_policy=st.get("drift_policy", "protect"), lane="connections",
-                sources=[f"machines/{machine_name}.yaml"], owned_keys=st["owned_keys"],
-                target_file=cfg,
-            ))
     return outputs
 
 
@@ -1190,11 +1238,11 @@ def _plan_hermes(reg, machine_name, spec, paths) -> list[Output]:
 def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
-    is_hermes_machine = "agents-md" in machine.get("targets", [])
+    is_assistant_tree_machine = "agents-md" in machine.get("targets", [])
     cf = spec["context_file"]
     stub_map = cf.get("stub_import") or {}
     reg_root = _reg_root_norm(reg)
-    suppressed = _suppressed_examples(reg) if not is_hermes_machine else set()
+    suppressed = _suppressed_examples(reg) if not is_assistant_tree_machine else set()
 
     for slug, proj in reg.projects.items():
         local = _local(reg, machine_name, proj)
@@ -1203,13 +1251,13 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
         local = local.rstrip("/")
         local_norm = local.replace("\\", "/").rstrip("/")
 
-        pg = reg.graphs.get(slug) if not is_hermes_machine and slug not in suppressed else None
+        pg = reg.graphs.get(slug) if not is_assistant_tree_machine and slug not in suppressed else None
 
         if pg and local_norm != reg_root:
-            # Non-Hermes workstation + project has a knowledge graph: emit a self-contained
+            # Non-agents-md workstation + project has a knowledge graph: emit a self-contained
             # AGENTS.md (full doc context + prose header) and a stub CLAUDE.md → @AGENTS.md.
             # The prose is resolved under the agents-md audience so that shared context
-            # partials (audience: [hermes, agents-md]) are visible without requiring a
+            # partials (audience: [mitos-agent, agents-md]) are visible without requiring a
             # separate claude-code audience declaration on each partial.
             from . import graph as graphmod
             prose_src, prose = _project_prose(reg, proj, "agents-md")
@@ -1217,7 +1265,7 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
                 reg, proj, pg, graphmod.project_full_markdown,
                 level=2 if prose_src else 1,
                 emit_heading=_connection_emit(proj, prose),
-                # Org skills target hermes only (never claude-code) — a non-hermes
+                # Org skills target mitos-agent only (never claude-code) — a non-mitos-agent
                 # workstation checkout must not tell the agent to load one that was
                 # never deployed here.
                 org_routing=False)
@@ -1249,12 +1297,12 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
                 drift_policy=cf.get("drift_policy", "protect"), sources=[],
             ))
         else:
-            # Hermes machines, no-graph projects, or suppressed examples: emit CLAUDE.md
+            # agents-md machines, no-graph projects, or suppressed examples: emit CLAUDE.md
             # only (existing behaviour — stub_map or inlined repo context or skip).
             deploy_path = f"{local}/{cf['filename']}"
             section_bodies: list = []
             ctx = proj.get("context") or {}
-            if slug in stub_map and is_hermes_machine:
+            if slug in stub_map and is_assistant_tree_machine:
                 # the stub @AGENTS.md is valid only because the agents-md target deploys
                 # that AGENTS.md at this same root on this machine.
                 content, sources = render.stub_document(stub_map[slug]), []
@@ -1369,7 +1417,8 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             drift_policy=mc.get("drift_policy", "protect"), lane="connections",
             sources=["connections/servers.yaml"],
         ))
-        # config.json is the TOOL's file — surgical merge, like Hermes config.yaml.
+        # config.json is the TOOL's file — surgical merge (invariant #7): a third party's
+        # config file, unlike Mitos Agent's own whole-file mcp.json.
         # The compiler owns only its alias's mcp(...) entries inside the allow list;
         perm = spec["permissions"]
         deploy_path = f"{cfg_dir.rstrip('/')}/{perm['filename']}"

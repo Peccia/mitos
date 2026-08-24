@@ -47,15 +47,15 @@ skill; when no tagged effort matches, it classifies the request itself
 → `org-marketing`):
 
 > [!NOTE]
-> Orgs are a **hermes-machine feature specifically** — not an `agents-md` feature. The
-> three org skills declare `targets: [hermes]` only, so they deploy exclusively on a
-> machine whose `targets:` literally include `hermes`. `agents-md` alone (a plain
+> Orgs are a **mitos-agent-machine feature specifically** — not an `agents-md` feature. The
+> three org skills declare `targets: [mitos-agent]` only, so they deploy exclusively on a
+> machine whose `targets:` literally include `mitos-agent`. `agents-md` alone (a plain
 > claude-code/antigravity workstation using `agentic_context_root` or a project's
 > `agentic_tree:` mount — see [`README.md`](../README.md#core-concepts)) never gets the
 > org-domain table, never gets a per-effort routing line, and never gets the org skill
 > files, even for an effort tagged `orgDomain`. Tagging an effort doesn't force org
 > content into a workstation's context; it only takes effect once that project's tree
-> renders on an actual hermes machine.
+> renders on an actual mitos-agent machine.
 
 | Domain | Skill | Primary chain |
 |---|---|---|
@@ -165,7 +165,7 @@ When extending Mitos with a new organization archetype:
    Point to the domain skill for all deeper detail. Routing tables, the project roster,
    and the org-domain table live in the deployed `AGENTS.md` tree, never here.
 
-3. **Standard frontmatter**: `audience: [hermes]`.
+3. **Standard frontmatter**: `audience: [mitos-agent]`.
 
 4. **Never drop the Session Protocol** — copy it verbatim from a shipped template (or
    `registry/identity/session-protocol.md`). It carries the `{{project_root}}` and
@@ -195,7 +195,7 @@ When extending Mitos with a new organization archetype:
 
 1. Create `registry/templates/org/<template-slug>/` with `session-protocol.md`.
 2. If the template introduces a new domain, add `registry/skills/org-<domain>/SKILL.md` with
-   the full playbook, `targets: [hermes]`, `category: productivity`.
+   the full playbook, `targets: [mitos-agent]`, `category: productivity`.
 3. Run `python build/compile.py compile` to validate frontmatter.
 4. Add a template and domain section to this document following the pattern above.
 5. Submit a Pull Request. Keep content generic; no personal or company data.

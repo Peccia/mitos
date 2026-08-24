@@ -14,7 +14,7 @@
 # prompts.
 #
 # Tool surface: regenerated FROM connections/servers.yaml (canonical core tier), which
-# normalizes Antigravity to the same surface as Hermes (Gmail read-only, no draft —
+# normalizes Antigravity to the same surface as Mitos Agent (Gmail read-only, no draft —
 # matching the `gws` skill's documented boundaries). Expand servers.yaml if a department
 # workflow genuinely needs more; do not hand-edit the generated allowlist.
 
@@ -31,7 +31,7 @@ mcp_config:
   drift_policy: protect
 
 # config.json is the TOOL's own file — deploy performs a SURGICAL JSON MERGE (like the
-# Hermes config.yaml mcp_servers merge): inside globalPermissionGrants.allow, only the
+# Mitos Agent config.yaml mcp_servers merge): inside globalPermissionGrants.allow, only the
 # compiler's own `mcp(<alias>/...)` entries are owned and replaced,
 # command(...) grants, and any other keys are never touched.
 #

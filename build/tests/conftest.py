@@ -4,6 +4,7 @@ pytest auto-imports this file, making all helpers available to every test_*.py f
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -14,15 +15,26 @@ from agentic import loader, planner, render  # noqa: E402
 from agentic import commands
 from agentic.commands import classify_output  # noqa: E402
 
-# Globally mock _git_clone for all tests to prevent real network calls and clone operations.
-# Individual tests can still override this temporarily by monkeypatching commands._git_clone.
-def _test_safe_git_clone(repo: str, dest: Path) -> tuple[int, str]:
+# Globally mock _git_clone/_git_pull for all tests to prevent real network calls and clone
+# operations. Individual tests can still override these by monkeypatching commands._git_clone
+# / commands._git_pull.
+def _test_safe_git_clone(repo: str, dest: Path, branch: str = "") -> tuple[int, str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     (dest / ".git").mkdir(parents=True, exist_ok=True)
     (dest / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
     return 0, ""
 
+def _test_safe_git_pull(dest: Path, branch: str = "") -> tuple[str, str]:
+    # Existing checkouts are left untouched in tests — report a clean no-op skip so the
+    # non-destructive contract holds without touching a real git tree.
+    return "skipped", "test stub — checkout left untouched"
+
+# Preserve the real implementations so unit tests can exercise them directly (driving the
+# lower-level `commands._git` with a stub) even though the deploy path uses the safe stubs.
+commands._real_git_clone = commands._git_clone
+commands._real_git_pull = commands._git_pull
 commands._git_clone = _test_safe_git_clone
+commands._git_pull = _test_safe_git_pull
 
 reg = loader.load(REPO_ROOT, ignore_local=True)
 
@@ -87,6 +99,52 @@ class _MonkeyPatch:
         for fn in reversed(self._undo):
             fn()
         self._undo.clear()
+
+
+class _NonInteractiveStdin:
+    """A stand-in for `sys.stdin` that is not a terminal and cannot be read — the same
+    contract pytest's own capture gives a test by default.
+
+    It exists because interactive code paths branch on `sys.stdin.isatty()`
+    (`mitos._pick_folder` no-ops when stdin isn't a terminal) or read it outright
+    (`mitos._ask`). Left to the ambient stdin, such a test passes in CI and under captured
+    pytest, then fails the moment anyone runs it from a real terminal — the outcome depends
+    on the shell, not the code. Reads raise rather than returning "" so a test that reaches
+    a prompt it did not intend fails loudly instead of silently taking the blank-input
+    branch."""
+
+    def isatty(self) -> bool:
+        return False
+
+    def _unreadable(self, *_a, **_kw):
+        raise OSError("stdin is not readable in tests — a prompt was reached unexpectedly")
+
+    read = readline = readlines = _unreadable
+
+    def __iter__(self):
+        return iter(())
+
+    def fileno(self) -> int:
+        raise OSError("no fileno for the test stdin stand-in")
+
+    def close(self) -> None:
+        pass
+
+
+@contextlib.contextmanager
+def noninteractive_stdin():
+    """Run a block with `sys.stdin` guaranteed non-interactive and unreadable.
+
+    Used two ways: the stdlib runner wraps the WHOLE suite in it so it matches pytest's
+    default capture (see test_compiler.main), and a test driving an interactive entrypoint
+    uses it directly so it states the interactivity it expects instead of inheriting the
+    shell's — which keeps it correct under `pytest -s` too."""
+    original = sys.stdin
+    sys.stdin = _NonInteractiveStdin()
+    try:
+        yield
+    finally:
+        sys.stdin = original
 
 
 def make_fixture(name: str):
@@ -165,14 +223,12 @@ def _temp_registry():
     conn.write_text(conn.read_text(encoding="utf-8").replace(
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
-        "name": "rig", "os": _local_os(), "targets": ["hermes", "agents-md"],
+        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "agents-md"],
         # rig is the fully-wired rig: it hosts gws AND declares the connection, so
-        # connection-gated output (MCP merge, the `requires_server: gws` skills) is
+        # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
         "document_store": "gws",
-        "paths": {"hermes_home": f"{home}/.hermes",
-                  "hermes_config": f"{home}/.hermes/config.yaml",
-                  "assistant_root": f"{home}/MitosAgent",
+        "paths": {"assistant_root": f"{home}/MitosAgent",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
     (tmp / "machines" / "rig.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
@@ -188,7 +244,7 @@ def _plant_candidate(tmp, cid, meta, payload_name, payload_text):
 
 def _skill_meta(rp="skills/gws/SKILL.md"):
     return {"registry_path": rp, "kind": "drift",
-            "source": {"machine": "rig", "tool": "hermes"}, "base_hash": "",
+            "source": {"machine": "rig", "tool": "mitos-agent"}, "base_hash": "",
             "deploy_path": "", "sources": [rp], "captured_at": "2026-06-12T00:00:00Z",
             "note": "test candidate"}
 

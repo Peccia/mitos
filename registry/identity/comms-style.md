@@ -1,5 +1,5 @@
 ---
-audience: [hermes, claude-code, antigravity, agents-md]
+audience: [mitos-agent, claude-code, antigravity, agents-md]
 ---
 ## Communication style
 
@@ -12,4 +12,4 @@ audience: [hermes, claude-code, antigravity, agents-md]
 
 ### Memory & Persistence
 
-- Use semantic search on past conversations, and any connected document store, before answering questions about prior work
+- Use semantic search on past conversations before answering questions about prior work

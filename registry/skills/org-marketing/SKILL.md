@@ -5,7 +5,7 @@ version: 1.0.0
 author: Mitos
 license: MIT
 platforms: [linux, macos, windows]
-targets: [hermes]
+targets: [mitos-agent]
 category: productivity
 org_domain: marketing
 hermes:

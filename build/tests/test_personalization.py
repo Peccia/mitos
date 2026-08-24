@@ -160,21 +160,21 @@ def test_expand_project_root_literal_without_machine_paths():
     assert render.expand_placeholders(r, "cd {{project_root}}") == "cd {{project_root}}"
     assert render.expand_placeholders(r, "cd {{project_root}}", {}) == "cd {{project_root}}"
 
-def test_expand_skills_root_from_hermes_home():
+def test_expand_skills_root_from_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
     assert render.expand_placeholders(
-        r, "ls {{skills_root}}", {"hermes_home": "~/.hermes/"}) == "ls ~/.hermes/skills"
-    # no hermes_home on this machine → literal
+        r, "ls {{skills_root}}", {"assistant_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
+    # no assistant_root on this machine → literal
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"projects_root": "C:/Projects"}) == "ls {{skills_root}}"
 
 def test_reverse_expand_skills_root_matches_any_machines_value():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    r = _FakeReg(user, {"linux-box": {"paths": {"hermes_home": "~/.hermes"}}})
+    r = _FakeReg(user, {"linux-box": {"paths": {"assistant_root": "~/MitosAgent"}}})
     original = "Skills live at {{skills_root}}."
     assert render.reverse_expand_placeholders(
-        r, original, "Skills live at ~/.hermes/skills.") == original
+        r, original, "Skills live at ~/MitosAgent/skills.") == original
 
 def test_reverse_expand_project_root_matches_any_machines_root():
     # adopt/review don't always know which machine expanded the live text — every
@@ -362,7 +362,7 @@ def test_adopt_reverses_expanded_placeholder_in_who_i_am():
     from agentic.commands import cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/.hermes/SOUL.md"
+    soul = tmp / "home/MitosAgent/SOUL.md"
     text = soul.read_text(encoding="utf-8")
     expanded_line = ("You are User's personal assistant, focusing on truth, clarity, and "
                      "usefulness rather than on mere politeness.")
@@ -390,7 +390,7 @@ def test_review_console_candidate_not_stale_from_expansion_alone():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/.hermes/SOUL.md"
+    soul = tmp / "home/MitosAgent/SOUL.md"
     live = soul.read_text(encoding="utf-8")
     anchor = treg.partials["identity/who-i-am.md"].body.splitlines()[0]
     soul.write_text(live.replace(anchor, anchor + " EDITED-VIA-CONSOLE", 1),

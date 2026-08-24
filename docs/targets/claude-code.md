@@ -26,7 +26,7 @@ A skill's `scope:` frontmatter key picks which one Mitos deploys to (mirrors the
   `skills:` list (`registry/projects/<slug>.yaml`), at `<project-root>/.claude/skills/`. Never
   appears in the personal directory.
 
-`hermes` and `claude-app` have no project-scoped skill surface at all — they ignore `scope`
+`mitos-agent` and `claude-app` have no project-scoped skill surface at all — they ignore `scope`
 entirely and always deploy globally, regardless of the value set.
 
 Set/edit `scope` via the Operator Console's Skills & Orgs tab (each skill card's **Scope**

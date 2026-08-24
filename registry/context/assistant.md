@@ -1,5 +1,5 @@
 ---
-audience: [hermes, agents-md]
+audience: [mitos-agent, agents-md]
 ---
 # Personal Assistant
 

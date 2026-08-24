@@ -9,7 +9,7 @@ not a style preference. It is enforced at plan time by `lint_node_markdown`
 file and problem named.
 
 This taxonomy is identical regardless of where the tree is *mounted*: a machine-wide
-operating mount at `assistant_root` (the Hermes combo) and a project-wide operating mount
+operating mount at `assistant_root` (the Mitos Agent combo) and a project-wide operating mount
 at a project's `agentic_tree:` render through the same `_emit_tree` and are linted the
 same way — only the deploy root differs. It does not apply to a reference mount
 (`agentic_context_root`/agentic-graph): that lane's files are `drift_policy: generated`
@@ -83,10 +83,10 @@ back. A hand-edit to the roster is silently regenerated; a hand-edit to the pros
 is still ordinary, adoptable drift.
 
 Only project nodes whose checkouts are actually siblings of the file get a roster — the
-workstation `local_path` node and the `agentic_context_root` reference mount. The Hermes
-operating tree never does: a hermes machine excludes `claude-code`, so `plan_clones` yields
-nothing there, and an `agentic_tree:` mount puts clones beside the mount rather than inside
-it.
+workstation `local_path` node, the `agentic_context_root` reference mount, and the `mitos-agent`
+operating tree (which clones repos into `<assistant_root>/Projects/<name>/<basename>/` as
+siblings of the project node). An `agentic_tree:` mount puts clones beside the mount rather
+than inside it.
 
 ## Skills
 

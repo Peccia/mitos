@@ -5,7 +5,7 @@ version: 2.3.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [hermes]
+targets: [mitos-agent]
 category: devops
 hermes:
   tags: [update, devops, registry, compile, deploy]

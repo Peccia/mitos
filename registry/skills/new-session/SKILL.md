@@ -5,7 +5,7 @@ version: 3.0.1
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [hermes]
+targets: [mitos-agent]
 category: productivity
 hermes:
   tags: [new, session, project, memory, routing]

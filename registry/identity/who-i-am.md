@@ -1,5 +1,5 @@
 ---
-audience: [hermes, claude-code, antigravity, agents-md]
+audience: [mitos-agent, agents-md]
 ---
 ## About Me
 

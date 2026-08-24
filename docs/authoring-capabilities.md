@@ -15,8 +15,8 @@ registry/local/skills/<name>/
 ├── SKILL.md                 ← Required: metadata + markdown instructions
 ├── scripts/                 ← Optional: helper scripts (Python, Bash, etc.)
 ├── examples/                ← Optional: reference inputs/outputs
-├── references/              ← Optional: additional documentation (Hermes convention)
-├── templates/               ← Optional: fill-in templates (Hermes convention)
+├── references/              ← Optional: additional documentation (Mitos Agent convention)
+├── templates/               ← Optional: fill-in templates (Mitos Agent convention)
 └── resources/               ← Optional: other supporting assets (Antigravity convention)
 ```
 
@@ -33,7 +33,7 @@ name: changelog              # Unique logical name of the skill
 description: "Drafts a release changelog from git logs" # Shown in rosters/commands
 targets:                     # List of compatible tools
   - claude-code
-  - hermes
+  - mitos-agent
 category: development        # Optional: organizational category (default: general)
 scope: global                # Optional: global (default) | project — see below
 requires_server: gws         # Optional: only deploy where this connection exists — see below
@@ -50,11 +50,11 @@ directory available everywhere, and a per-project directory bound through the pr
 manifest. The `scope:` frontmatter key picks which one:
 
 - **`scope: global`** (default, or omitted): deploys to every shared directory the skill's
-  `targets:` declare — `hermes`'s skills dir, `claude-app`'s account-wide zip staging,
+  `targets:` declare — `mitos-agent`'s skills dir, `claude-app`'s account-wide zip staging,
   antigravity's `antigravity_skills` (`~/.gemini/config/skills/`), and claude-code's personal
   `claude_code_skills` (`~/.claude/skills/`). No project binding needed.
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
-  manifest's `skills:` key, never the shared directory. `hermes` and `claude-app` have no
+  manifest's `skills:` key, never the shared directory. `mitos-agent` and `claude-app` have no
   project-scoped surface at all, so they ignore `scope` and stay global regardless.
 
 ### Connection-bound skills: `requires_server:`
