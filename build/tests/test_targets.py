@@ -19,10 +19,10 @@ def _lint(path, content):
 
 
 def test_lint_node_markdown_accepts_conformant_node():
-    body = ("# Ascenzio Predictions\n\nA project.\n\n"
+    body = ("# Sample Analytics\n\nA project.\n\n"
             "## Navigation\n- repos\n\n## Tools\n- gws\n\n## Skills\n- a skill\n\n"
             "## Google Workspace suite (`gws`)\n\n- paths\n\n### Launch\n- Doc\n")
-    assert _lint("x/Projects/Ascenzio/AGENTS.md", body) == []
+    assert _lint("x/Projects/SampleAnalytics/AGENTS.md", body) == []
 
 
 def test_lint_node_markdown_flags_double_h1():

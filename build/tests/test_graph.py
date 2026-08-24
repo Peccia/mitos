@@ -152,7 +152,7 @@ def test_project_full_markdown_inlines_docs_and_caps():
     from agentic import graph
     docs = [_doc(f"id{i:03}", f"Doc {i:03}", f"desc {i}", f"2026-01-{(i % 28) + 1:02}")
             for i in range(graph.INDEX_LIMIT + 5)]
-    pg = graph.ProjectGraph(slug="apdict", name="Ascenzio", description="d", documents=docs)
+    pg = graph.ProjectGraph(slug="sampledict", name="Sample Analytics", description="d", documents=docs)
     full = graph.project_full_markdown(pg)
     # concise one-line entries: bare document ID inline, no URL (the MCP server resolves by ID)
     assert "`id" in full
@@ -551,26 +551,26 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     import copy
     from agentic.loader import Partial
     rig = copy.deepcopy(reg)
-    rig.projects["apdict"] = {
-        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"},
-        "context": {"assistant": "registry/context/projects/apdict.md"},
+    rig.projects["sampledict"] = {
+        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+        "local_path": {"example-windows": "sampledict"},
+        "context": {"assistant": "registry/context/projects/sampledict.md"},
         "document_store": "gws",
     }
-    rig.partials["context/projects/apdict.md"] = Partial(
-        rel="context/projects/apdict.md", audience=["agents-md"],
-        body="# Apdict\n\nApdict prose context"
+    rig.partials["context/projects/sampledict.md"] = Partial(
+        rel="context/projects/sampledict.md", audience=["agents-md"],
+        body="# Sampledict\n\nSampledict prose context"
     )
     from agentic.graph import ProjectGraph
-    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+    rig.graphs["sampledict"] = ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
     from agentic import graph as graphmod
-    rig.graphs["apdict"] = graphmod.upsert_document(
-        rig.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+    rig.graphs["sampledict"] = graphmod.upsert_document(
+        rig.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
 
     win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
            if o.target == "agentic-graph"}
     # real (local) graphs are present — example-project core graph steps aside
-    proj = next(o for p, o in win.items() if p.endswith("Projects/apdict/AGENTS.md"))
+    proj = next(o for p, o in win.items() if p.endswith("Projects/sampledict/AGENTS.md"))
     # one self-contained file: NO companion details file on the agentic-harness side
     assert not any(p.endswith("AGENTS_DETAILS.md") for p in win)
     assert not any(p.endswith("Projects/example-project/AGENTS.md") for p in win)
@@ -586,7 +586,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     # project's prose H1), not a second H1 or "<project> — documents"
     assert "## Google Workspace suite (`gws`)" in proj.content
     assert proj.content.count("\n# ") <= 1 and not proj.content.startswith("# Google")
-    assert "Ascenzio Predictions — Documents" not in proj.content
+    assert "Sample Predictions — Documents" not in proj.content
     # the roster stays wholly generated (no prose, non-adoptable)
     roster = next(o for p, o in win.items() if p.endswith("MitosAgent/AGENTS.md"))
     assert roster.drift_policy == "generated" and roster.sources == []
@@ -800,17 +800,17 @@ def test_graph_tree_deploys_only_on_claude_code_env():
     import copy
     from agentic.loader import Partial
     rig = copy.deepcopy(reg)
-    rig.projects["apdict"] = {
-        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"},
-        "context": {"assistant": "registry/context/projects/apdict.md"},
+    rig.projects["sampledict"] = {
+        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+        "local_path": {"example-windows": "sampledict"},
+        "context": {"assistant": "registry/context/projects/sampledict.md"},
     }
-    rig.partials["context/projects/apdict.md"] = Partial(
-        rel="context/projects/apdict.md", audience=["agents-md"],
-        body="# Apdict\n\nApdict prose context"
+    rig.partials["context/projects/sampledict.md"] = Partial(
+        rel="context/projects/sampledict.md", audience=["agents-md"],
+        body="# Sampledict\n\nSampledict prose context"
     )
     from agentic.graph import ProjectGraph
-    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+    rig.graphs["sampledict"] = ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
 
     # example-linux has no claude-code target → no Agentic Context tree
     linux = [o for o in planner.plan_machine(rig, "example-linux")
@@ -821,7 +821,7 @@ def test_graph_tree_deploys_only_on_claude_code_env():
            if o.target == "agentic-graph"}
     assert any(p.endswith("MitosAgent/AGENTS.md") for p in win)
     # local graphs present → local project entries, not core example-project
-    assert any(p.endswith("MitosAgent/Projects/apdict/AGENTS.md") for p in win)
+    assert any(p.endswith("MitosAgent/Projects/sampledict/AGENTS.md") for p in win)
     assert not any(p.endswith("MitosAgent/Projects/example-project/AGENTS.md") for p in win)
     for o in win.values():
         # roster is generated; per-project files are prose(protect) + generated block
@@ -836,30 +836,30 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel
     # inject a document into a local (active) graph so the per-project index renders a table row;
-    # apdict is a local graph so it is always in active_graphs regardless of overlay state
+    # sampledict is a local graph so it is always in active_graphs regardless of overlay state
     reg2 = copy.deepcopy(reg)
-    if "apdict" not in reg2.projects:
-        reg2.projects["apdict"] = {
-            "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-            "local_path": {"example-windows": "apdict"}, "context": {},
+    if "sampledict" not in reg2.projects:
+        reg2.projects["sampledict"] = {
+            "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+            "local_path": {"example-windows": "sampledict"}, "context": {},
         }
-    if "apdict" not in reg2.graphs:
-        reg2.graphs["apdict"] = graph.ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
-    reg2.graphs["apdict"] = graph.upsert_document(
-        reg2.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+    if "sampledict" not in reg2.graphs:
+        reg2.graphs["sampledict"] = graph.ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
+    reg2.graphs["sampledict"] = graph.upsert_document(
+        reg2.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-graph-"))
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    idx = root / safe_rel("C:/MitosAgent/Projects/apdict/AGENTS.md")
+    idx = root / safe_rel("C:/MitosAgent/Projects/sampledict/AGENTS.md")
     assert "Forecast UI Spec" in idx.read_text(encoding="utf-8")
     roster = root / safe_rel("C:/MitosAgent/AGENTS.md")
-    assert "Ascenzio Predictions" in roster.read_text(encoding="utf-8")
+    assert "Sample Predictions" in roster.read_text(encoding="utf-8")
 
     # edit the generated roster in place, then redeploy: it is silently regenerated
     # (non-adoptable) and nothing is captured to inbox/ (no partial to route back to)
     roster.write_text("hand edit\n", encoding="utf-8", newline="\n")
     before = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    assert "Ascenzio Predictions" in roster.read_text(encoding="utf-8")   # overwritten
+    assert "Sample Predictions" in roster.read_text(encoding="utf-8")   # overwritten
     after = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert before == after, "a generated file must not capture an inbox candidate"
 
