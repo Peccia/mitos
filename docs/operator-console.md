@@ -152,6 +152,10 @@ live in some watch.
 
 One structured field in this tab drives the org model — the **effort `Org domain` select**: it tags an effort (Work grouping) with the org domain that governs it — e.g. a `Steam Launch` effort tagged `marketing` inside an otherwise software-heavy project. The tag compiles into an org routing line under that effort's heading in the generated files, which is how a session knows to load `org-marketing` for that work and `org-software` for the rest. **Projects themselves are never bound to one org** — the manifest has no `org:` field; the association lives on the work.
 
+### ✅ Expected deliverables on efforts
+
+The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
+
 ---
 
 ## 🧩 The Skills & Orgs Tab: Skill Cards + Org Structure

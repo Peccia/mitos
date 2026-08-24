@@ -1657,6 +1657,9 @@ function renderRegistryRows(g) {
     if (effort.orgDomain) {
       nameSpan.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
     }
+    if ((effort.deliverables || []).length) {
+      nameSpan.append(el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", ")));
+    }
     head.append(nameSpan);
     if (status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
@@ -1674,7 +1677,8 @@ function renderRegistryRows(g) {
         openEditor = { where: "registry", lockId: true, kind: "effort",
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
                                goal: effort.goal || "",
-                               orgDomain: effort.orgDomain || "" } };
+                               orgDomain: effort.orgDomain || "",
+                               deliverables: (effort.deliverables || []).slice() } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -1961,6 +1965,24 @@ function effortEditorCard(g) {
   domSel.value = vals.orgDomain || "";
   domWrap.append(domSel); card.append(domWrap); inputs.orgDomain = domSel;
 
+  // Expected deliverables — the forward contract: the artifacts every implementation of this
+  // effort must yield. A checkbox group over the registry's controlled vocabulary (a free-text
+  // field could only produce values the server would reject). Optional; untagged efforts render
+  // no deliverables line and the plan falls through to its honest-empty filler.
+  const delivWrap = el("div", "graph-field");
+  delivWrap.append(el("label", "", "Expected deliverables"));
+  const delivGroup = el("div", "target-checks");
+  const delivChecked = new Set(vals.deliverables || []);
+  const delivBoxes = {};
+  for (const name of (STATE.known_deliverables || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = delivChecked.has(name);
+    delivBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    delivGroup.append(lbl);
+  }
+  delivWrap.append(delivGroup); card.append(delivWrap); inputs.deliverables = delivBoxes;
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -1970,7 +1992,9 @@ function effortEditorCard(g) {
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
                      goal: inputs.goal.value.trim(),
-                     orgDomain: inputs.orgDomain.value };
+                     orgDomain: inputs.orgDomain.value,
+                     deliverables: (STATE.known_deliverables || [])
+                       .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked) };
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
       toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
@@ -2043,7 +2067,8 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
   const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => ({
     id: x.id, name: x.name, description: x.description || "",
     goal: x.goal || "",
-    orgDomain: x.orgDomain || "" }));
+    orgDomain: x.orgDomain || "",
+    deliverables: x.deliverables || [] }));
   const effortRemovals = Object.keys(d.effortRemove);
   if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {
     toast("No changes to propose."); return;

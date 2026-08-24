@@ -614,12 +614,18 @@ def _validate(reg: Registry) -> None:
                 f"lane was retired (0.1.3 batch 1: skills already cover the reusable-"
                 f"behavior story, and Claude Code ships a built-in code-reviewer agent); "
                 f"remove 'agents:' from the manifest")
+    from . import graph as graphmod
     for slug, pg in reg.graphs.items():
         for e in pg.efforts:
             if e.org_domain and e.org_domain not in valid_orgs:
                 raise RegistryError(
                     f"graph {slug}: effort {e.id!r} has unknown org domain "
                     f"{e.org_domain!r}; valid: {', '.join(sorted(valid_orgs))}")
+            for d in e.deliverables:
+                if d not in graphmod.KNOWN_DELIVERABLES:
+                    raise RegistryError(
+                        f"graph {slug}: effort {e.id!r} declares unknown deliverable {d!r}; "
+                        f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")

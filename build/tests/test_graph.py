@@ -277,6 +277,79 @@ def test_graph_doc_type_round_trip_and_rendering():
     assert det_line == full_line, "claude-code and hermes doc lines must stay identical"
 
 
+def test_order_deliverables_canonical_order_dedup_and_unknown_last():
+    from agentic import graph
+    # vocabulary order regardless of input order, deduplicated
+    assert graph.order_deliverables(["tests", "documentation", "tests"]) == \
+        ("documentation", "tests")
+    # an unknown name sorts last (alphabetically), and ordering never raises
+    assert graph.order_deliverables(["zebra", "tests", "apple"]) == \
+        ("tests", "apple", "zebra")
+    assert graph.order_deliverables([]) == ()
+
+
+def test_graph_deliverables_round_trip_and_ordering():
+    """A repeated peccia:deliverable predicate loads into a canonical-ordered tuple regardless of
+    the JSON array's order on disk, and canonical bytes are deterministic across a reload."""
+    import json, tempfile
+    from pathlib import Path
+    from agentic import graph
+    SC = '{"@vocab":"https://schema.org/"}'
+    # authored with the deliverable array OUT of canonical order — the read path must canonicalize
+    raw_in = ('{"@context":%s,"@graph":['
+              '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
+              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+              '"name":"Effort One","description":"d",'
+              '"isPartOf":{"@id":"http://peccia.net/project/p"},'
+              '"http://peccia.net/deliverable":["tests","documentation"]}]}' % SC)
+    p = Path(tempfile.mktemp(suffix=".jsonld"))
+    p.write_text(raw_in, encoding="utf-8")
+    loaded = graph.load_project_graph(p)
+    # loaded back as a canonical-ordered tuple (vocabulary index, not disk order)
+    assert loaded.efforts[0].deliverables == ("documentation", "tests")
+
+    # canonical output is in vocabulary order and stable across a reload
+    canon = graph.canonical_jsonld(loaded)
+    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
+    assert node[graph.DELIVERABLE_PRED] == ["documentation", "tests"]
+    p.write_text(canon, encoding="utf-8")
+    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
+    p.unlink()
+
+
+def test_graph_no_deliverables_emits_no_key():
+    """An untagged effort emits NO deliverable key, so an existing graph round-trips byte-identically."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
+    raw = graph.canonical_jsonld(pg)
+    assert graph.DELIVERABLE_PRED not in raw
+    assert "deliverable" not in raw
+
+
+def test_graph_deliverables_line_renders_in_all_three_views_ungated():
+    """The forward-contract line renders in project_index/details/full — and is NOT suppressed by
+    org_routing=False (unlike the org line), because it names no skill to load."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
+                                is_part_of=proj_iri,
+                                deliverables=("documentation", "tests"))
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
+        efforts=[effort])
+    line = "_Expected deliverables: documentation, tests._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)
+    # the claude-code workstation surface suppresses the ORG line but must still show deliverables
+    full_no_org = graph.project_full_markdown(pg, org_routing=False)
+    assert line in full_no_org
+    assert "load the `org-" not in full_no_org      # org line IS suppressed there
+
+
 def test_graph_store_round_trip():
     """peccia:store is optional; present -> serialized/loaded; absent -> omitted (legacy =
     "the project's sole store"), so a pre-multi-store graph round-trips byte-for-byte."""

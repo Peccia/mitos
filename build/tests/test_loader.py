@@ -1099,6 +1099,39 @@ def test_effort_org_domain_not_declared_by_any_skill_is_rejected():
     except RegistryError as e:
         assert "not-a-real-domain" in str(e)
 
+def test_effort_unknown_deliverable_is_rejected():
+    """A deliverable outside graph.KNOWN_DELIVERABLES fails _validate loudly, naming the value and
+    the valid set — the same loudness as the org-domain check directly above it."""
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import RegistryError, _validate
+    from agentic import graph
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("documentation", "not-a-deliverable"))] \
+        + list(pg.efforts[1:])
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown deliverable")
+    except RegistryError as e:
+        assert "not-a-deliverable" in str(e)
+        assert "documentation" in str(e)      # the valid set is named
+
+
+def test_effort_valid_deliverables_pass_validation():
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("documentation", "tests"))] \
+        + list(pg.efforts[1:])
+    _validate(rig)  # must not raise
+
+
 def test_manifest_org_field_is_rejected():
     """org: on a project manifest is a category error now — org domains live on graph
     efforts, so a leftover field fails validation with a pointer to the new home."""

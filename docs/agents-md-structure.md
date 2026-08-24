@@ -42,6 +42,16 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    collide with a reserved `##` prose section. A tagged effort's `###` heading carries the
    org-routing line that names the `org-<domain>` skill governing its work.
 
+   Under an effort's `###` heading the generated lines render in a fixed order: the
+   org-routing line, then the effort description, then the `**Goal:** …` intent line
+   (`graph._effort_goal_line`), then the `_Expected deliverables: …._` forward-contract line
+   (`graph._effort_deliverables_line`), then the effort's documents. The deliverables line
+   names the artifacts every implementation of the effort must yield (`documentation`,
+   `tests`, `changelog`, `deploy-book`, in canonical vocabulary order). Unlike the org-routing
+   line it is **never suppressed** on the claude-code workstation surface (`org_routing=False`):
+   it instructs nobody to load a skill, and that surface is exactly the harness that must
+   produce the deliverables.
+
 ## Local vs. connection: the split that keeps context lean
 
 `## Navigation` is **local only** (files, repos, routing); store folder paths live in the

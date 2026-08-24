@@ -1076,6 +1076,46 @@ def test_state_exposes_known_targets():
     assert result["known_targets"] == sorted(loadermod.KNOWN_TARGETS)
 
 
+def test_state_exposes_known_deliverables():
+    from agentic import graph
+    from agentic.review import state
+
+    result = state(reg)
+    assert result["known_deliverables"] == list(graph.KNOWN_DELIVERABLES)
+
+
+def test_propose_graph_change_rejects_unknown_deliverable():
+    """Propose-time validation gives a clean browser error before the candidate is written."""
+    from agentic.review import propose_graph_change
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-a", "name": "Effort A",
+                  "deliverables": ["documentation", "not-real"]}])
+    assert not out["ok"]
+    assert "not-real" in out["error"]
+
+
+def test_propose_graph_change_valid_deliverables_reach_the_candidate():
+    from agentic.review import decide, load_candidates, propose_graph_change
+    from agentic import graph
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-b", "name": "Effort B",
+                  "deliverables": ["tests", "documentation"]}])
+    assert out["ok"], out
+    assert decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    merged = graph.load_project_graph(tmp / "registry" / "graph" / f"{slug}.jsonld")
+    eff = next(e for e in merged.efforts if e.id == "eff-b")
+    # stored in canonical vocabulary order, not the order proposed
+    assert eff.deliverables == ("documentation", "tests")
+
+
 def test_prompt_index_frontmatter_whitelist_shape():
     """Skills/prompts carry a `frontmatter` dict scoped to the per-kind editable
     whitelist — never the full raw frontmatter (which may carry e.g. a skill's

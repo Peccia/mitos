@@ -770,6 +770,15 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
             # graph would fail loader validation and break every subsequent compile
             return {"ok": False, "error": f"unknown org domain {_dom!r}; valid: "
                                           f"{', '.join(sorted(_valid_domains))}"}
+        # Same reject-at-propose-time posture for deliverables: a clean error in the browser
+        # now, with M5's accept-time check (via loader._validate) as the real gate, since the
+        # candidate sits on disk as untrusted text in between.
+        _deliv = graphmod.order_deliverables(
+            str(x).strip() for x in (e_dict.get("deliverables") or []) if str(x).strip())
+        _bad = [d for d in _deliv if d not in graphmod.KNOWN_DELIVERABLES]
+        if _bad:
+            return {"ok": False, "error": f"unknown deliverable(s) {_bad}; valid: "
+                                          f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
         try:
             eid = str(e_dict["id"]).strip()
             effective_efforts[eid] = graphmod.CreativeWork(
@@ -777,7 +786,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 description=str(e_dict.get("description", "")).strip(),
                 is_part_of=proj_iri,
                 org_domain=str(e_dict.get("orgDomain", "")).strip(),
-                goal=str(e_dict.get("goal", "")).strip())
+                goal=str(e_dict.get("goal", "")).strip(),
+                deliverables=_deliv)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -1961,7 +1971,8 @@ def graph_index(reg: Registry) -> list[dict]:
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
-                         "orgDomain": e.org_domain, "goal": e.goal}
+                         "orgDomain": e.org_domain, "goal": e.goal,
+                         "deliverables": list(e.deliverables)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
@@ -2139,6 +2150,7 @@ def org_tree(reg: Registry, machine_name: str) -> dict:
 
 
 def state(reg: Registry) -> dict:
+    from . import graph as graphmod
     return {
         "root": str(reg.root),
         "generated_at": _now(),
@@ -2148,6 +2160,10 @@ def state(reg: Registry) -> dict:
         # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
         "known_targets": sorted(loader.KNOWN_TARGETS),
+        # The controlled deliverables vocabulary (graph.KNOWN_DELIVERABLES) — the effort
+        # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
+        # term to the registry constant surfaces in the UI with no client edit.
+        "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
         # The Mitos-owned prompt placeholders, for the one-shot copy flow: `user_tokens`
         # are auto-substituted at copy time (the operator is never asked to type their own
         # name), `machine_tokens` are left literal (a copied prompt goes to a chat app, not

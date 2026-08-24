@@ -38,6 +38,29 @@ ORG_DOMAIN_PRED = PECCIA + "orgDomain"
 # for an effort, rendered as its own line under the effort heading so the agent reads
 # intent — not just a document list. Optional, omit-when-absent, no validation set.
 GOAL_PRED = PECCIA + "goal"
+# deliverable is likewise a peccia predicate, and the only repeated one: an effort declares
+# zero or more artifacts every implementation under it must yield (the forward contract). It
+# is repeated rather than a JSON list literal because RDF stores each value as its own triple;
+# the JSON array is only the JSON-LD surface form of those triples.
+DELIVERABLE_PRED = PECCIA + "deliverable"
+
+# The controlled vocabulary — scoped to what Mitos should capture from a target harness. Ordered,
+# and that order is canonical everywhere this value is written or rendered (JSON-LD serialization,
+# the compiled line, the agent's checklist): RDF does not preserve order, so ONE rule beats two.
+# Adding a term later is a one-line edit here; there is deliberately no overlay-extension lane.
+KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book")
+
+
+def order_deliverables(names) -> tuple[str, ...]:
+    """The one canonical ordering: vocabulary index, deduplicated. Unknown names sort last,
+    alphabetically — this function ORDERS, it does not validate (loader._validate does). It must
+    tolerate an unknown name rather than raise, because review.propose_graph_change builds a
+    CreativeWork before validation runs and parse_fragment reads untrusted candidate text."""
+    seen = set(names)
+    known = tuple(n for n in KNOWN_DELIVERABLES if n in seen)
+    return known + tuple(sorted(seen - set(KNOWN_DELIVERABLES)))
+
+
 # store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
 # which document_store (a connections/servers.yaml server key) enumerated this document.
 # Missing key = legacy = "the project's sole store" (only new enumerations write it), and
@@ -97,6 +120,10 @@ class CreativeWork:
     org_domain: str = ""  # peccia:orgDomain — the org domain governing this effort
                           # (e.g. "software"); "" → untagged, route by request nature
     goal: str = ""        # peccia:goal — free-text outcome statement for this effort
+    deliverables: tuple[str, ...] = ()  # peccia:deliverable — artifacts an implementation must
+                                        # yield (the forward contract); a tuple, not a list, so a
+                                        # frozen CreativeWork compares/hashes cleanly with no
+                                        # mutable-default hazard
 
     @property
     def iri(self) -> str:
@@ -192,8 +219,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str, str]] = []  # (iri, name, description,
-                                                             #  org_domain, goal)
+    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...]]] = []
+    #  (iri, name, description, org_domain, goal, deliverables)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -225,11 +252,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
             desc = g.value(subj, SDO("description"))
             domain_val = g.value(subj, URIRef(ORG_DOMAIN_PRED))
             goal_val = g.value(subj, URIRef(GOAL_PRED))
+            deliv_vals = order_deliverables(
+                str(o) for o in g.objects(subj, URIRef(DELIVERABLE_PRED)))
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
-                                str(goal_val) if goal_val is not None else ""))
+                                str(goal_val) if goal_val is not None else "",
+                                deliv_vals))
 
-    effort_iris = {iri for iri, _, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -282,13 +312,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal in raw_efforts:
+    for iri, name, desc, org_domain, goal, deliverables in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
                                     is_part_of=str(part_of) if part_of is not None else "",
                                     org_domain=org_domain,
-                                    goal=goal))
+                                    goal=goal,
+                                    deliverables=deliverables))
 
     return projects, docs, efforts
 
@@ -370,6 +401,10 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             effort_node[ORG_DOMAIN_PRED] = e.org_domain
         if e.goal:
             effort_node[GOAL_PRED] = e.goal
+        if e.deliverables:
+            # Already in canonical order (applied on read); the JSON array is the JSON-LD
+            # surface form of the repeated peccia:deliverable triples.
+            effort_node[DELIVERABLE_PRED] = list(e.deliverables)
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -545,6 +580,16 @@ def _effort_goal_line(e: CreativeWork) -> list[str]:
     return [f"**Goal:** {e.goal}", ""]
 
 
+def _effort_deliverables_line(e: CreativeWork) -> list[str]:
+    """The forward contract under an effort's heading: the artifacts every implementation of
+    this effort must yield. Unlike the org routing line this is NEVER gated — it names no skill
+    to load, and the coding harness that must PRODUCE these is exactly the surface the org line
+    is suppressed on. The names arrive already in canonical vocabulary order (applied on read)."""
+    if not e.deliverables:
+        return []
+    return [f"_Expected deliverables: {', '.join(e.deliverables)}._", ""]
+
+
 def _conn_heading(pg: ProjectGraph, heading: str | None) -> str:
     """The connection-section title for a project's document block. `heading` is the bound
     store's stable label (`<Name> (`key`)`, from the planner); falls back to
@@ -598,6 +643,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
+            lines += _effort_deliverables_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
             else:
