@@ -1117,3 +1117,136 @@ def test_graph_rejects_organization_nodes():
         assert "unsupported type" in str(e)
     finally:
         f.unlink()
+
+
+def test_order_coverage_canonical_order_dedup_and_unknown_last():
+    from agentic import graph
+    # vocabulary order regardless of input order, deduplicated
+    assert graph.order_coverage(["security", "performance", "security"]) == \
+        ("performance", "security")
+    # an unknown name sorts last (alphabetically), and ordering never raises — propose-time and
+    # candidate-parse paths both build a CreativeWork before validation runs
+    assert graph.order_coverage(["zebra", "scale", "apple"]) == ("scale", "apple", "zebra")
+    assert graph.order_coverage([]) == ()
+
+
+def test_graph_coverage_round_trip_and_ordering():
+    """A repeated peccia:requirementsCoverage predicate loads into a canonical-ordered tuple
+    regardless of the JSON array's order on disk, and canonical bytes survive a reload."""
+    import json, tempfile
+    from pathlib import Path
+    from agentic import graph
+    SC = '{"@vocab":"https://schema.org/"}'
+    raw_in = ('{"@context":%s,"@graph":['
+              '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
+              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+              '"name":"Effort One","description":"d",'
+              '"isPartOf":{"@id":"http://peccia.net/project/p"},'
+              '"http://peccia.net/requirementsCoverage":["security","performance"]}]}' % SC)
+    p = Path(tempfile.mktemp(suffix=".jsonld"))
+    p.write_text(raw_in, encoding="utf-8")
+    loaded = graph.load_project_graph(p)
+    assert loaded.efforts[0].requirements_coverage == ("performance", "security")
+
+    canon = graph.canonical_jsonld(loaded)
+    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
+    assert node[graph.REQ_COVERAGE_PRED] == ["performance", "security"]
+    p.write_text(canon, encoding="utf-8")
+    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
+    p.unlink()
+
+
+def test_graph_no_coverage_emits_no_key():
+    """An effort declaring no coverage emits NO key, so an existing graph round-trips
+    byte-identically — the same omit-when-absent contract deliverables/orgDomain hold."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
+    raw = graph.canonical_jsonld(pg)
+    assert graph.REQ_COVERAGE_PRED not in raw
+    assert "requirementsCoverage" not in raw
+
+
+def test_graph_coverage_line_renders_in_all_three_views_ungated():
+    """The interview-contract line renders in project_index/details/full — and is NOT suppressed
+    by org_routing=False, because (like deliverables) it names no skill to load."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
+                                is_part_of=proj_iri,
+                                requirements_coverage=("performance", "security"))
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
+        efforts=[effort])
+    line = "_Requirements coverage: performance, security._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)
+    full_no_org = graph.project_full_markdown(pg, org_routing=False)
+    assert line in full_no_org
+    assert "load the `org-" not in full_no_org
+
+
+def test_effort_heading_always_carries_its_id():
+    """An effort's group heading is `<name> (<id>)` in every view, tagged or not.
+
+    This is the key a downstream harness hangs a long-lived record on: the heading text is the
+    effort's NAME, which the owner renames freely, so the id must ride alongside it. Emitted
+    unconditionally — there is no 'untagged' escape, unlike every other per-effort line."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    bare = graph.CreativeWork(id="auth-rework", name="Auth rework", description="",
+                              is_part_of=proj_iri)
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=bare.iri)],
+        efforts=[bare])
+    for view in (graph.project_index_markdown(pg), graph.project_details_markdown(pg),
+                 graph.project_full_markdown(pg)):
+        assert "Auth rework (auth-rework)" in view
+    assert graph.effort_heading(bare) == "Auth rework (auth-rework)"
+
+
+def test_effort_heading_id_is_the_last_parenthesised_group():
+    """A name that itself ends in parentheses still yields an unambiguous id, because the id is
+    appended last — the rule a reader (and tree/parse.py in mitos-agent) relies on."""
+    from agentic import graph
+    e = graph.CreativeWork(id="auth-rework", name="Auth rework (v2)",
+                           description="", is_part_of=graph.PROJECT_NS + "p")
+    heading = graph.effort_heading(e)
+    assert heading == "Auth rework (v2) (auth-rework)"
+    assert heading[heading.rindex("(") + 1:-1] == "auth-rework"
+
+
+def test_propose_rejects_unknown_coverage_and_round_trips_valid_ones():
+    """Reject-at-propose-time for the interview contract: a clean error in the browser now, with
+    the accept-time loader check as the real gate. A valid set survives propose → accept."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug="example-project", name="Example Project", description="d")
+    (gdir / "example-project.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    bad = review.propose_graph_change(
+        treg, "example-project", [],
+        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
+                  "requirementsCoverage": ["security", "not-a-dimension"]}])
+    assert not bad["ok"]
+    assert "not-a-dimension" in bad["error"]
+    assert "performance" in bad["error"]          # the valid set is named
+
+    out = review.propose_graph_change(
+        treg, "example-project", [],
+        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
+                  "requirementsCoverage": ["security", "performance"]}])
+    assert out["ok"]
+    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    effort = next(e for e in merged.efforts if e.id == "sprint-a")
+    # canonical order, not the order it was proposed in
+    assert effort.requirements_coverage == ("performance", "security")

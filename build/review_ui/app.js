@@ -1660,6 +1660,11 @@ function renderRegistryRows(g) {
     if ((effort.deliverables || []).length) {
       nameSpan.append(el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", ")));
     }
+    // The COUNT, not the names: six dimensions would swamp the row. The names live in the editor.
+    if ((effort.requirementsCoverage || []).length) {
+      nameSpan.append(el("span", "effort-domain-tag",
+                         " · coverage: " + effort.requirementsCoverage.length));
+    }
     head.append(nameSpan);
     if (status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
@@ -1678,7 +1683,8 @@ function renderRegistryRows(g) {
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
                                goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "",
-                               deliverables: (effort.deliverables || []).slice() } };
+                               deliverables: (effort.deliverables || []).slice(),
+                               requirementsCoverage: (effort.requirementsCoverage || []).slice() } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -1907,7 +1913,13 @@ function scrollCardIntoView(card) {
 // the inbox Reason field, which deliberately does NOT bind Enter to Accept).
 function bindEnterToApply(inputs, apply) {
   for (const inp of Object.values(inputs)) {
-    if (!inp || inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
+    // A field entry is not always a single element: a checkbox GROUP (deliverables,
+    // requirements coverage) records itself as a plain {name: checkbox} map, which has no
+    // addEventListener. Calling it threw, and because this runs at the END of building the
+    // editor card the throw took the whole card with it — "+ Work" and Edit silently did
+    // nothing. Bind only real elements.
+    if (!(inp instanceof HTMLElement)) continue;
+    if (inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); apply.click(); }
     });
@@ -1983,6 +1995,24 @@ function effortEditorCard(g) {
   }
   delivWrap.append(delivGroup); card.append(delivWrap); inputs.deliverables = delivBoxes;
 
+  // Requirements coverage — the INTERVIEW contract: the dimensions a requirements-gathering
+  // session must close before this effort's requirements are exportable. Same checkbox-group
+  // shape and same reasoning as deliverables above; optional, and an effort naming none renders
+  // no coverage line at all.
+  const coverWrap = el("div", "graph-field");
+  coverWrap.append(el("label", "", "Requirements coverage"));
+  const coverGroup = el("div", "target-checks");
+  const coverChecked = new Set(vals.requirementsCoverage || []);
+  const coverBoxes = {};
+  for (const name of (STATE.known_coverage || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = coverChecked.has(name);
+    coverBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    coverGroup.append(lbl);
+  }
+  coverWrap.append(coverGroup); card.append(coverWrap); inputs.requirementsCoverage = coverBoxes;
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -1994,7 +2024,10 @@ function effortEditorCard(g) {
                      goal: inputs.goal.value.trim(),
                      orgDomain: inputs.orgDomain.value,
                      deliverables: (STATE.known_deliverables || [])
-                       .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked) };
+                       .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
+                     requirementsCoverage: (STATE.known_coverage || [])
+                       .filter((n) => inputs.requirementsCoverage[n]
+                                      && inputs.requirementsCoverage[n].checked) };
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
       toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
@@ -2068,7 +2101,8 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
     id: x.id, name: x.name, description: x.description || "",
     goal: x.goal || "",
     orgDomain: x.orgDomain || "",
-    deliverables: x.deliverables || [] }));
+    deliverables: x.deliverables || [],
+    requirementsCoverage: x.requirementsCoverage || [] }));
   const effortRemovals = Object.keys(d.effortRemove);
   if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {
     toast("No changes to propose."); return;

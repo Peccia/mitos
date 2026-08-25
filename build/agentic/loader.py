@@ -626,6 +626,11 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"graph {slug}: effort {e.id!r} declares unknown deliverable {d!r}; "
                         f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
+            for c in e.requirements_coverage:
+                if c not in graphmod.KNOWN_COVERAGE:
+                    raise RegistryError(
+                        f"graph {slug}: effort {e.id!r} declares unknown coverage dimension "
+                        f"{c!r}; valid: {', '.join(graphmod.KNOWN_COVERAGE)}")
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")

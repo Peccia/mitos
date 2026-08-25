@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Console: the effort editor never opened. `+ Work` and an effort row's `Edit` set the editor state and re-rendered, but the card itself threw while being built and vanished with the throw, so both buttons appeared to do nothing. `bindEnterToApply` walked every field the card had registered and called `addEventListener` on it — and a checkbox GROUP (expected deliverables, requirements coverage) registers itself as a plain `{name: checkbox}` map, which has no such method. Present since expected deliverables introduced the first checkbox group. It now binds only real elements.
+
 ### Added
 - Feature: Expected deliverables (the forward contract) on graph efforts — a repeated `peccia:deliverable` predicate on a `CreativeWork` node, authored via the console effort editor's checkbox group over a closed vocabulary (`documentation`, `tests`, `changelog`, `deploy-book`). Validated at load and at propose time; compiles to an ungated `_Expected deliverables: …._` line under the effort's heading in every generated view, which the Mitos Agent planning harness reads to seed a plan's `## Expected Deliverables` checklist.
 

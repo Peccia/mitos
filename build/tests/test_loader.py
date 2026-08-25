@@ -1418,3 +1418,38 @@ def test_project_description_must_be_a_nonempty_string():
         raise AssertionError("expected RegistryError for non-string description")
     except RegistryError as e:
         assert "'description' must be a non-empty string" in str(e)
+
+
+def test_effort_unknown_coverage_is_rejected():
+    """A coverage dimension outside graph.KNOWN_COVERAGE fails _validate loudly, naming the value
+    and the valid set — the same loudness as the deliverable check directly above it."""
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import RegistryError, _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0],
+                           requirements_coverage=("security", "not-a-dimension"))] \
+        + list(pg.efforts[1:])
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown coverage dimension")
+    except RegistryError as e:
+        assert "not-a-dimension" in str(e)
+        assert "performance" in str(e)        # the valid set is named
+
+
+def test_effort_valid_coverage_passes_validation():
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import _validate
+    from agentic import graph
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0],
+                           requirements_coverage=graph.KNOWN_COVERAGE[:2])] \
+        + list(pg.efforts[1:])
+    _validate(rig)          # must not raise

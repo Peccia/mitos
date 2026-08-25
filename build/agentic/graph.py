@@ -43,6 +43,11 @@ GOAL_PRED = PECCIA + "goal"
 # is repeated rather than a JSON list literal because RDF stores each value as its own triple;
 # the JSON array is only the JSON-LD surface form of those triples.
 DELIVERABLE_PRED = PECCIA + "deliverable"
+# requirementsCoverage is likewise a peccia predicate, and the second repeated one: an effort
+# declares zero or more dimensions a requirements-gathering session must close before its
+# requirements are exportable. Where `deliverable` is the FORWARD contract (what an implementation
+# must yield), this is the INTERVIEW contract (what the gathering must not leave unasked).
+REQ_COVERAGE_PRED = PECCIA + "requirementsCoverage"
 
 # The controlled vocabulary — scoped to what Mitos should capture from a target harness. Ordered,
 # and that order is canonical everywhere this value is written or rendered (JSON-LD serialization,
@@ -51,14 +56,34 @@ DELIVERABLE_PRED = PECCIA + "deliverable"
 KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book")
 
 
-def order_deliverables(names) -> tuple[str, ...]:
-    """The one canonical ordering: vocabulary index, deduplicated. Unknown names sort last,
-    alphabetically — this function ORDERS, it does not validate (loader._validate does). It must
-    tolerate an unknown name rather than raise, because review.propose_graph_change builds a
-    CreativeWork before validation runs and parse_fragment reads untrusted candidate text."""
+# The controlled coverage vocabulary — the dimensions a requirements interview can be told to
+# close. Ordered on the same rule as KNOWN_DELIVERABLES, and for the same reason: RDF preserves no
+# order, so ONE canonical ordering serves the JSON-LD bytes, the compiled line, and the agent's
+# checklist alike. Adding a term is a one-line edit with no migration — an effort that does not
+# name it is unaffected.
+KNOWN_COVERAGE = ("performance", "security", "failure-recovery", "data-retention",
+                  "access-control", "scale")
+
+
+def _ordered(names, vocab: tuple[str, ...]) -> tuple[str, ...]:
+    """The one canonical ordering rule, shared by every controlled vocabulary on an effort:
+    vocabulary index first, deduplicated, unknown names last and alphabetical. It ORDERS, it does
+    not validate (loader._validate does), and it must tolerate an unknown name rather than raise,
+    because review.propose_graph_change builds a CreativeWork before validation runs and
+    parse_fragment reads untrusted candidate text."""
     seen = set(names)
-    known = tuple(n for n in KNOWN_DELIVERABLES if n in seen)
-    return known + tuple(sorted(seen - set(KNOWN_DELIVERABLES)))
+    known = tuple(n for n in vocab if n in seen)
+    return known + tuple(sorted(seen - set(vocab)))
+
+
+def order_deliverables(names) -> tuple[str, ...]:
+    """Canonical order for an effort's forward contract (KNOWN_DELIVERABLES)."""
+    return _ordered(names, KNOWN_DELIVERABLES)
+
+
+def order_coverage(names) -> tuple[str, ...]:
+    """Canonical order for an effort's interview contract (KNOWN_COVERAGE)."""
+    return _ordered(names, KNOWN_COVERAGE)
 
 
 # store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
@@ -124,6 +149,10 @@ class CreativeWork:
                                         # yield (the forward contract); a tuple, not a list, so a
                                         # frozen CreativeWork compares/hashes cleanly with no
                                         # mutable-default hazard
+    requirements_coverage: tuple[str, ...] = ()  # peccia:requirementsCoverage — the dimensions a
+                                        # requirements-gathering session must close before this
+                                        # effort's requirements are exportable (the interview
+                                        # contract). A tuple for the same reason as above.
 
     @property
     def iri(self) -> str:
@@ -219,8 +248,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...]]] = []
-    #  (iri, name, description, org_domain, goal, deliverables)
+    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...], tuple[str, ...]]] = []
+    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -254,12 +283,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
             goal_val = g.value(subj, URIRef(GOAL_PRED))
             deliv_vals = order_deliverables(
                 str(o) for o in g.objects(subj, URIRef(DELIVERABLE_PRED)))
+            cover_vals = order_coverage(
+                str(o) for o in g.objects(subj, URIRef(REQ_COVERAGE_PRED)))
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
                                 str(goal_val) if goal_val is not None else "",
-                                deliv_vals))
+                                deliv_vals, cover_vals))
 
-    effort_iris = {iri for iri, _, _, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -312,14 +343,15 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal, deliverables in raw_efforts:
+    for iri, name, desc, org_domain, goal, deliverables, coverage in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
                                     is_part_of=str(part_of) if part_of is not None else "",
                                     org_domain=org_domain,
                                     goal=goal,
-                                    deliverables=deliverables))
+                                    deliverables=deliverables,
+                                    requirements_coverage=coverage))
 
     return projects, docs, efforts
 
@@ -405,6 +437,9 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             # Already in canonical order (applied on read); the JSON array is the JSON-LD
             # surface form of the repeated peccia:deliverable triples.
             effort_node[DELIVERABLE_PRED] = list(e.deliverables)
+        if e.requirements_coverage:
+            # Same shape and same reasoning as deliverables above.
+            effort_node[REQ_COVERAGE_PRED] = list(e.requirements_coverage)
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -580,6 +615,28 @@ def _effort_goal_line(e: CreativeWork) -> list[str]:
     return [f"**Goal:** {e.goal}", ""]
 
 
+def effort_heading(e: CreativeWork) -> str:
+    """An effort's group heading text: its human name followed by its stable id in parentheses —
+    `Auth rework (auth-rework)`. The SAME identity form a project roster line already uses
+    (`` - `Projects/Website/` (website) — … ``), so a reader (human or harness) learns one rule.
+
+    The id is emitted for every effort, tagged or not, and deliberately rides the heading rather
+    than a line of its own: a downstream harness keying a long-lived record on an effort must key
+    it on something a rename cannot move, and the heading is the NAME — human-facing and editable.
+    Reusing the heading costs no always-on tokens in a file that loads on every request."""
+    return f"{e.name} ({e.id})"
+
+
+def _effort_coverage_line(e: CreativeWork) -> list[str]:
+    """The interview contract under an effort's heading: the dimensions a requirements-gathering
+    session must close before this effort's requirements are exportable. Never gated, for the same
+    reason as the deliverables line — it names no skill to load, and it is descriptive metadata any
+    harness benefits from reading. Names arrive already in canonical order (applied on read)."""
+    if not e.requirements_coverage:
+        return []
+    return [f"_Requirements coverage: {', '.join(e.requirements_coverage)}._", ""]
+
+
 def _effort_deliverables_line(e: CreativeWork) -> list[str]:
     """The forward contract under an effort's heading: the artifacts every implementation of
     this effort must yield. Unlike the org routing line this is NEVER gated — it names no skill
@@ -638,12 +695,13 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             lines += [f"{gh} Documents", ""] + entry_fn(groups[""])
         for e in sorted(pg.efforts, key=lambda e: (e.name.lower(), e.id)):
             docs_in_effort = groups.get(e.iri, [])
-            lines += [f"{gh} {e.name}", ""]
+            lines += [f"{gh} {effort_heading(e)}", ""]
             lines += _effort_domain_line(e, org_routing=org_routing)
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
             lines += _effort_deliverables_line(e)
+            lines += _effort_coverage_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
             else:

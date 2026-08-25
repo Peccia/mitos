@@ -701,7 +701,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
 
     `documents` is a list of {id, name, description, dateModified, parentId?} to
     upsert; `removals` is a list of document IDs to drop. `efforts` is a list of
-    {id, name, description, orgDomain?} to upsert; `effort_removals` is a list of
+    {id, name, description, orgDomain?, goal?, deliverables?, requirementsCoverage?} to
+    upsert; `effort_removals` is a list of
     effort IDs to remove. A candidate may carry only removals (no upserts).
     `parentId` in a document dict is the effort ID (or "" / omitted for project root).
 
@@ -779,6 +780,13 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         if _bad:
             return {"ok": False, "error": f"unknown deliverable(s) {_bad}; valid: "
                                           f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
+        # And the same posture again for the interview contract.
+        _cover = graphmod.order_coverage(
+            str(x).strip() for x in (e_dict.get("requirementsCoverage") or []) if str(x).strip())
+        _bad_cover = [c for c in _cover if c not in graphmod.KNOWN_COVERAGE]
+        if _bad_cover:
+            return {"ok": False, "error": f"unknown coverage dimension(s) {_bad_cover}; valid: "
+                                          f"{', '.join(graphmod.KNOWN_COVERAGE)}"}
         try:
             eid = str(e_dict["id"]).strip()
             effective_efforts[eid] = graphmod.CreativeWork(
@@ -787,7 +795,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 is_part_of=proj_iri,
                 org_domain=str(e_dict.get("orgDomain", "")).strip(),
                 goal=str(e_dict.get("goal", "")).strip(),
-                deliverables=_deliv)
+                deliverables=_deliv,
+                requirements_coverage=_cover)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -1972,7 +1981,8 @@ def graph_index(reg: Registry) -> list[dict]:
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
                          "orgDomain": e.org_domain, "goal": e.goal,
-                         "deliverables": list(e.deliverables)}
+                         "deliverables": list(e.deliverables),
+                         "requirementsCoverage": list(e.requirements_coverage)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
@@ -2164,6 +2174,9 @@ def state(reg: Registry) -> dict:
         # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
         # term to the registry constant surfaces in the UI with no client edit.
         "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
+        # checkbox group reads this the same way, for the same reason.
+        "known_coverage": list(graphmod.KNOWN_COVERAGE),
         # The Mitos-owned prompt placeholders, for the one-shot copy flow: `user_tokens`
         # are auto-substituted at copy time (the operator is never asked to type their own
         # name), `machine_tokens` are left literal (a copied prompt goes to a chat app, not
