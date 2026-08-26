@@ -62,23 +62,32 @@ def test_core_registry_integrity():
             f"move it to registry/local/machines/ to prevent overlay data leaking "
             f"to unauthorized repos")
 
-    # 4. Mitos builder context must exist and contain the write-guard Invariants.
-    #    Their absence would let an impostor AGENTS.md instruct agents without the
-    #    repo-write prohibition and inbox-only proposal rule.
-    builder_rel = (core_reg.projects.get("mitos") or {}).get("context", {}).get("builder", "")
-    assert builder_rel, "mitos project missing context.builder — builder AGENTS.md cannot be generated"
-    # Manifests store paths as "registry/<rel>"; partials are keyed without the prefix
-    partial_key = builder_rel.removeprefix("registry/")
-    assert partial_key in core_reg.partials, (
-        f"mitos context.builder partial {builder_rel!r} missing from registry — "
-        f"builder AGENTS.md cannot be compiled and write-guard Invariants are absent")
-    builder_body = core_reg.partials[partial_key].body
+    # 4. The partial that compiles into this repo's own AGENTS.md must carry the
+    #    write-guard Invariants. That artifact is what an agent working IN this repo
+    #    reads, so its absence would let an impostor AGENTS.md instruct agents without
+    #    the repo-write prohibition and inbox-only proposal rule.
+    #    Bound to selfdoc.SOURCE rather than a hardcoded path so the guard follows the
+    #    artifact's source wherever it moves (it was context.builder until the project
+    #    node and the repo artifact were split onto separate partials).
+    from agentic import selfdoc
+    repo_ctx_key = selfdoc.SOURCE.relative_to(selfdoc.REPO_ROOT / "registry").as_posix()
+    assert repo_ctx_key in core_reg.partials, (
+        f"selfdoc source partial {repo_ctx_key!r} missing from the core registry — "
+        f"this repo's AGENTS.md cannot be compiled and write-guard Invariants are absent")
+    builder_body = core_reg.partials[repo_ctx_key].body
     assert "Invariants" in builder_body, (
-        "mitos builder context is missing the Invariants section — possible tampering; "
+        "the repo's builder context is missing the Invariants section — possible tampering; "
         "agents would operate without structural guardrails")
     assert "Never write into" in builder_body, (
-        "mitos builder context is missing the registry write-guard rule — possible tampering; "
-        "agents and humans could bypass the inbox and modify the registry directly")
+        "the repo's builder context is missing the registry write-guard rule — possible "
+        "tampering; agents and humans could bypass the inbox and modify the registry directly")
+
+    # The mitos project node must still resolve its own prose partial — separate file,
+    # separate job (orientation + document map), but a missing one means no node at all.
+    builder_rel = (core_reg.projects.get("mitos") or {}).get("context", {}).get("builder", "")
+    assert builder_rel, "mitos project missing context.builder — project node cannot be generated"
+    assert builder_rel.removeprefix("registry/") in core_reg.partials, (
+        f"mitos context.builder partial {builder_rel!r} missing from registry")
 
 def test_inbox_dir_resolves_under_overlay_not_repo_root():
     # inbox_dir points into registry/local/ (syncs with mitos-local overlay), not at

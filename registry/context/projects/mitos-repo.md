@@ -1,3 +1,9 @@
+---
+# Consumed ONLY by build/agentic/selfdoc.py, which reads this file directly and rewrites
+# the repo's own AGENTS.md at every `compile`. No manifest binds it, so it deploys to no
+# machine; the audience below is inert and kept only for shape consistency.
+audience: [claude-code, agents-md]
+---
 # Mitos — Builder Context
 
 You are working on the **Mitos** repo itself: the registry and compiler that materialize an

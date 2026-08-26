@@ -188,7 +188,7 @@ def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -
     # points at a contributor's checkout, so deploy can't keep it fresh — compile does.
     # No-ops for any registry that isn't this repo (the suite's temp copies).
     if selfdoc.rewrite(reg.root):
-        print("  rewrote AGENTS.md from registry/context/projects/mitos.md")
+        print("  rewrote AGENTS.md from registry/context/projects/mitos-repo.md")
     return 0
 
 

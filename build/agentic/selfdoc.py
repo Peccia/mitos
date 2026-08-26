@@ -7,6 +7,14 @@ be what keeps it fresh. `cmd_compile` calls `rewrite()` instead — compile is s
 Verifying changes and the first thing CI runs, so the artifact cannot silently rot. CI
 proves it with `git diff --exit-code -- AGENTS.md` after compiling: a stale commit fails
 because compile CHANGED the file, which no amount of forgetting can fool.
+
+The source is `context/projects/mitos-repo.md`, NOT the `mitos` project's node partial
+(`context/projects/mitos.md`). They were one file until the node — deployed to the project
+folder that HOLDS this checkout — ended up repeating all 57KB of builder prose that this
+artifact already carries, so both loaded on every session started inside the repo. The node
+now answers "which checkout, and what is this project for"; this file answers "how do I
+change code in here". Nothing else consumes `mitos-repo.md`: no manifest binds it, so the
+loader parses it as a partial and deploys it nowhere.
 """
 from __future__ import annotations
 
@@ -14,7 +22,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE = REPO_ROOT / "registry" / "context" / "projects" / "mitos.md"
+SOURCE = REPO_ROOT / "registry" / "context" / "projects" / "mitos-repo.md"
 ARTIFACT = REPO_ROOT / "AGENTS.md"
 MARKER = "# Mitos — Builder Context"
 

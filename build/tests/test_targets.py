@@ -148,7 +148,7 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     out = by_path[claude_path]
     assert out.content.strip() != "@AGENTS.md", \
         "must not dangle a stub @AGENTS.md when no AGENTS.md is generated"
-    assert "Builder Context" in out.content, "self-contained CLAUDE.md inlines the builder prose"
+    assert "agentic SDLC loop" in out.content, "self-contained CLAUDE.md inlines the builder prose"
     assert out.section_bodies, "an inlined multi-source CLAUDE.md records its per-section base"
 
     # Counterpart — with agents-md present, the AGENTS.md co-deploys, so the stub is valid.
@@ -160,6 +160,35 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
         "with agents-md present, mitos CLAUDE.md stays a thin stub"
     assert "C:/Projects/Mitos/AGENTS.md" in by_path2, \
         "agents-md must co-deploy the AGENTS.md that the stub imports"
+
+
+def test_project_node_does_not_repeat_repo_builder_context():
+    """The mitos project node and this repo's own AGENTS.md are two documents with two
+    jobs, and must not carry the same prose.
+
+    They were one partial until the node — deployed to the project FOLDER that holds the
+    checkout — repeated all 57KB of builder prose the repo artifact already carries, so a
+    session started inside the repo loaded both. The node answers "which checkout, and what
+    is this project for"; selfdoc.SOURCE answers "how do I change code in here". Pinning
+    the negative: the node must never regrow the deep sections."""
+    from agentic import selfdoc
+    node_key = "context/projects/mitos.md"
+    repo_key = selfdoc.SOURCE.relative_to(selfdoc.REPO_ROOT / "registry").as_posix()
+    assert node_key in reg.partials and repo_key in reg.partials
+    assert node_key != repo_key, "the node and the repo artifact must not share a partial"
+
+    node_body = reg.partials[node_key].body
+    repo_body = reg.partials[repo_key].body
+    # The deep builder sections belong to the repo artifact alone.
+    for section in ("## Invariants", "## To change X, edit Y", "## Verifying changes"):
+        assert section in repo_body, f"{repo_key} lost its {section!r} section"
+        assert section not in node_body, (
+            f"{node_key} regrew {section!r} — the project node must not repeat the repo's "
+            f"builder context; both load when a session starts inside the checkout")
+    assert len(node_body) < len(repo_body) / 4, (
+        "the project node has grown toward repo-artifact size again — it is orientation "
+        "plus the generated document map, not a builder manual")
+
 
 def test_builder_context_project_agents_md_includes_graph_docs():
     """A `context.builder` project (e.g. Mitos self-hosting) with a knowledge graph must
@@ -190,7 +219,7 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert det.drift_policy == "generated"
 
     # persona/builder prose survives, plus the connection heading + doc title (index only)
-    assert "Builder Context" in out.content
+    assert "agentic SDLC loop" in out.content
     assert "Google Workspace suite" in out.content
     assert "Design Review" in out.content
     assert "`MITOS_DOC_1`" not in out.content, "raw ID belongs in details, not the index"
@@ -283,7 +312,7 @@ def test_project_agents_md_drops_identity_on_assistant_machines():
     out = next(o for o in outs if o.deploy_path == agents_path and o.target == "agents-md")
     assert "About Me" not in out.content, "identity must not duplicate SOUL.md"
     assert not any(s.startswith("identity/") for s in out.sources)
-    assert "Builder Context" in out.content
+    assert "agentic SDLC loop" in out.content
 
     # no hermes → full persona header stays
     outs2 = planner.plan_machine(_rig(["claude-code", "agents-md"]), "example-windows")
