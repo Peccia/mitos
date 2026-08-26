@@ -53,7 +53,24 @@ REQ_COVERAGE_PRED = PECCIA + "requirementsCoverage"
 # and that order is canonical everywhere this value is written or rendered (JSON-LD serialization,
 # the compiled line, the agent's checklist): RDF does not preserve order, so ONE rule beats two.
 # Adding a term later is a one-line edit here; there is deliberately no overlay-extension lane.
-KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book")
+#
+# APPEND, NEVER INSERT. _ordered walks this tuple in order and filters, so a term added at the END
+# leaves every existing effort's serialized bytes untouched. Inserting mid-tuple would silently
+# reorder efforts that already declare later terms and produce a graph diff on projects nobody
+# edited — the one way this list can break a repo it was never pointed at.
+#
+# The three adjacent terms are easy to confuse, so the boundary is written down once, here, rather
+# than left to whoever authors the next effort:
+#   deploy-book      how do I SHIP THIS CHANGE?  steps, order, verification, rollback. One release.
+#   runbook          how do I OPERATE it once it runs?  alerts, failures, recovery. Outlives the release.
+#   migration-notes  what changed for EXISTING data and consumers, and what must they do?
+#
+# requirements-receipt is the return lane's spine: per-requirement outcomes keyed by the ids the
+# export minted. It is a deliverable — not a "summary" — precisely because it has a DEFINED SHAPE
+# a reader can parse and check. Unstructured prose about the work is not a deliverable and does not
+# belong in this vocabulary.
+KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book",
+                      "runbook", "migration-notes", "requirements-receipt")
 
 
 # The controlled coverage vocabulary — the dimensions a requirements interview can be told to

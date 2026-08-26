@@ -288,6 +288,30 @@ def test_order_deliverables_canonical_order_dedup_and_unknown_last():
     assert graph.order_deliverables([]) == ()
 
 
+def test_new_deliverable_terms_are_appended_never_inserted():
+    """The one way KNOWN_DELIVERABLES can break a repo nobody pointed it at.
+
+    _ordered walks the vocabulary in order and filters, so a term added at the END leaves every
+    existing effort's serialized bytes untouched. Inserting one mid-tuple silently reorders every
+    effort that already declares a later term, producing a graph diff on projects nobody edited.
+    This pins the four terms that shipped first, in their shipped order, at the FRONT."""
+    from agentic import graph
+    assert graph.KNOWN_DELIVERABLES[:4] == ("documentation", "tests", "changelog", "deploy-book")
+    # a term added later orders AFTER the originals, never among them
+    assert graph.order_deliverables(["requirements-receipt", "deploy-book", "tests"]) == \
+        ("tests", "deploy-book", "requirements-receipt")
+
+
+def test_the_three_return_lane_terms_are_known():
+    """runbook / migration-notes / requirements-receipt are real vocabulary, not free text — an
+    effort declaring one must survive validation, and it must order canonically like the rest."""
+    from agentic import graph
+    for term in ("runbook", "migration-notes", "requirements-receipt"):
+        assert term in graph.KNOWN_DELIVERABLES
+    assert graph.order_deliverables(["migration-notes", "runbook"]) == \
+        ("runbook", "migration-notes")
+
+
 def test_graph_deliverables_round_trip_and_ordering():
     """A repeated peccia:deliverable predicate loads into a canonical-ordered tuple regardless of
     the JSON array's order on disk, and canonical bytes are deterministic across a reload."""
