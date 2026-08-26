@@ -26,11 +26,15 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
 
     coding = _one_machine_rig(targets=["claude-code"])
     shown = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
-    assert shown == set(), f"a coding box with no connection receives nothing: {shown}"
+    # The gate under test: gws targets claude-code but needs a store this machine lacks.
+    assert "gws" not in shown, f"an unwired connection must hide its skill: {shown}"
+    # ...while a skill that needs no connection is unaffected by it. requirements-receipt is
+    # the return lane's close-out and depends on nothing but the checkout it runs in.
+    assert shown == {"requirements-receipt"}, shown
 
     wired = _one_machine_rig(targets=["claude-code"], document_store="gws")
     shown = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
-    assert shown == {"gws"}, f"wiring the store reveals exactly gws: {shown}"
+    assert shown == {"gws", "requirements-receipt"}, f"wiring the store reveals gws: {shown}"
 
     # nothing is dropped from the payload — the console's "All" chip still reveals them
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)

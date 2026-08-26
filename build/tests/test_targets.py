@@ -451,16 +451,16 @@ def test_claude_app_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-app via its frontmatter; it's the only CORE skill that does
-    # (registry/local/ skills are excluded here — ignore_local=True), so no machine-side
-    # curation is needed to get exactly one output.
-    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
-    # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
+    # This test is about the ZIP FORMAT, not about how many skills opt into claude-app —
+    # selecting gws by name rather than asserting a count keeps it from breaking (and being
+    # rubber-stamped into a new number) every time a skill is added.
+    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so every
+    # claude-app output here is a skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
     outs = [o for o in planner.plan_machine(reg2, "example-windows")
             if o.target == "claude-app"]
-    assert len(outs) == 1
-    o = outs[0]
+    assert all(o.kind == "zip" for o in outs), [o.kind for o in outs]
+    o = next(o for o in outs if o.deploy_path.endswith("gws.zip"))
     assert (o.kind, o.lane, o.drift_policy) == ("zip", "content", "protect")
     assert o.deploy_path.endswith("ClaudeSkills/gws.zip")
 
