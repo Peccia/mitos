@@ -156,6 +156,19 @@ One structured field in this tab drives the org model — the **effort `Org doma
 
 The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
 
+### 🔎 Requirements coverage on efforts
+
+Beside it sits a **Requirements coverage** checkbox group — the *interview contract*, the mirror
+image of expected deliverables. Where deliverables name what an implementation must **produce**,
+coverage names the dimensions a requirements-gathering session must not leave **unasked**:
+`performance`, `security`, `failure-recovery`, `data-retention`, `access-control`, `scale`. The
+vocabulary is closed for the same reason, rendered from `graph.KNOWN_COVERAGE` (exposed as
+`known_coverage` in `/api/state`), so adding a term to that constant surfaces here with no UI
+edit. The selection compiles into a `_Requirements coverage: …._` line under the effort's
+heading in every generated view, directly after the deliverables line. An unknown value is
+rejected at propose time with the valid set named. The field is optional — an untagged effort
+renders no line.
+
 ---
 
 ## 🧩 The Skills & Orgs Tab: Skill Cards + Org Structure
