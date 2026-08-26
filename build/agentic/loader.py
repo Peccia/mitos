@@ -175,6 +175,20 @@ class Skill:
         wired never receives instructions for tools it cannot call."""
         return self.frontmatter.get("requires_server") or None
 
+    @property
+    def delivers(self) -> str | None:
+        """The `KNOWN_DELIVERABLES` term this skill satisfies — the return lane's binding
+        between what an effort DECLARES it must produce and the procedure that produces it.
+
+        One skill per deliverable, never one skill for all of them: the set is meant to grow,
+        so adding a deliverable must be an ADDITION (a new file) and never a modification to a
+        file that keeps getting longer. This field is what makes the pairing checkable —
+        planner.skill_deploy_warnings can say an effort declares 'deploy-book' on a machine
+        where nothing delivers it, instead of leaving that a silent gap discovered months
+        later by the deploy book's absence. Optional; omit for a skill that produces no
+        declared deliverable."""
+        return self.frontmatter.get("delivers") or None
+
 
 @dataclass
 class Prompt:
@@ -703,6 +717,15 @@ def _validate(reg: Registry) -> None:
     # declared one. A default is copied onto real efforts, so a typo here would mint
     # invalid efforts one at a time from a file nobody looks at twice — validate it where
     # it is authored, not where it lands.
+    # `delivers:` names a term from the same closed vocabulary an effort declares. A typo
+    # here is worse than a missing skill: the skill deploys, looks correct, and satisfies
+    # nothing — so it fails at load like every other unknown vocabulary value.
+    for name, skill in reg.skills.items():
+        d = skill.delivers
+        if d is not None and d not in graphmod.KNOWN_DELIVERABLES:
+            raise RegistryError(
+                f"skill {name!r}: unknown 'delivers' value {d!r}; "
+                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
     _validate_default_deliverables(
         reg.user.get("default_deliverables"), "registry/user.yaml", graphmod)
     for slug, proj in reg.projects.items():

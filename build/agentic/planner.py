@@ -722,6 +722,9 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     machine_targets = set(machine.get("targets", []))
     stores = set(document_stores(machine.get("document_store")))
     warnings: list[str] = []
+    # Every deliverable term this machine can actually satisfy, accumulated across targets:
+    # a term is covered if ANY target here deploys a skill declaring it.
+    delivered: set[str] = set()
     for tname, tspec in reg.targets.items():
         if tname not in machine_targets:
             continue
@@ -732,6 +735,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                       if tname in s.targets and not s.frontmatter.get("extends_skill")}
         selected = _selected_skills(reg, sk_spec, machine)
         selected_names = {s.name for s in selected}
+        delivered.update(s.delivers for s in selected if s.delivers)
         for name in sorted(candidates - selected_names):
             req = reg.skills[name].requires_server
             if req and req not in stores:
@@ -750,7 +754,32 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                         f"skill '{skill.name}' is scope: project but targets "
                         f"'{tname}', which ignores scope and deploys it globally "
                         f"(account-wide/machine-wide, not confined to bound projects)")
+    warnings.extend(_undelivered_warnings(reg, machine_name, delivered))
     return warnings
+
+
+def _undelivered_warnings(reg: Registry, machine_name: str,
+                          delivered: set[str]) -> list[str]:
+    """An effort declares a deliverable that nothing on this machine knows how to produce.
+
+    The forward contract only means something if a procedure answers it. Without this, an
+    effort can declare `deploy-book`, every harness can read the compiled line asking for one,
+    and no skill anywhere describes how to write one — a gap discovered months later by the
+    deploy book's absence. Warn-only: an effort may legitimately be ahead of its skills, and a
+    machine that deploys no skills at all (an agents-md-only box) is not misconfigured.
+
+    Reported once per term with the efforts that want it, not once per effort, so adding one
+    missing skill retires exactly one line."""
+    wanted: dict[str, list[str]] = {}
+    for slug, pg in (reg.graphs or {}).items():
+        for e in pg.efforts:
+            for d in e.deliverables:
+                if d not in delivered:
+                    wanted.setdefault(d, []).append(f"{slug}/{e.id}")
+    return [f"deliverable '{term}' is declared by {', '.join(sorted(efforts))} but no skill "
+            f"deployed to {machine_name} declares 'delivers: {term}' — nothing here knows how "
+            f"to produce it"
+            for term, efforts in sorted(wanted.items())]
 
 
 def _skill_resource_outputs(skill, resources: dict, target: str, base_dir: str,

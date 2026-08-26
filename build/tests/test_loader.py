@@ -1137,6 +1137,24 @@ def test_effort_org_domain_not_declared_by_any_skill_is_rejected():
     except RegistryError as e:
         assert "not-a-real-domain" in str(e)
 
+def test_unknown_delivers_value_on_a_skill_is_rejected():
+    """A typo here is worse than a missing skill: the skill deploys, looks correct, and
+    satisfies nothing. It fails at load like every other unknown vocabulary value."""
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["bogus-deliverer"] = Skill(
+        name="bogus-deliverer", rel="skills/bogus-deliverer/SKILL.md",
+        frontmatter={"name": "bogus-deliverer", "targets": ["mitos-agent"],
+                     "delivers": "deployment-book"}, body="body")
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown delivers value")
+    except RegistryError as e:
+        assert "deployment-book" in str(e)
+        assert "deploy-book" in str(e)        # the valid set is named
+
+
 # ── default_deliverables: the chain a NEW effort inherits ────────────────────
 def _rig_with_defaults(user_val=..., project_val=...):
     """A registry copy with default_deliverables set at either level. `...` means the key is

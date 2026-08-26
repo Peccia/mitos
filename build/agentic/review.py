@@ -1023,7 +1023,8 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role", "scope"}
+                         "targets", "category", "extends_skill", "extends_role", "scope",
+                         "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
 

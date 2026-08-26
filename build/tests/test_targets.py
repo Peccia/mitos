@@ -2007,6 +2007,53 @@ def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
     assert any("'proj-and-claude-app'" in w and "'claude-app'" in w
               and "ignores scope" in w for w in warnings)
 
+# ── delivers: pairing an effort's forward contract with the skill that answers it ──
+def _rig_wanting(term: str, *, delivered_by: str | None = None):
+    """A connected rig whose example-project effort declares `term`, optionally with a
+    mitos-agent skill that declares `delivers: term`."""
+    from dataclasses import replace as _replace
+    r = _connected_rig("example-linux")
+    pg = r.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=(term,))] + list(pg.efforts[1:])
+    if delivered_by:
+        r.skills[delivered_by] = loader.Skill(
+            name=delivered_by, rel=f"skills/{delivered_by}/SKILL.md",
+            frontmatter={"name": delivered_by, "targets": ["mitos-agent"],
+                         "delivers": term}, body="body")
+    return r
+
+
+def test_declared_deliverable_with_no_delivering_skill_warns():
+    """The forward contract only means something if a procedure answers it. Without this an
+    effort declares 'deploy-book', every harness reads the compiled line asking for one, and
+    no skill anywhere says how to write one — a gap found months later by its absence."""
+    warnings = planner.skill_deploy_warnings(_rig_wanting("deploy-book"), "example-linux")
+    assert any("deploy-book" in w and "delivers: deploy-book" in w
+               and "example-linux" in w for w in warnings)
+    # the effort that wants it is named, so the warning is actionable
+    assert any("example-project/" in w for w in warnings if "deploy-book" in w)
+
+
+def test_a_delivering_skill_retires_the_warning():
+    r = _rig_wanting("deploy-book", delivered_by="write-deploy-book")
+    assert not any("delivers: deploy-book" in w
+                   for w in planner.skill_deploy_warnings(r, "example-linux"))
+
+
+def test_undelivered_warning_groups_by_term_not_by_effort():
+    """One line per missing term, listing every effort that wants it — so adding one skill
+    retires exactly one warning instead of N."""
+    from dataclasses import replace as _replace
+    r = _rig_wanting("runbook")
+    pg = r.graphs["example-project"]
+    second = _replace(pg.efforts[0], id="second-effort", deliverables=("runbook",))
+    pg.efforts = list(pg.efforts) + [second]
+    lines = [w for w in planner.skill_deploy_warnings(r, "example-linux")
+             if "delivers: runbook" in w]
+    assert len(lines) == 1
+    assert "second-effort" in lines[0] and lines[0].count("runbook") >= 2
+
+
 def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
     warnings = planner.skill_deploy_warnings(_connected_rig("example-linux"), "example-linux")
     assert warnings == []
