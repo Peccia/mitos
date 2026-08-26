@@ -37,6 +37,7 @@ targets:                     # List of compatible tools
 category: development        # Optional: organizational category (default: general)
 scope: global                # Optional: global (default) | project — see below
 requires_server: gws         # Optional: only deploy where this connection exists — see below
+delivers: deploy-book        # Optional: the expected deliverable this skill produces — see below
 ---
 
 # Instructions
@@ -56,6 +57,39 @@ manifest. The `scope:` frontmatter key picks which one:
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
   manifest's `skills:` key, never the shared directory. `mitos-agent` and `claude-app` have no
   project-scoped surface at all, so they ignore `scope` and stay global regardless.
+
+### Deliverable-producing skills: `delivers:`
+
+An effort in the knowledge graph declares its **expected deliverables** — the artifacts every
+implementation under it must yield. That declaration compiles into every harness's context as a
+line asking for them. `delivers:` names which of those terms a skill actually produces:
+
+```yaml
+delivers: deploy-book        # one term from the controlled deliverables vocabulary
+```
+
+This makes the pair checkable. `deploy --dry-run` warns when an effort declares a deliverable that
+**no skill on that machine knows how to produce** — otherwise an effort can ask for a deploy book,
+every harness can read the request, no skill anywhere describes how to write one, and the gap only
+surfaces months later as a missing deploy book.
+
+**One skill per deliverable**, never one skill for all of them. The vocabulary is meant to grow, so
+adding a deliverable should be an *addition* — a new file — rather than another edit to a file that
+keeps getting longer. Independent skills also mean a bad one produces a weak artifact instead of
+breaking the others.
+
+An unknown value fails the compile. A typo here is worse than a missing skill: the skill deploys,
+reads correctly, and satisfies nothing.
+
+The vocabulary itself is closed (`graph.KNOWN_DELIVERABLES`): `documentation`, `tests`, `changelog`,
+`deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`. Three of those are easy to
+confuse, so the boundary is fixed:
+
+| Term | Answers | Lifespan |
+|---|---|---|
+| `deploy-book` | How do I ship **this change**? Steps, order, verification, rollback | One release |
+| `runbook` | How do I **operate and troubleshoot** the result afterward? | Outlives the release |
+| `migration-notes` | What changed for **existing data and consumers**, and what must they do? | One release, different audience |
 
 ### Connection-bound skills: `requires_server:`
 

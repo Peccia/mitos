@@ -152,9 +152,34 @@ live in some watch.
 
 One structured field in this tab drives the org model — the **effort `Org domain` select**: it tags an effort (Work grouping) with the org domain that governs it — e.g. a `Steam Launch` effort tagged `marketing` inside an otherwise software-heavy project. The tag compiles into an org routing line under that effort's heading in the generated files, which is how a session knows to load `org-marketing` for that work and `org-software` for the rest. **Projects themselves are never bound to one org** — the manifest has no `org:` field; the association lives on the work.
 
+### Defaults, and the one warning the editor shows
+
+**`+ Work` starts with the project's default deliverables already ticked.** They resolve down a
+chain, and every level of it is a file that already existed:
+
+```
+the effort's own deliverables         ->  wins, always
+  otherwise: the project's default        registry/projects/<slug>.yaml
+    otherwise: the registry-wide default  registry/user.yaml
+```
+
+The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
+regardless of shape, which is what a silently inherited default should be. Override it per project
+with the same `default_deliverables:` key in the project manifest. Setting it to `[]` inherits
+*nothing*, which is a real answer and deliberately different from omitting the key. The console
+resolves the chain server-side and hands the editor the answer, so the UI can never drift from it.
+
+The editor shows one warning: **an effort that declares requirements coverage but no
+`requirements-receipt`**. That effort runs a requirements interview, and the receipt is what reports
+which of those requirements an implementation actually met — declare the interview without the
+receipt and that half of the loop closes quietly. Mitos cannot see settled requirements (they live
+in the agent's record, across the boundary), so declared coverage is the checkable proxy for "this
+effort gathers requirements". It is a warning, never a block: the registry-wide default deliberately
+omits the receipt, and the owner may have a reason.
+
 ### ✅ Expected deliverables on efforts
 
-The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
+The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
 
 ### 🔎 Requirements coverage on efforts
 
