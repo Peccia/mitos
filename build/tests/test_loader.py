@@ -1137,6 +1137,79 @@ def test_effort_org_domain_not_declared_by_any_skill_is_rejected():
     except RegistryError as e:
         assert "not-a-real-domain" in str(e)
 
+# ── default_deliverables: the chain a NEW effort inherits ────────────────────
+def _rig_with_defaults(user_val=..., project_val=...):
+    """A registry copy with default_deliverables set at either level. `...` means the key is
+    ABSENT, which is deliberately distinct from an empty list."""
+    import copy
+    rig = copy.deepcopy(reg)
+    if user_val is not ...:
+        rig.user = {**rig.user, "default_deliverables": user_val}
+    else:
+        rig.user = {k: v for k, v in rig.user.items() if k != "default_deliverables"}
+    if project_val is not ...:
+        rig.projects["example-project"] = {**rig.projects["example-project"],
+                                           "default_deliverables": project_val}
+    return rig
+
+
+def test_default_deliverables_project_wins_over_registry_wide():
+    """The chain's whole point: a project that names its own set does not inherit."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"],
+                             project_val=["changelog", "runbook"])
+    assert resolve_default_deliverables(rig, "example-project") == ("changelog", "runbook")
+
+
+def test_default_deliverables_falls_back_to_registry_wide():
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"])
+    assert resolve_default_deliverables(rig, "example-project") == ("documentation", "tests")
+
+
+def test_default_deliverables_empty_list_inherits_nothing():
+    """`default_deliverables: []` is a real answer — this project wants no defaults — and it
+    must NOT be confused with omitting the key, which inherits the registry-wide set. A falsy
+    test would collapse the two; the resolver checks `is None`."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"], project_val=[])
+    assert resolve_default_deliverables(rig, "example-project") == ()
+
+
+def test_default_deliverables_resolve_in_canonical_order():
+    """The console renders what it gets, so the resolver must hand back the same ordering the
+    graph would serialize — not the order someone happened to type in a YAML file."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["requirements-receipt", "tests", "documentation"])
+    assert resolve_default_deliverables(rig, "example-project") == \
+        ("documentation", "tests", "requirements-receipt")
+
+
+def test_unknown_default_deliverable_is_rejected_at_both_levels():
+    """A default is COPIED onto real efforts, so a typo here mints invalid efforts one at a
+    time from a file nobody looks at twice. Validate where it is authored, not where it lands."""
+    from agentic.loader import RegistryError, _validate
+    for kwargs, where in ((dict(user_val=["not-a-deliverable"]), "registry/user.yaml"),
+                          (dict(project_val=["not-a-deliverable"]), "example-project")):
+        try:
+            _validate(_rig_with_defaults(**kwargs))
+            raise AssertionError(f"expected RegistryError for {where}")
+        except RegistryError as e:
+            assert "not-a-deliverable" in str(e)
+            assert where in str(e)             # the file that needs editing is named
+            assert "documentation" in str(e)   # ...and the valid set
+
+
+def test_default_deliverables_must_be_a_list_of_strings():
+    from agentic.loader import RegistryError, _validate
+    for bad in ("documentation", [1, 2]):
+        try:
+            _validate(_rig_with_defaults(user_val=bad))
+            raise AssertionError(f"expected RegistryError for {bad!r}")
+        except RegistryError as e:
+            assert "default_deliverables" in str(e)
+
+
 def test_effort_unknown_deliverable_is_rejected():
     """A deliverable outside graph.KNOWN_DELIVERABLES fails _validate loudly, naming the value and
     the valid set — the same loudness as the org-domain check directly above it."""

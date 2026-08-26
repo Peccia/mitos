@@ -21,9 +21,15 @@ class _FakeReg:
 
 # ── user.yaml: load, merge, validation ───────────────────────────────────────
 def test_user_defaults_when_no_user_yaml_overlay():
+    """user.yaml holds two groups now — IDENTITY (the placeholders render expands) and
+    DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
+    a change to one group cannot be waved through as a change to the other."""
     treg, tmp = _temp_registry()
-    assert treg.user == {"given_name": "User", "full_name": "Mitos User",
-                         "email": "user@example.com", "location": "Your City, State"}
+    identity = {k: v for k, v in treg.user.items() if k != "default_deliverables"}
+    assert identity == {"given_name": "User", "full_name": "Mitos User",
+                        "email": "user@example.com", "location": "Your City, State"}
+    # documentation + tests: the two every kind of work owes regardless of shape
+    assert treg.user["default_deliverables"] == ["documentation", "tests"]
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()

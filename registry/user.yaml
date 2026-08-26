@@ -7,3 +7,10 @@ given_name: User
 full_name: Mitos User
 email: user@example.com
 location: Your City, State
+
+# The deliverables a NEW effort starts with when neither it nor its project names any.
+# documentation + tests are the two every kind of work owes regardless of shape, which is
+# what a silently inherited default should be. Override per project with the same key in
+# registry/projects/<slug>.yaml; an effort that declares its own set never reads either.
+# Valid terms are graph.KNOWN_DELIVERABLES; an unknown one fails the compile loudly.
+default_deliverables: [documentation, tests]

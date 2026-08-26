@@ -1977,6 +1977,11 @@ def graph_index(reg: Registry) -> list[dict]:
             "is_local": bool(proj.get("_is_local")),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),
+            # The deliverables a NEW effort under this project starts checked with —
+            # project manifest, else registry/user.yaml (loader.resolve_default_deliverables).
+            # Resolved server-side so the client never reimplements the chain.
+            "defaultDeliverables": list(
+                loader.resolve_default_deliverables(reg, slug)),
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,

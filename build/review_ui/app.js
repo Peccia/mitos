@@ -1584,8 +1584,13 @@ function buildRegistryPane(container, g) {
   const addEffortBtn = el("button", "ghost tiny", "+ Work");
   addEffortBtn.title = "Add a new effort grouping to this project";
   addEffortBtn.onclick = () => {
+    // A NEW effort starts with the project's resolved default deliverables. The server does
+    // the resolving (project manifest, else registry/user.yaml) and hands back the answer as
+    // g.defaultDeliverables, so the client never reimplements the chain and can never drift
+    // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "" } };
+                   vals: { id: "", name: "", description: "",
+                           deliverables: (g.defaultDeliverables || []).slice() } };
     renderRegistryRows(g);
   };
   head.append(addDocBtn, addEffortBtn);
@@ -2012,6 +2017,37 @@ function effortEditorCard(g) {
     coverGroup.append(lbl);
   }
   coverWrap.append(coverGroup); card.append(coverWrap); inputs.requirementsCoverage = coverBoxes;
+
+  // The half-closed-loop warning. An effort that declares requirements coverage runs a
+  // requirements interview, and its results come back as a `requirements-receipt` — the record
+  // carrying per-requirement outcomes keyed by the ids an export minted. Declare the interview
+  // but not the receipt and the gathering half of the loop closes quietly: work happens, and
+  // nothing reports on which requirements it actually met.
+  //
+  // Mitos cannot see settled requirements (they live in the agent's dossier, across the
+  // boundary), so declared COVERAGE is the checkable proxy for "this effort gathers
+  // requirements". It is a warning, never a block: the owner may have a reason, and the
+  // registry-wide default deliberately omits the receipt.
+  // .accept-note carries the theme-aware --warn colour the console already uses for
+  // advisory copy; no new class, so light/dark stay correct for free.
+  const receiptWarn = el("div", "accept-note");
+  const syncReceiptWarn = () => {
+    const wantsInterview = Object.values(coverBoxes).some((b) => b.checked);
+    const hasReceipt = !!(delivBoxes["requirements-receipt"]
+                          && delivBoxes["requirements-receipt"].checked);
+    const show = wantsInterview && !hasReceipt;
+    receiptWarn.textContent = show
+      ? "This effort gathers requirements but declares no requirements-receipt — nothing will "
+        + "report which of them the implementation actually met."
+      : "";
+    receiptWarn.hidden = !show;
+  };
+  for (const b of Object.values(coverBoxes)) b.addEventListener("change", syncReceiptWarn);
+  if (delivBoxes["requirements-receipt"]) {
+    delivBoxes["requirements-receipt"].addEventListener("change", syncReceiptWarn);
+  }
+  syncReceiptWarn();
+  card.append(receiptWarn);
 
   inputs.name.focus();
 

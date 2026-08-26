@@ -22,14 +22,36 @@ VALID_SKILL_SCOPES = {"global", "project"}
 # harness always did before this feature existed. See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
-# The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
-# the single source of truth for the personalization placeholders render.py expands
-# ({{user_given_name}}, {{users_given_name}}, {{user_full_name}}, {{user_email}},
-# {{user_location}}). A fixed, closed schema — unknown keys are rejected loudly rather
-# than silently ignored, the same posture as every other registry file.
-KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
+# The registry-wide user config (registry/user.yaml + registry/local/user.yaml overlay).
+# Two groups of settings, both resolved core-then-overlay with last-layer-wins:
+#
+#   IDENTITY — the personalization placeholders render.py expands ({{user_given_name}},
+#     {{users_given_name}}, {{user_full_name}}, {{user_email}}, {{user_location}}). These
+#     are the file's original and still primary contents.
+#   DEFAULTS — settings a project or an effort inherits when it names none of its own.
+#     `default_deliverables` is the first: the forward contract a new effort starts with.
+#     Widening this file beyond identity is deliberate and recorded here rather than left
+#     to be inferred; the alternative was a second registry-level config file for one key.
+#
+# Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
+# _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
+# placeholder expansion as {{user_default_deliverables}}.
+#
+# A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
+# the same posture as every other registry file.
+KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
+                   "default_deliverables"}
+# The subset of KNOWN_USER_KEYS whose value is a list, not a string.
+_USER_LIST_KEYS = {"default_deliverables"}
+# documentation + tests are the registry-wide default because they are the two every kind
+# of work owes regardless of shape, and a default inherited silently should fit everything
+# it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
+# inherits this set files no receipt, so the requirements half of the return lane would
+# close quietly — _validate does not fix that by overriding the owner's default, it is
+# surfaced as a warning where the declaration is made (see the console's effort editor).
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
-                 "email": "user@example.com", "location": "Your City, State"}
+                 "email": "user@example.com", "location": "Your City, State",
+                 "default_deliverables": ["documentation", "tests"]}
 
 # The structural anchor a skill extension splices under (render-time only — see
 # render.compose_skill_body). Fixed and order-independent: extensions land as new
@@ -225,6 +247,13 @@ def _load_user(dir_path: Path, label: str) -> dict:
         raise RegistryError(f"{label}: unknown key(s) {sorted(bad)} — known: "
                             f"{sorted(KNOWN_USER_KEYS)}")
     for k, v in data.items():
+        # Identity keys are strings; the DEFAULTS group is not. default_deliverables is a
+        # list, and its element types + vocabulary are checked in _validate (where the
+        # graph module is already imported) rather than duplicated here.
+        if k in _USER_LIST_KEYS:
+            if not isinstance(v, list):
+                raise RegistryError(f"{label}: {k!r} must be a list")
+            continue
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")
     return data
@@ -414,6 +443,45 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
         data["_is_local"] = is_local
         out[slug] = data
     return out
+
+
+def _validate_default_deliverables(names, label: str, graphmod) -> None:
+    """A `default_deliverables:` value, wherever it is authored. Absent is fine; a list of
+    known terms is fine; anything else fails loudly, naming the file and the valid set."""
+    if names is None:
+        return
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise RegistryError(
+            f"{label}: 'default_deliverables' must be a list of strings")
+    for n in names:
+        if n not in graphmod.KNOWN_DELIVERABLES:
+            raise RegistryError(
+                f"{label}: unknown default deliverable {n!r}; "
+                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
+
+
+def resolve_default_deliverables(reg: "Registry", slug: str) -> tuple[str, ...]:
+    """The deliverables a NEW effort under `slug` starts with, resolved down one chain:
+
+        the Work item's own deliverables   ->  wins, always (never reaches here)
+          otherwise: the project manifest      registry/projects/<slug>.yaml
+            otherwise: registry-wide           registry/user.yaml
+
+    Only the last two levels live here — an effort that declares its own deliverables never
+    consults a default at all. The chain is the same resolution order the skill-scope design
+    already uses (a project binding wins, the global default fills in), so there is one rule
+    to learn rather than two.
+
+    A project that sets `default_deliverables: []` inherits NOTHING, which is a real answer
+    and distinct from omitting the key; `is None` rather than a falsy test keeps them apart.
+    Ordering is canonical, so the console renders the same set the graph would serialize.
+    """
+    from . import graph as graphmod
+    proj = reg.projects.get(slug) or {}
+    names = proj.get("default_deliverables")
+    if names is None:
+        names = reg.user.get("default_deliverables") or []
+    return graphmod.order_deliverables(names)
 
 
 def _load_graphs(base: Path) -> dict:
@@ -631,6 +699,15 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"graph {slug}: effort {e.id!r} declares unknown coverage dimension "
                         f"{c!r}; valid: {', '.join(graphmod.KNOWN_COVERAGE)}")
+    # Default deliverable sets are validated against the SAME closed vocabulary as a
+    # declared one. A default is copied onto real efforts, so a typo here would mint
+    # invalid efforts one at a time from a file nobody looks at twice — validate it where
+    # it is authored, not where it lands.
+    _validate_default_deliverables(
+        reg.user.get("default_deliverables"), "registry/user.yaml", graphmod)
+    for slug, proj in reg.projects.items():
+        _validate_default_deliverables(
+            proj.get("default_deliverables"), f"project {slug}", graphmod)
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")
