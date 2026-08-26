@@ -247,6 +247,35 @@ def test_agents_md_without_assistant_target_never_leaks_org_routing():
                           if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
     assert "runs under the `marketing` org" in example_agents.content
 
+def test_coverage_line_renders_without_an_assistant_target():
+    """The never-gated decision, asserted at the PLANNER level rather than the renderer.
+
+    `_effort_coverage_line` takes no `org_routing` argument, so graph-level tests can only
+    show that the renderer never gates it. This asserts the property that actually matters:
+    on a real `claude-code + agents-md` machine with NO mitos-agent target — the shape
+    example-windows.yaml ships — the coverage line still reaches the deployed tree while the
+    org routing line beside it stays suppressed. The two lines sit under the same heading and
+    are one edit away from being gated together; that edit is what this test exists to catch.
+
+    Coverage names no skill to load, so it is descriptive metadata a coding harness benefits
+    from reading. Org routing issues an instruction ("load the `org-marketing` skill") that is
+    false on a machine where that skill was never deployed."""
+    from dataclasses import replace
+    rig = _full_windows_rig()          # agents-md + claude-code, no mitos-agent
+    pg = rig.graphs["example-project"]
+    pg.efforts = [replace(e, requirements_coverage=("performance", "security"))
+                  if e.id == "launch-prep" else e for e in pg.efforts]
+
+    outs = planner.plan_machine(rig, "example-windows")
+    # The RENDERED line, not the phrase: the builder context (registry/context/projects/mitos.md)
+    # documents this feature in prose and would otherwise match.
+    line = "_Requirements coverage: performance, security._"      # canonical order preserved
+    rendered = [o for o in outs if line in o.content]
+    assert rendered, "the coverage line must survive on a machine with no assistant target"
+    for o in rendered:
+        assert "runs under the `marketing` org" not in o.content   # ...while org routing stays gated
+
+
 def test_agentic_tree_valid():
     import copy
     from agentic.loader import _validate
