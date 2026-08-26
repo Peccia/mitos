@@ -857,7 +857,8 @@ def _project_file(reg: Registry, slug: str) -> Path:
     return reg.root / "registry" / sub / f"{slug}.yaml"
 
 
-_PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes"}
+_PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
+                            "default_deliverables"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -914,6 +915,24 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["repo"] = urls[0]
         else:
             updated["repo"] = urls
+    if "default_deliverables" in fields:
+        # An EMPTY list is a real answer — "this project inherits nothing" — and is deliberately
+        # distinct from omitting the key, which inherits the registry-wide set. `is None` rather
+        # than a falsy test is what keeps the two apart, here and in the resolver.
+        raw_dd = fields["default_deliverables"]
+        if raw_dd is None:
+            updated.pop("default_deliverables", None)
+        elif not isinstance(raw_dd, list):
+            return {"ok": False, "error": "default_deliverables must be a list"}
+        else:
+            from . import graph as graphmod
+            names = [str(n).strip() for n in raw_dd if str(n).strip()]
+            bad = [n for n in names if n not in graphmod.KNOWN_DELIVERABLES]
+            if bad:
+                return {"ok": False,
+                        "error": f"unknown default deliverable(s) {bad}; valid: "
+                                 f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
+            updated["default_deliverables"] = list(graphmod.order_deliverables(names))
     if "repo_notes" in fields:
         raw_notes = fields["repo_notes"] or {}
         if not isinstance(raw_notes, dict):
@@ -1983,6 +2002,12 @@ def graph_index(reg: Registry) -> list[dict]:
             # Resolved server-side so the client never reimplements the chain.
             "defaultDeliverables": list(
                 loader.resolve_default_deliverables(reg, slug)),
+            # The project's OWN key, separate from the resolved value above. `None` means the key
+            # is absent (inherit); a list — INCLUDING an empty one — means this project answered.
+            # Collapsing the two would make "inherits nothing" unauthorable.
+            "defaultDeliverablesOwn": (
+                None if proj.get("default_deliverables") is None
+                else list(graphmod.order_deliverables(proj["default_deliverables"]))),
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
@@ -2180,6 +2205,19 @@ def state(reg: Registry) -> dict:
         # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
         # term to the registry constant surfaces in the UI with no client edit.
         "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        # Which skill(s) declare `delivers: <term>` — the authoring-time answer to "does anything
+        # actually produce this?", so the effort editor can say so where the declaration is made.
+        # Registry-wide, deliberately NOT per machine: `deploy --dry-run` already reports the exact
+        # per-machine gap, and a badge that changed meaning with the status-bar machine selector
+        # would be read as the deploy check without being one.
+        "deliverable_skills": {
+            term: sorted(s.name for s in reg.skills.values() if s.delivers == term)
+            for term in graphmod.KNOWN_DELIVERABLES},
+        # The registry-wide default a project inherits when it names none. READ-ONLY here: it lives
+        # in registry/user.yaml, a file the owner edits directly, and inventing a candidate lane for
+        # one rarely-changed key would be more machinery than the edit is worth (invariant #10).
+        "registry_default_deliverables": list(
+            graphmod.order_deliverables(reg.user.get("default_deliverables") or [])),
         # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
         # checkbox group reads this the same way, for the same reason.
         "known_coverage": list(graphmod.KNOWN_COVERAGE),

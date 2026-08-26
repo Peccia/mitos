@@ -163,6 +163,18 @@ the effort's own deliverables         ->  wins, always
     otherwise: the registry-wide default  registry/user.yaml
 ```
 
+The Project panel edits the per-project level through the **same `kind: project` valve** every
+other manifest edit uses — an `inherit` checkbox plus a checkbox group, so all three states are
+authorable: inherit (key absent), an explicit set, or an explicit *empty* set meaning "inherit
+nothing". The registry-wide value is shown **read-only** beside the checkbox; it lives in
+`registry/user.yaml`, which the owner edits directly, and inventing a candidate lane for one
+rarely-changed key would be more machinery than the edit is worth.
+
+The effort editor also marks each deliverable with **which skill produces it** (hover), or
+`(no skill)` when nothing declares `delivers: <term>`. That badge is registry-wide on purpose:
+`deploy --dry-run` already reports the exact per-machine gap, and a badge that changed meaning with
+the status-bar machine selector would be read as that check without being it.
+
 The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
 regardless of shape, which is what a silently inherited default should be. Override it per project
 with the same `default_deliverables:` key in the project manifest. Setting it to `[]` inherits

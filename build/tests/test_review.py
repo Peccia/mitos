@@ -1872,3 +1872,89 @@ def test_run_deploy_apply_writes_files_and_updates_ops_state():
     # unknown machine is rejected before any lock is taken
     assert review.run_deploy_apply(treg, "no-such-machine") == \
         {"ok": False, "error": "unknown machine 'no-such-machine'"}
+
+
+
+# ── default_deliverables through the project-edit valve (batch 5c) ──────────
+def test_project_edit_proposes_a_default_deliverable_set():
+    """Per-project defaults go through the SHIPPED valve — a `kind: project` candidate — rather
+    than a second write path into the registry."""
+    import copy
+    from agentic import review
+    rig = copy.deepcopy(reg)
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": ["tests", "documentation"]})
+    assert out["ok"], out
+    assert out["id"]                       # a real inbox candidate, reviewed like any other
+
+
+def test_project_edit_orders_defaults_canonically():
+    import copy
+    from agentic import loader, review
+    rig = copy.deepcopy(reg)
+    review.propose_project_edit(rig, "example-project",
+                                {"default_deliverables": ["requirements-receipt", "tests"]})
+    # the trial validation mutates a COPY, so assert through the resolver on a hand-built manifest
+    rig.projects["example-project"] = {
+        **rig.projects["example-project"],
+        "default_deliverables": ["requirements-receipt", "tests"]}
+    assert loader.resolve_default_deliverables(rig, "example-project") == \
+        ("tests", "requirements-receipt")
+
+
+def test_project_edit_rejects_an_unknown_default_deliverable():
+    """A default is copied onto real efforts, so a typo would mint invalid ones from a form."""
+    import copy
+    from agentic import review
+    rig = copy.deepcopy(reg)
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": ["deployment-book"]})
+    assert not out["ok"]
+    assert "deployment-book" in out["error"] and "deploy-book" in out["error"]
+
+
+def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
+    """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
+    Collapsing them would make "this project wants no defaults" unauthorable."""
+    import copy
+    from agentic import loader, review
+    rig = copy.deepcopy(reg)
+    assert review.propose_project_edit(rig, "example-project",
+                                       {"default_deliverables": []})["ok"]
+    rig.projects["example-project"] = {**rig.projects["example-project"],
+                                       "default_deliverables": []}
+    assert loader.resolve_default_deliverables(rig, "example-project") == ()
+
+
+def test_sending_null_restores_inheritance():
+    """The console's `inherit` checkbox sends null to REMOVE the key, which is not the same as
+    sending an empty list."""
+    import copy
+    from agentic import review
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"] = {**rig.projects["example-project"],
+                                       "default_deliverables": ["tests"]}
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": None})
+    assert out["ok"], out
+
+
+def test_state_names_which_skill_produces_each_deliverable():
+    """The authoring-time answer to "does anything actually produce this?", shown where the
+    declaration is made. Registry-wide on purpose — `deploy --dry-run` owns the per-machine gap."""
+    from agentic import graph, review
+    m = review.state(reg)["deliverable_skills"]
+    # every term is present, so a term with NO producer is a visible empty list rather than a
+    # missing key the UI would have to guess at
+    assert set(m) == set(graph.KNOWN_DELIVERABLES)
+    assert m["requirements-receipt"] == ["requirements-receipt"]
+    assert m["deploy-book"] == ["deploy-book"]
+
+
+def test_state_exposes_the_registry_wide_default_read_only():
+    """Shown so an author can see what a project inherits. It lives in registry/user.yaml and is
+    edited there — inventing a candidate lane for one rarely-changed key would be more machinery
+    than the edit is worth."""
+    from agentic import review
+    st = review.state(reg)
+    assert st["registry_default_deliverables"] == ["documentation", "tests"]

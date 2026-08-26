@@ -768,6 +768,13 @@ function buildProjectPanel(container, g) {
     projectEditVals = {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
+      // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
+      // inherits nothing". Two different answers, and the absent case must not collapse to [].
+      // The server sends the absent case as JSON `null` — there is no `undefined` on the wire —
+      // so a `=== undefined` test reads null as "an explicit empty set" and silently turns
+      // inherit into inherit-nothing on the next save. `== null` catches both.
+      defaultDeliverables: g.defaultDeliverablesOwn == null
+        ? undefined : g.defaultDeliverablesOwn.slice(),
     };
     projectEditOpen = true;
     renderGraph();
@@ -840,6 +847,35 @@ function projectEditorCard(g) {
   }
   stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
 
+  // Default deliverables — what a NEW effort under this project starts checked with. Three
+  // states, not two: inherit (key absent), an explicit set, or an explicit EMPTY set meaning
+  // "inherit nothing". The checkbox toggles between inherit and explicit; the group under it
+  // authors the explicit case, and leaving every box unticked is the empty-set answer.
+  const ddWrap = el("div", "graph-field");
+  ddWrap.append(el("label", "", "Default deliverables for new work"));
+  const ddInherit = el("input"); ddInherit.type = "checkbox";
+  ddInherit.checked = vals.defaultDeliverables === undefined;
+  const inheritLbl = el("label", "target-check");
+  const regDefault = (STATE.registry_default_deliverables || []);
+  inheritLbl.append(ddInherit, document.createTextNode(
+    " inherit from registry/user.yaml" + (regDefault.length ? ` (${regDefault.join(", ")})` : " (none set)")));
+  ddWrap.append(inheritLbl);
+  const ddGroup = el("div", "target-checks");
+  const ddChecked = new Set(vals.defaultDeliverables || []);
+  const ddBoxes = {};
+  for (const name of (STATE.known_deliverables || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = ddChecked.has(name);
+    ddBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    ddGroup.append(lbl);
+  }
+  const syncDd = () => { ddGroup.hidden = ddInherit.checked; };
+  ddInherit.addEventListener("change", syncDd);
+  syncDd();
+  ddWrap.append(ddGroup); card.append(ddWrap);
+  inputs.ddInherit = ddInherit; inputs.ddBoxes = ddBoxes;
+
   // Repos — url + one-line description per row (repo_notes, keyed by checkout basename
   // server-side); add/remove rows freely, order doesn't matter to the manifest.
   const reposWrap = el("div", "graph-field");
@@ -889,6 +925,13 @@ function projectEditorCard(g) {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
+    if (inputs.ddInherit && !inputs.ddInherit.checked) {
+      fields.default_deliverables = (STATE.known_deliverables || [])
+        .filter((n) => inputs.ddBoxes[n] && inputs.ddBoxes[n].checked);
+    } else if (inputs.ddInherit) {
+      // null asks the server to REMOVE the key, restoring inheritance — distinct from sending []
+      fields.default_deliverables = null;
+    }
     save.disabled = true;
     try {
       const res = await fetch("/api/project/edit", {
@@ -1996,6 +2039,18 @@ function effortEditorCard(g) {
     const box = el("input"); box.type = "checkbox"; box.checked = delivChecked.has(name);
     delivBoxes[name] = box;
     lbl.append(box, document.createTextNode(" " + name));
+    // Does anything actually PRODUCE this? A declared deliverable no skill delivers is a contract
+    // nothing answers. Registry-wide on purpose: `deploy --dry-run` reports the exact per-machine
+    // gap, and a badge that changed with the machine selector would be read as that check without
+    // being it.
+    const producers = (STATE.deliverable_skills || {})[name] || [];
+    if (!producers.length) {
+      const warn = el("span", "muted", " (no skill)");
+      warn.title = "No skill declares `delivers: " + name + "` — nothing knows how to produce it.";
+      lbl.append(warn);
+    } else {
+      lbl.title = "Produced by: " + producers.join(", ");
+    }
     delivGroup.append(lbl);
   }
   delivWrap.append(delivGroup); card.append(delivWrap); inputs.deliverables = delivBoxes;
