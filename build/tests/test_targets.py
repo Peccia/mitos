@@ -2015,6 +2015,11 @@ def _rig_wanting(term: str, *, delivered_by: str | None = None):
     r = _connected_rig("example-linux")
     pg = r.graphs["example-project"]
     pg.efforts = [_replace(pg.efforts[0], deliverables=(term,))] + list(pg.efforts[1:])
+    # Drop whatever ships for this term. Otherwise the test asserts "no skill delivers X" while
+    # depending on X having no skill in the real registry — which stopped being true the moment
+    # the deliverable skills landed, and would keep breaking as more do.
+    for name in [n for n, s in r.skills.items() if s.delivers == term]:
+        del r.skills[name]
     if delivered_by:
         r.skills[delivered_by] = loader.Skill(
             name=delivered_by, rel=f"skills/{delivered_by}/SKILL.md",
@@ -2122,7 +2127,10 @@ def test_plan_claude_app_zip_bundles_resources_deterministically():
         "examples/sample.md": SkillResource(text="ex\n", rel="skills/gws/examples/sample.md"),
     }
     outs = planner.plan_machine(rig, "example-windows")
-    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip")
+    # by NAME: `next(...)` used to work only because gws was the sole claude-app skill, so
+    # this started picking whichever one sorts first the moment another shipped.
+    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip"
+                   and o.deploy_path.endswith("gws.zip"))
     assert zip_out.zip_members
     assert zip_out.zip_members["gws/SKILL.md"] == zip_out.content
     assert zip_out.zip_members["gws/examples/sample.md"] == "ex\n"
@@ -2138,6 +2146,9 @@ def test_plan_claude_app_zip_without_resources_uses_plain_zip_member():
     # zip_members stays empty so _payload falls back to zip_member+content.
     rig = _full_windows_rig()
     outs = planner.plan_machine(rig, "example-windows")
-    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip")
+    # by NAME: `next(...)` used to work only because gws was the sole claude-app skill, so
+    # this started picking whichever one sorts first the moment another shipped.
+    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip"
+                   and o.deploy_path.endswith("gws.zip"))
     assert zip_out.zip_members == {}
     assert zip_out.zip_member == "gws/SKILL.md"

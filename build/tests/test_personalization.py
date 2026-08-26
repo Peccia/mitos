@@ -132,16 +132,43 @@ def test_user_token_map_agrees_with_expand_placeholders():
 def test_machine_token_names_are_the_machine_scoped_tokens():
     """The console leaves these literal rather than prompting: a copied prompt goes to a
     chat app, not a machine deploy, so no machine's paths apply."""
-    assert set(render.machine_token_names()) == {"project_root", "skills_root"}
+    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root"}
 
 
 def test_state_exposes_both_token_sets():
     from agentic.review import state
     treg, _tmp = _temp_registry()
     st = state(treg)
-    assert set(st["machine_tokens"]) == {"project_root", "skills_root"}
+    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root"}
     # every advertised user token must carry a real value — the console substitutes blind
     assert all(v for v in st["user_tokens"].values())
+
+
+# ── {{returns_root}} (where a harness writes what it produced) ───────────────
+def test_returns_root_is_the_state_dir_a_harness_actually_reads():
+    """On a Mitos Agent machine this must be byte-for-byte the folder `mitos-agent returns`
+    reads — `<assistant_root>/.local-memory/returns` — or records land where nothing looks."""
+    from agentic import render
+    out = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
+                                     {"assistant_root": "~/MitosAgent"})
+    assert out == "write to ~/MitosAgent/.local-memory/returns/x.md"
+
+
+def test_returns_root_does_not_reuse_project_roots_fallback():
+    """A coding-only box has no Mitos Agent and no state dir. project_root would resolve to
+    projects_root there, putting records inside a path the harness's resolver never looks at
+    while LOOKING like it worked. A visibly separate directory beats a silently wrong one."""
+    from agentic import render
+    paths = {"projects_root": "C:/Projects"}
+    assert render.expand_placeholders(_FakeReg({}), "{{returns_root}}", paths) \
+        == "C:/Projects/.mitos-returns"
+    # ...and the two tokens genuinely differ on that machine
+    assert render.expand_placeholders(_FakeReg({}), "{{project_root}}", paths) == "C:/Projects"
+
+
+def test_returns_root_stays_literal_when_a_machine_defines_neither_path():
+    from agentic import render
+    assert render.expand_placeholders(_FakeReg({}), "{{returns_root}}", {}) == "{{returns_root}}"
 
 
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────

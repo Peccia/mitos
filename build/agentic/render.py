@@ -129,7 +129,7 @@ def rejoin_regions(carved: list[tuple[str, str]], src: str) -> str:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-_MACHINE_TOKENS = ("project_root", "skills_root")
+_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root")
 
 
 def _machine_value(paths: dict | None, key: str) -> str | None:
@@ -142,6 +142,18 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
     - `skills_root`: where deployed skills live — `<assistant_root>/skills` (matches the
       mitos-agent target's `skills.subdir` prefix; SOUL/skills/mcp share the install root
       with the tree).
+    - `returns_root`: where a coding harness writes what it produced, for the return lane.
+      On a machine hosting Mitos Agent this is its state directory's `returns/` — the exact
+      folder `mitos-agent returns` reads. On a coding-only box there is no such harness and
+      therefore no state directory, so it falls back to a machine-wide `.mitos-returns/`
+      beside the checkouts.
+
+      That fallback is a real seam and is documented as one: records written there are
+      correct and complete, but nothing on that box reads them, so the owner points
+      `mitos-agent returns --from` at the folder (or syncs it). Deliberately NOT reusing
+      `project_root`: it resolves to `projects_root` on a coding box, which would put the
+      records inside a path the harness's own resolver never looks at while LOOKING like it
+      had worked — a silently wrong path is worse than an obviously separate one.
     """
     if not paths:
         return None
@@ -154,6 +166,13 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
     if key == "skills_root":
         home = paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
+    if key == "returns_root":
+        home = paths.get("assistant_root")
+        if home:
+            # Must match mitos_agent.state.state_dir: <root>/.local-memory/, then returns/.
+            return f"{str(home).rstrip('/')}/.local-memory/returns"
+        projects = paths.get("projects_root")
+        return f"{str(projects).rstrip('/')}/.mitos-returns" if projects else None
     return None
 
 

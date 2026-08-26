@@ -69,7 +69,7 @@ that is not.
 
 ## 4. Write the record
 
-Write to **`{{project_root}}/.local-memory/returns/<run>/requirements-receipt.md`**.
+Write to **`{{returns_root}}/<run>/requirements-receipt.md`**.
 
 `<run>` is the run folder name. Use the one the owner gave you; if they gave none, use
 `<work-item-key>-<UTC timestamp>` in the form `northwind__narrative-pipeline-20260826T141530Z`.

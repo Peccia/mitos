@@ -25,16 +25,18 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     from agentic.review import prompt_index
 
     coding = _one_machine_rig(targets=["claude-code"])
-    shown = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
-    # The gate under test: gws targets claude-code but needs a store this machine lacks.
-    assert "gws" not in shown, f"an unwired connection must hide its skill: {shown}"
-    # ...while a skill that needs no connection is unaffected by it. requirements-receipt is
-    # the return lane's close-out and depends on nothing but the checkout it runs in.
-    assert shown == {"requirements-receipt"}, shown
-
+    unwired = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
     wired = _one_machine_rig(targets=["claude-code"], document_store="gws")
-    shown = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
-    assert shown == {"gws", "requirements-receipt"}, f"wiring the store reveals gws: {shown}"
+    connected = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
+
+    # The gate under test: gws targets claude-code but needs a store this machine lacks.
+    assert "gws" not in unwired, f"an unwired connection must hide its skill: {unwired}"
+    assert "gws" in connected, f"wiring the store reveals gws: {connected}"
+    # ...and it changes EXACTLY that one skill. Asserting the whole roster instead would break
+    # every time a skill ships and get rubber-stamped into a new set, which is how a real
+    # regression slips through; the gate is the behaviour, the roster is just today's content.
+    assert connected - {"gws"} == unwired
+    assert unwired, "skills needing no connection still deploy to a bare coding box"
 
     # nothing is dropped from the payload — the console's "All" chip still reveals them
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
