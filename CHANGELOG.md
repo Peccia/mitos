@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `requirements-receipt` (1.1.0): the skill now reads the export's **header fields** instead of scraping its title. A Mitos Agent export opens with a `---` block carrying `work`, `requirements` and `digest`, so the key the whole return lane joins on is a field rather than something lifted out of `# Requirements: <key>` — string interpretation at the one point the lane's parsing-not-interpretation claim is load-bearing. The harness is also told to copy `digest` into its record's `export_digest`, which is how an owner is told their requirements moved on after the document was handed over, and to **omit it rather than guess**: a wrong digest reports requirements as stale when they are not, and a warning that cries wolf is one nobody reads. The title fallback is documented and kept, because skills deploy per machine and a receipt written between the agent shipping and a machine being redeployed must still parse. **Redeploy each machine** for harnesses to pick this up.
+
 ### Fixed
 - Console: the effort editor never opened. `+ Work` and an effort row's `Edit` set the editor state and re-rendered, but the card itself threw while being built and vanished with the throw, so both buttons appeared to do nothing. `bindEnterToApply` walked every field the card had registered and called `addEventListener` on it — and a checkbox GROUP (expected deliverables, requirements coverage) registers itself as a plain `{name: checkbox}` map, which has no such method. Present since expected deliverables introduced the first checkbox group. It now binds only real elements.
 

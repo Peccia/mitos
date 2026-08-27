@@ -1,7 +1,7 @@
 ---
 name: requirements-receipt
 description: "After an implementation is complete, report per-requirement outcomes against the requirements document that was handed over, as a return record Mitos can read"
-version: 1.0.0
+version: 1.1.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
@@ -24,15 +24,33 @@ visible "no return filed". Both are honest. A record that half-parses is not.
 
 ## 1. Find the requirements document you built against
 
-It is the export the owner handed you — a Markdown document titled `# Requirements: <key>`
-whose requirements are bulleted with bracketed ids (`- [FR-1] …`). You need two things
-from it:
+It is the export the owner handed you. **Read its header, do not read its prose.** An
+export opens with a `---` block naming everything you need as fields:
 
-- the **work item key** from its title (e.g. `northwind__narrative-pipeline`)
-- every **requirement id** it lists
+```yaml
+---
+schema: mitos.export/1
+work: northwind__narrative-pipeline
+template: systems-design
+digest: sha256:9f2c1a...
+requirements: [FR-1, FR-2, NFR-1]
+---
+```
 
-If you cannot find that document, **stop and say so.** Do not invent ids: the whole loop
-closes on identifiers Mitos minted, and an id you made up joins to nothing.
+Take three things from it, verbatim:
+
+- `work` — the work item key. Copy it exactly; do not reconstruct it from a heading.
+- `requirements` — every id you must report on. This is the list you are accountable
+  for, and it is authoritative even if the document's body appears to hold more or fewer.
+- `digest` — copy it into your record's `export_digest` field. It is how the owner is told
+  their requirements moved on after this document was handed to you.
+
+**Older exports carry no header.** If the `---` block is absent, fall back to the title
+(`# Requirements: <key>`) for the work item key and to the bracketed ids in the body
+(`- [FR-1] …`) for the list, and omit `export_digest`. Do not guess a digest.
+
+If you cannot find that document at all, **stop and say so.** Do not invent ids: the whole
+loop closes on identifiers Mitos minted, and an id you made up joins to nothing.
 
 ## 2. Decide one outcome per requirement
 
@@ -86,6 +104,7 @@ delivers: requirements-receipt
 format: markdown
 run: northwind__narrative-pipeline-20260826T141530Z
 produced_by: claude-code
+export_digest: sha256:9f2c1a...
 ---
 
 ## Requirements
@@ -108,6 +127,9 @@ Rules the reader enforces, so getting these wrong means the record is refused:
 
 - The `---` header comes first, and `schema`, `work`, `delivers`, `format` are all required.
 - `produced_by` is the harness you are (`claude-code`, `antigravity`, …). Optional but useful.
+- `export_digest` is the `digest` you copied from the export's header, verbatim. Optional, and
+  **omit it rather than guess** — a wrong digest reports the owner's requirements as having moved
+  on when they have not, and a warning that cries wolf is one nobody reads.
 - Ids are **bracketed**: `[FR-1]`, not `FR-1`. This is why `NFR-1` is never read as `FR-1`.
 - One bullet per requirement, and **never the same id twice** — two verdicts for one id is
   refused rather than resolved by line order.
