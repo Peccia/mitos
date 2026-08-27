@@ -1879,9 +1879,8 @@ def test_run_deploy_apply_writes_files_and_updates_ops_state():
 def test_project_edit_proposes_a_default_deliverable_set():
     """Per-project defaults go through the SHIPPED valve — a `kind: project` candidate — rather
     than a second write path into the registry."""
-    import copy
     from agentic import review
-    rig = copy.deepcopy(reg)
+    rig, _tmp = _temp_registry()
     out = review.propose_project_edit(rig, "example-project",
                                       {"default_deliverables": ["tests", "documentation"]})
     assert out["ok"], out
@@ -1889,9 +1888,8 @@ def test_project_edit_proposes_a_default_deliverable_set():
 
 
 def test_project_edit_orders_defaults_canonically():
-    import copy
     from agentic import loader, review
-    rig = copy.deepcopy(reg)
+    rig, _tmp = _temp_registry()
     review.propose_project_edit(rig, "example-project",
                                 {"default_deliverables": ["requirements-receipt", "tests"]})
     # the trial validation mutates a COPY, so assert through the resolver on a hand-built manifest
@@ -1904,9 +1902,8 @@ def test_project_edit_orders_defaults_canonically():
 
 def test_project_edit_rejects_an_unknown_default_deliverable():
     """A default is copied onto real efforts, so a typo would mint invalid ones from a form."""
-    import copy
     from agentic import review
-    rig = copy.deepcopy(reg)
+    rig, _tmp = _temp_registry()
     out = review.propose_project_edit(rig, "example-project",
                                       {"default_deliverables": ["deployment-book"]})
     assert not out["ok"]
@@ -1916,9 +1913,8 @@ def test_project_edit_rejects_an_unknown_default_deliverable():
 def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
     """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
     Collapsing them would make "this project wants no defaults" unauthorable."""
-    import copy
     from agentic import loader, review
-    rig = copy.deepcopy(reg)
+    rig, _tmp = _temp_registry()
     assert review.propose_project_edit(rig, "example-project",
                                        {"default_deliverables": []})["ok"]
     rig.projects["example-project"] = {**rig.projects["example-project"],
@@ -1929,9 +1925,8 @@ def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
 def test_sending_null_restores_inheritance():
     """The console's `inherit` checkbox sends null to REMOVE the key, which is not the same as
     sending an empty list."""
-    import copy
     from agentic import review
-    rig = copy.deepcopy(reg)
+    rig, _tmp = _temp_registry()
     rig.projects["example-project"] = {**rig.projects["example-project"],
                                        "default_deliverables": ["tests"]}
     out = review.propose_project_edit(rig, "example-project",

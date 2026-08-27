@@ -166,9 +166,13 @@ names what it withheld and why. Set up the server first
 profile; both the wiring and the skill appear on the next deploy. See
 [connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
 
-**Your first deploy to a coding machine installs no skills, and that's expected.** Every
-skill that ships in core targets the agentic assistant, except `gws` — which stays off
-until you declare its connection. The skills lane is for *your* content: author one at
+**Your first deploy to a coding machine installs the seven deliverable skills.** Each one
+answers a term in the closed deliverables vocabulary an effort declares — `documentation`,
+`tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt` —
+and each targets every harness, so a workstation gets all seven. The remaining core skills
+are narrower: the three org skills need `mitos-agent` literally in `targets:` (above), and
+`gws` stays off until you declare its connection. Beyond those, the skills lane is for
+*your* content: author one at
 `registry/local/skills/<name>/SKILL.md` in your gitignored overlay, or from the console's
 **Skills & Orgs** tab (`python build/compile.py review` → **+ New skill**), which lands it
 in the same place through the inbox. Set its `targets:` to the harnesses you picked, and
@@ -254,6 +258,38 @@ Optionally, a target can *curate* its compatible set in one place via `include:`
 `skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
 [overlay configuration reference](registry/README.md).
 
+## The forward contract, and what comes back
+
+A tool that knows your context can still hand back a pile nobody can check. So an **effort** in the
+knowledge graph declares two contracts, both from closed vocabularies, both compiled into every
+harness's context:
+
+- **Expected deliverables** — the *forward* contract, what an implementation must produce:
+  `documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`,
+  `requirements-receipt`.
+- **Requirements coverage** — the *interview* contract, what a requirements-gathering session must
+  not leave unasked: `performance`, `security`, `failure-recovery`, `data-retention`,
+  `access-control`, `scale`.
+
+Mitos ships **one skill per deliverable**, seven in all, each declaring `delivers: <term>` and each
+deployed to every harness. That pairing is what makes the contract checkable: `deploy --dry-run`
+warns when an effort declares a deliverable no skill on that machine knows how to produce. A new
+effort starts with the deliverables its project declares, falling back to `default_deliverables` in
+`registry/user.yaml` — see [the overlay configuration reference](registry/README.md#default-deliverables).
+
+**This is the half most setups are missing, and it works by instruction, not extraction.** The
+usual approach scrapes a coding harness's transcript afterward and reconstructs what happened with
+a model, so the same run reads differently every time. Mitos already deploys skills *into* those
+harnesses, so the output is specified before the work starts. Each skill writes its record to
+`{{returns_root}}/<run>/` — a real directory resolved per machine — and
+[Mitos Agent](https://github.com/Peccia/mitos-agent) reads that folder back with `mitos-agent
+returns`, joined against the requirements it handed over.
+
+Two readers of one folder, neither writing the other's store: nothing in Mitos Agent goes near
+`registry/`, and nothing here writes its requirements record. Details in
+[authoring capabilities](docs/authoring-capabilities.md#deliverable-producing-skills-delivers) and
+[the operator console](docs/operator-console.md).
+
 ## Your first loop
 
 The daily rhythm Mitos is built around: **author once → deploy → a tool refines its copy →
@@ -264,11 +300,12 @@ with the `claude-code` target (see [Make it yours](#make-it-yours)).
 frontmatter names the tools it's for:
 
 ```yaml
-# registry/local/skills/changelog/SKILL.md
+# registry/local/skills/release-notes/SKILL.md
 ---
-name: changelog
-description: "Draft a release changelog from the git log"
+name: release-notes
+description: "Draft release notes from the git log"
 targets: [claude-code, mitos-agent]
+scope: project               # only the projects that bind it (global is the default)
 ---
 # ...your instructions...
 ```
@@ -279,7 +316,7 @@ checkout receives it (compatibility + binding — see
 
 ```yaml
 # registry/local/projects/acme.yaml
-skills: [changelog]
+skills: [release-notes]
 ```
 
 **3. Compile and preview.** Schema validation is the first test; `--dry-run` prints the plan
@@ -290,7 +327,7 @@ python build/compile.py compile
 python build/compile.py deploy --machine my-pc --dry-run
 ```
 
-**4. Deploy for real.** The skill lands at `<acme-checkout>/.claude/skills/changelog/SKILL.md`,
+**4. Deploy for real.** The skill lands at `<acme-checkout>/.claude/skills/release-notes/SKILL.md`,
 and Claude Code can use it:
 
 ```bash
@@ -315,7 +352,7 @@ python build/compile.py review     # accept the candidate in the Inbox tab
 # or: python build/compile.py adopt <path-to-the-edited-file>
 ```
 
-The edit flows back into `registry/local/skills/changelog/SKILL.md` — your authored source now
+The edit flows back into `registry/local/skills/release-notes/SKILL.md` — your authored source now
 reflects what the tool learned, and the next deploy carries it to **every** machine. Nothing was
 committed without you; the registry stayed the single source of truth. Every drift, conflict, and
 orphan case is mapped in [Managing your moat's state](docs/managing-state.md).

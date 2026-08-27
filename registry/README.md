@@ -48,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Your `given_name`/`full_name`/`email`/`location` — a flat mapping, field-level merged over the core's neutral defaults | field key |
+| `user.yaml` | Two groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) and registry-wide defaults (`default_deliverables`) | field key |
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
@@ -73,19 +73,34 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping — no nesting, no lists:
+A flat mapping in **two groups** — identity, and registry-wide defaults:
 
 ```yaml
+# IDENTITY — the personalization placeholders
 given_name: Paul
 full_name: Paul Peccia
 email: example@domain.com
 location: Buffalo, NY
+
+# DEFAULTS — what a new effort inherits when it names none of its own
+default_deliverables: [documentation, tests]
 ```
 
-All four keys are optional; an unset key falls back to the core `registry/user.yaml`
+Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`). Any key outside this exact set is a hard error at compile
-time — the schema is intentionally closed.
+`location: Your City, State`, `default_deliverables: [documentation, tests]`). Any key
+outside this exact set is a hard error at compile time — the schema is intentionally
+closed (`loader.KNOWN_USER_KEYS`).
+
+The four identity keys are **strings**. `default_deliverables` is a **list** — the one
+key here that is, validated against the closed deliverables vocabulary
+(`graph.KNOWN_DELIVERABLES`) exactly as a declared deliverable is, because a default is
+*copied* onto real efforts and a typo would otherwise mint invalid ones from a file
+nobody looks at twice. See [Default deliverables](#default-deliverables) below.
+
+**Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
+token list rather than this file's keys, so a defaults key can never leak into placeholder
+expansion as `{{user_default_deliverables}}`.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
 context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Paul's`,
@@ -107,6 +122,15 @@ deploying machine's `paths:` in `machines/<name>.yaml`:
   explain the skill mechanism with a real path (a skill is an instruction file to read,
   not a callable tool — models otherwise look for a tool named after the skill and
   declare it unavailable).
+- `{{returns_root}}` — where a coding harness writes what it produced, for the return
+  lane. On a machine hosting Mitos Agent: `<assistant_root>/.local-memory/returns`, the
+  exact folder `mitos-agent returns` reads. On a coding-only box there is no such harness
+  and no state directory, so it falls back to `<projects_root>/.mitos-returns`, read with
+  `mitos-agent returns --from`. It deliberately does **not** reuse `{{project_root}}`,
+  which falls back to `projects_root` there and would put records inside a path the
+  harness's own resolver never looks at *while looking like it had worked* — a silently
+  wrong path is worse than an obviously separate one. The seven shipped deliverable skills
+  write to `{{returns_root}}/<run>/<deliverable>.md`.
 
 On a machine that defines no matching path a machine token stays literal. Reversal on
 `adopt`/review-accept matches any machine's value, scoped as above to partials that
@@ -154,10 +178,42 @@ context:                      # label → registry-relative partial (must resolv
 | `skills` | no | Skills bound to *this project's* checkout (deployed to `<checkout>/.claude/skills/` or `.agents/skills/`). Each must exist **and** list `claude-code` or `antigravity` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
 | `prompts` | no | Prompts bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/commands/<name>.md`). Each must exist **and** list `claude-code` in its own `targets:`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
+| `default_deliverables` | no | The deliverables a **new effort under this project** starts with when it declares none of its own — the forward contract, prefilled in the console's `+ Work` editor. A list of terms from the closed deliverables vocabulary (`graph.KNOWN_DELIVERABLES`); an unknown one aborts compile. Omit the key to inherit the registry-wide default in `user.yaml`; set it to `[]` to inherit **nothing**, which is a real answer and deliberately distinct from omitting it. See [Default deliverables](#default-deliverables). |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
 > it replaces the core manifest wholesale (last-layer-wins) — useful for pointing a public example
 > project at your own repo without editing tracked files.
+
+### Default deliverables
+
+An effort's **expected deliverables** are the forward contract: the artifacts every
+implementation under it must yield. A new effort does not start empty — it starts with a
+set resolved down one chain, and every level of that chain is a file that already existed:
+
+```
+the effort's own deliverables         ->  wins, always
+  otherwise: the project's default        registry/projects/<slug>.yaml
+    otherwise: the registry-wide default  registry/user.yaml  ->  [documentation, tests]
+```
+
+This is the same resolution order the [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project)
+design uses — one rule to learn rather than two. `loader.resolve_default_deliverables`
+owns it, and the console resolves the chain server-side so no UI reimplements it.
+
+**`default_deliverables: []` inherits nothing**, and that is deliberately distinct from
+omitting the key. The resolver tests `is None`; a falsy test would collapse two different
+answers into one.
+
+Both levels validate against the same closed vocabulary a *declared* deliverable does,
+because a default is copied onto real efforts and a typo would otherwise mint invalid ones
+from a file nobody looks at twice.
+
+The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
+regardless of shape. Note what is deliberately **absent**: `requirements-receipt`. An
+effort that inherits this set files no receipt, so an effort declaring requirements
+coverage but no receipt gathers requirements that nothing will report on. The console
+surfaces that as a **warning**, never a block — see
+[the operator console](../docs/operator-console.md).
 
 ### Machine profile — `machines/<name>.yaml`
 
