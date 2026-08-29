@@ -11,7 +11,7 @@ Use this Documentation Map to navigate the guides and references:
 Understand how Mitos models your registry, handles tool configurations, and manages deployment states:
 
 - **[Overlay configuration reference](../registry/README.md)** — Detailed field-by-field reference for project manifests (`projects/<slug>.yaml`), machine profiles (`machines/<name>.yaml`), and server overrides (`connections/servers.yaml`).
-- **[Managing your moat's state](managing-state.md)** — How `deploy`, `adopt`, and `harvest` work under the hood, and how to resolve drift and conflicts.
+- **[Managing state & drift](managing-state.md)** — How `deploy`, `adopt`, and `harvest` work under the hood, and how to resolve drift and conflicts.
 - **[The tree-node header taxonomy](agents-md-structure.md)** — The reserved-section contract (`## Navigation`, `## Tools`, `## Skills`, connection sections) every deployed `AGENTS.md` follows, and the plan-time lint that enforces it.
 - **[Syncing across machines](lan-sync.md)** — Setting up `mitos sync` to carry your private context overlay across your fleet using git.
 
@@ -45,3 +45,16 @@ Take control of your registry, author custom capabilities, and select organizati
 - **[Operator console](operator-console.md)** — Running the local `review` console to reconcile proposals, curate knowledge graphs, and use the Prompt Library.
 - **[Authoring custom capabilities](authoring-capabilities.md)** — A guide to writing and binding custom Skills, Subagents, and Prompts in Mitos.
 - **[Organization templates](org-templates.md)** — Selecting and customizing default C-suite delegation models (Solo Assistant, Software Firm, Design Firm).
+
+---
+
+## ⚡ Essential daily commands
+
+| Task | Command |
+|---|---|
+| **Validate Registry** | `python build/compile.py compile` |
+| **Preview Deployment** | `python build/compile.py deploy --machine <name> --dry-run` |
+| **Deploy to Tools** | `python build/compile.py deploy --machine <name>` |
+| **Inspect Changes / Drift** | `python build/compile.py diff --machine <name>` |
+| **Adopt In-Place Edit** | `python build/compile.py adopt <path-to-file>` |
+| **Launch Web Console** | `python build/compile.py review` |

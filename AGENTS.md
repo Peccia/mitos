@@ -7,14 +7,14 @@ agent organization across tools. Mitos manages itself — this file is authored 
 and workflows before making structural changes.**
 
 ## What this repo is
-- `registry/` is the **moat**: the single, canonical home for all content — personas
+- `registry/` is the **single source of truth**: the canonical home for all content — personas
   (`identity/`), domain/project context (`context/`), skills (`skills/`), harness-agnostic
   prompts (`prompts/`), the knowledge graph (`graph/`, schema.org JSON-LD), project
   manifests (`projects/`), and org seed templates (`templates/`). `registry/local/`
   is the **Mitos overlay** (gitignored): a user's private identity/projects/graph/skills,
   loaded on top of the core by last-layer-wins so the same repo can go open source without
   leaking personal content.
-- `connections/` is the moat's **tools**: MCP server definitions + env templates.
+- `connections/` holds external **tools**: MCP server definitions + env templates.
   Deliberately NOT registry content — wiring doesn't compound and has no harvest
   story. It deploys on its own lane: `deploy --lane connections` touches only MCP
   wiring + env files; `--lane content` touches only prose (default `all` does both).

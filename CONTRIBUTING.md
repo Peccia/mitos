@@ -92,7 +92,7 @@ Run both checks with the venv interpreter (`build/.venv/bin/python`, or
 `build/.venv/Scripts/python.exe` on Windows):
 
 1. Create a feature branch from `main`.
-2. Ensure `build/.venv/bin/python build/tests/test_compiler.py` passes (179/179).
+2. Ensure `build/.venv/bin/python build/tests/test_compiler.py` passes all tests.
 3. Run `build/.venv/bin/python build/compile.py compile` to validate the registry schema.
 4. A new verb, target, or schema field lands **together with** its schema validation, its docs,
    and a test — or not at all (see the contribution rule in [`AGENTS.md`](AGENTS.md)).

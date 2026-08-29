@@ -173,12 +173,9 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
               f"`{store}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
     elif not is_agent:
-        # No connection, and every core skill but `gws` is mitos-agent-only — so this box's
-        # first deploy carries no skills at all. Say so, and point at the two ways to
-        # add one, rather than letting an empty skills directory read as a broken install.
-        print("\nNo connection declared, so nothing connection-bound deploys here yet. The "
-              "skills that ship in core are for the agentic assistant, so your first deploy "
-              "will not install any — add your own:")
+        print("\nYour first deploy will install the 7 standard deliverable skills "
+              "(documentation, tests, changelog, deploy-book, runbook, migration-notes, "
+              "requirements-receipt). You can add your own custom skills:")
         print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
         print("  - the console's Skills & Orgs tab: python build/compile.py review")
         print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "

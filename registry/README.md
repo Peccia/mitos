@@ -297,7 +297,7 @@ The context partial's `audience` does **not** need to include `claude-code` — 
 
 ### MCP server definitions — `connections/servers.yaml`
 
-Servers are the moat's **tools**, not registry content, so they live in `connections/` on their own
+Servers are external **tools**, not registry content, so they live in `connections/` on their own
 deploy lane — but the overlay can still override or add servers via
 `registry/local/connections/servers.yaml` (per-server last-layer-wins), which is why this file
 appears in the overlay map above. The canonical contract for each server's env/credentials/transport

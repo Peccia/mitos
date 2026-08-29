@@ -1,4 +1,4 @@
-# Managing your moat's state — deploy, drift & reconciliation
+# Managing state & drift — deploy, drift & reconciliation
 
 This is the core of Mitos. Your **registry** (`registry/` + your `registry/local/` overlay) is the
 single source of truth for everything an agent reads. **Deploy** materializes that truth into each
@@ -27,7 +27,7 @@ each one.
 ## The mental model
 
 ```
-registry/ (+ local/ overlay)        ← source of truth, the moat
+registry/ (+ local/ overlay)        ← single source of truth
         │  compile
         ▼
    dist/<machine>/                   ← rendered artifacts (disposable)
@@ -133,8 +133,8 @@ This is the exact plan from a first real deploy where the machine already had An
 deploy plan for windows-laptop (apply):
   [conflict ] ~/.gemini/config/mcp_config.json — untracked existing file  <-- protected, blocked
   [merge    ] ~/.gemini/config/config.json — exists
-  [unchanged] ~/.gemini/prompts/marketing.md — untracked existing file
-  [conflict ] ~/.gemini/prompts/idea-revision.md — untracked existing file  <-- will capture to inbox/, then overwrite
+  [unchanged] ~/.gemini/config/skills/gws/SKILL.md — untracked existing file
+  [conflict ] ~/.gemini/config/skills/changelog/SKILL.md — untracked existing file  <-- will capture to inbox/, then overwrite
   [conflict ] ~/ClaudeSkills/gws.zip — untracked existing file  <-- protected, blocked
   [create   ] C:/Projects/MyAssistant/AGENTS.md
   [create   ] C:/Projects/MyAssistant/Projects/apdict/AGENTS.md
@@ -151,9 +151,9 @@ Line by line:
   run is **refused** — nothing was written.
 - **`config.json` — merge.** Tool-owned; Mitos will splice only its MCP entries in and leave the
   rest of your Antigravity config alone. (A merge never blocks.)
-- **`dept-*.md` — unchanged (untracked).** Those files already match what Mitos would deploy, so
+- **`gws/SKILL.md` — unchanged (untracked).** Those files already match what Mitos would deploy, so
   there's nothing to do; they'll just be recorded in the lock.
-- **`idea-revision.md` — conflict, will capture+overwrite.** Differs, but its policy is `harvest`,
+- **`changelog/SKILL.md` — conflict, will capture+overwrite.** Differs, but its policy is `harvest`,
   so on a real run it would be snapshotted to `inbox/` and then overwritten — *not* a blocker.
 - **`gws.zip` — conflict, protected, blocked.** The second protected file. (Note: zips are exempt
   from capture, so `--force` would overwrite it without an `inbox/` snapshot.)
@@ -184,7 +184,7 @@ candidate in the console and `adopt` it to keep the improvement, or just let the
 **4. You edited a deployed file by hand (`drift`).** Same machinery. If it's a `protect` file the
 deploy blocks until you `adopt` it (keep your edit) or `--force` (discard it). `adopt` routes the
 edit back to the exact partial it came from — and if that partial is overridden by your overlay, the
-write lands in `registry/local/` (your private moat), not the public core.
+write lands in `registry/local/` (your private overlay), not the public core.
 
 **5. Both sides changed (`conflict`).** You edited the file *and* the registry moved. Treat it like
 #4: `adopt` to take the disk version, `--force` to take the registry version, or merge by hand.
