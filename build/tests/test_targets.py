@@ -2152,3 +2152,16 @@ def test_plan_claude_app_zip_without_resources_uses_plain_zip_member():
                    and o.deploy_path.endswith("gws.zip"))
     assert zip_out.zip_members == {}
     assert zip_out.zip_member == "gws/SKILL.md"
+
+
+def test_project_roster_block_aliases():
+    """project_roster_block emits [aliases: ...] between the slug and description."""
+    from agentic import render
+    projects = [
+        {"name": "Apdict", "slug": "apdict", "aliases": ["sensual predictions", "apdicts"],
+         "description": "Financial narrative processing"},
+        {"name": "Mitos", "slug": "mitos", "description": "Human-agentic harness"},
+    ]
+    roster = render.project_roster_block(projects)
+    assert "- `Projects/Apdict/` (apdict) [aliases: sensual predictions, apdicts] — Financial narrative processing" in roster
+    assert "- `Projects/Mitos/` (mitos) — Human-agentic harness" in roster

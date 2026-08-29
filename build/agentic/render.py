@@ -486,15 +486,20 @@ def skills_block(skills: list) -> str:
 def project_roster_block(projects: list) -> str:
     """The `<generated>` "## Project Roster" section for Projects/AGENTS.md: one bullet
     per project folder deployed in this tree, sourced from each manifest's `name`,
-    `slug`, and optional `description` — the single place that text lives (mirrors
-    skills_block, which does the same for skill descriptions)."""
+    `slug`, optional `aliases`, and optional `description` — the single place that text
+    lives (mirrors skills_block, which does the same for skill descriptions)."""
     if not projects:
         return ""
     lines = ["## Project Roster", ""]
     for proj in projects:
         name = proj.get("name") or proj.get("slug")
         desc = (proj.get("description") or "").strip()
-        entry = f"- `Projects/{name}/` ({proj.get('slug')})"
+        aliases = proj.get("aliases")
+        alias_part = ""
+        if aliases:
+            alias_str = ", ".join(aliases) if isinstance(aliases, list) else str(aliases)
+            alias_part = f" [aliases: {alias_str}]"
+        entry = f"- `Projects/{name}/` ({proj.get('slug')}){alias_part}"
         lines.append(entry + (f" — {desc}" if desc else ""))
     return "\n".join(lines) + "\n"
 

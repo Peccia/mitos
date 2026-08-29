@@ -696,6 +696,18 @@ def _validate(reg: Registry) -> None:
                 f"lane was retired (0.1.3 batch 1: skills already cover the reusable-"
                 f"behavior story, and Claude Code ships a built-in code-reviewer agent); "
                 f"remove 'agents:' from the manifest")
+        if "aliases" in proj:
+            aliases = proj["aliases"]
+            if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+                raise RegistryError(
+                    f"project {slug}: 'aliases' must be a list of strings")
+            for a in aliases:
+                if not a.strip():
+                    raise RegistryError(
+                        f"project {slug}: alias in 'aliases' cannot be empty")
+                if "]" in a or "_" in a:
+                    raise RegistryError(
+                        f"project {slug}: alias {a!r} contains invalid character (']' or '_')")
     from . import graph as graphmod
     for slug, pg in reg.graphs.items():
         for e in pg.efforts:

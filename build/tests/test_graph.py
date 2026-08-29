@@ -1274,3 +1274,36 @@ def test_propose_rejects_unknown_coverage_and_round_trips_valid_ones():
     effort = next(e for e in merged.efforts if e.id == "sprint-a")
     # canonical order, not the order it was proposed in
     assert effort.requirements_coverage == ("performance", "security")
+
+
+def test_effort_keywords_roundtrips_and_renders():
+    """CreativeWork keywords round-trips byte-identically through canonical_jsonld and renders."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    with_kw = graph.CreativeWork(id="fnp", name="Financial narrative processing", description="d",
+                                 is_part_of=proj_iri,
+                                 keywords="sensual predictions, apdicts")
+    without_kw = graph.CreativeWork(id="other", name="Other Effort", description="d",
+                                    is_part_of=proj_iri)
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[],
+        efforts=[with_kw, without_kw])
+    jsonld = graph.canonical_jsonld(pg)
+    assert '"keywords": "sensual predictions, apdicts"' in jsonld
+    # without_kw omits keywords field entirely (omit-when-absent)
+    assert jsonld.count('"keywords":') == 1
+
+    p = _write_graph(jsonld)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == jsonld
+        e = next(eff for eff in reloaded.efforts if eff.id == "fnp")
+        assert e.keywords == "sensual predictions, apdicts"
+    finally:
+        p.unlink()
+
+    line = "_Also known as: sensual predictions, apdicts._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)

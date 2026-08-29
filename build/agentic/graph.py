@@ -170,6 +170,7 @@ class CreativeWork:
                                         # requirements-gathering session must close before this
                                         # effort's requirements are exportable (the interview
                                         # contract). A tuple for the same reason as above.
+    keywords: str = ""    # schema:keywords — optional comma-separated tags/aliases
 
     @property
     def iri(self) -> str:
@@ -265,8 +266,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...], tuple[str, ...]]] = []
-    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage)
+    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...], tuple[str, ...], str]] = []
+    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage, keywords)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -302,12 +303,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                 str(o) for o in g.objects(subj, URIRef(DELIVERABLE_PRED)))
             cover_vals = order_coverage(
                 str(o) for o in g.objects(subj, URIRef(REQ_COVERAGE_PRED)))
+            keywords_val = g.value(subj, SDO("keywords"))
+            keywords = str(keywords_val) if keywords_val is not None else ""
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
                                 str(goal_val) if goal_val is not None else "",
-                                deliv_vals, cover_vals))
+                                deliv_vals, cover_vals, keywords))
 
-    effort_iris = {iri for iri, _, _, _, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -360,7 +363,7 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal, deliverables, coverage in raw_efforts:
+    for iri, name, desc, org_domain, goal, deliverables, coverage, keywords in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
@@ -368,7 +371,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                                     org_domain=org_domain,
                                     goal=goal,
                                     deliverables=deliverables,
-                                    requirements_coverage=coverage))
+                                    requirements_coverage=coverage,
+                                    keywords=keywords))
 
     return projects, docs, efforts
 
@@ -457,6 +461,8 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
         if e.requirements_coverage:
             # Same shape and same reasoning as deliverables above.
             effort_node[REQ_COVERAGE_PRED] = list(e.requirements_coverage)
+        if e.keywords:
+            effort_node["keywords"] = e.keywords
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -664,6 +670,14 @@ def _effort_deliverables_line(e: CreativeWork) -> list[str]:
     return [f"_Expected deliverables: {', '.join(e.deliverables)}._", ""]
 
 
+def _effort_keywords_line(e: CreativeWork) -> list[str]:
+    """The alias line under an effort's heading (schema:keywords on CreativeWork):
+    names alternative phrases or aliases that route to this effort."""
+    if not e.keywords:
+        return []
+    return [f"_Also known as: {e.keywords}._", ""]
+
+
 def _conn_heading(pg: ProjectGraph, heading: str | None) -> str:
     """The connection-section title for a project's document block. `heading` is the bound
     store's stable label (`<Name> (`key`)`, from the planner); falls back to
@@ -719,6 +733,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             lines += _effort_goal_line(e)
             lines += _effort_deliverables_line(e)
             lines += _effort_coverage_line(e)
+            lines += _effort_keywords_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
             else:

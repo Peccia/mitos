@@ -1703,11 +1703,56 @@ def test_effort_valid_coverage_passes_validation():
     import copy
     from dataclasses import replace as _replace
 
-    from agentic.loader import _validate
-    from agentic import graph
-    rig = copy.deepcopy(reg)
-    pg = rig.graphs["example-project"]
-    pg.efforts = [_replace(pg.efforts[0],
-                           requirements_coverage=graph.KNOWN_COVERAGE[:2])] \
-        + list(pg.efforts[1:])
     _validate(rig)          # must not raise
+
+
+def test_project_aliases_validation():
+    """Project aliases must be a list of non-empty strings, free of ']' and '_'."""
+    import copy
+    from agentic.loader import RegistryError, _validate
+    rig = copy.deepcopy(reg)
+    slug = "example-project"
+
+    # Non-list fails
+    rig.projects[slug]["aliases"] = "not a list"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for non-list aliases")
+    except RegistryError as e:
+        assert "'aliases' must be a list of strings" in str(e)
+
+    # Non-string item fails
+    rig.projects[slug]["aliases"] = [123]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for non-string alias")
+    except RegistryError as e:
+        assert "'aliases' must be a list of strings" in str(e)
+
+    # Empty string alias fails
+    rig.projects[slug]["aliases"] = [""]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty alias")
+    except RegistryError as e:
+        assert "alias in 'aliases' cannot be empty" in str(e)
+
+    # Alias containing ']' fails
+    rig.projects[slug]["aliases"] = ["bad]alias"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for alias with ']'")
+    except RegistryError as e:
+        assert "contains invalid character" in str(e)
+
+    # Alias containing '_' fails
+    rig.projects[slug]["aliases"] = ["bad_alias"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for alias with '_'")
+    except RegistryError as e:
+        assert "contains invalid character" in str(e)
+
+    # Valid aliases list passes
+    rig.projects[slug]["aliases"] = ["sensual predictions", "apdicts"]
+    _validate(rig)
