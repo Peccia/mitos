@@ -125,6 +125,14 @@ repo onto its branch and fast-forwards an existing clean one; a dirty, detached,
 is left exactly as it is and reported. The harness only ever reads these files; it never writes,
 commits, or runs git in them. So `deploy` is also how project source is kept current for planning.
 
+If this machine authenticates different repos with different deploy keys (e.g. per-repo GitHub
+deploy keys rather than one account-wide key), set `repo_ssh_keys:` alongside `repo:`/`repo_branches:`
+— a mapping of checkout basename to private key (bare filename or path). A bare filename resolves to
+`~/.ssh/<name>` on whichever machine runs the clone, so the same manifest entry works everywhere that
+machine keeps a matching-named key. Without it, `deploy` uses whatever identity is ambient (ssh-agent
+or the default `~/.ssh` key) — the same identity for every repo, which is what breaks when a repo's
+access is scoped to its own deploy key.
+
 ## Retirement note
 
 The `hermes` target it replaced merged eleven owned keys into a third-party `config.yaml` (an

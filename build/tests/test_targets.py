@@ -865,7 +865,7 @@ def test_clone_is_idempotent_and_nondestructive():
     from agentic.planner import plan_clones
     calls: list = []
 
-    def fake_clone(repo, dest, branch=""):
+    def fake_clone(repo, dest, branch="", ssh_key=""):
         calls.append(repo)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / ".git").write_text("fake", encoding="utf-8")
@@ -896,7 +896,7 @@ def test_clone_failure_is_reported_not_fatal():
     from agentic.io import safe_rel
     from agentic.planner import plan_clones
 
-    def failing_clone(repo, dest, branch=""):
+    def failing_clone(repo, dest, branch="", ssh_key=""):
         return 1, "fatal: could not read Username (auth)"
 
     dest_rel = safe_rel(plan_clones(reg, "example-windows")[0].dest)

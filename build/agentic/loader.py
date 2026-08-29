@@ -821,6 +821,30 @@ def _validate(reg: Registry) -> None:
                 if not isinstance(val, str) or not val.strip():
                     raise RegistryError(
                         f"project {slug}: repo_branches[{key!r}] must be a non-empty string")
+        # `repo_ssh_keys:` (optional): the private key to authenticate a repo's clone/pull
+        # with, keyed by checkout basename — same identity/validation as `repo_notes:`/
+        # `repo_branches:`. Absent = the ambient default git/ssh identity. A bare filename
+        # resolves to `~/.ssh/<name>` on whichever machine runs the clone (agentic.sshkey),
+        # so the SAME manifest entry works across every machine that carries that key under
+        # that name — no per-machine config needed.
+        keys_raw = proj.get("repo_ssh_keys")
+        if keys_raw is not None and keys_raw != {}:
+            if not isinstance(keys_raw, dict):
+                raise RegistryError(f"project {slug}: 'repo_ssh_keys' must be a mapping "
+                                    f"of repo basename to a key name/path")
+            known_basenames = {
+                _repo_basename(u) for u in (
+                    repo_raw if isinstance(repo_raw, list)
+                    else ([repo_raw] if isinstance(repo_raw, str) and repo_raw.strip()
+                          else []))}
+            for key, val in keys_raw.items():
+                if key not in known_basenames:
+                    raise RegistryError(
+                        f"project {slug}: repo_ssh_keys key {key!r} does not match any "
+                        f"'repo' checkout basename; known: {sorted(known_basenames)}")
+                if not isinstance(val, str) or not val.strip():
+                    raise RegistryError(
+                        f"project {slug}: repo_ssh_keys[{key!r}] must be a non-empty string")
         for mname, raw in (proj.get("local_path") or {}).items():
             if mname not in reg.machines:
                 raise RegistryError(

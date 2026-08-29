@@ -361,6 +361,135 @@ def test_repo_branches_threads_into_clonespec():
     spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
     assert spec.branch == ""
 
+def test_repo_ssh_keys_validates_against_checkout_basenames():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "git@github.com:example/thing.git"
+    # a key keyed by a basename that isn't one of the project's repos → loud error
+    rig.projects["example-project"]["repo_ssh_keys"] = {"nope": "id_github_thing"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown repo_ssh_keys key")
+    except RegistryError as e:
+        assert "does not match any 'repo' checkout basename" in str(e)
+    # a valid basename + a non-empty key name validates cleanly
+    rig.projects["example-project"]["repo_ssh_keys"] = {"thing": "id_github_thing"}
+    _validate(rig)
+    # an empty key value is rejected
+    rig.projects["example-project"]["repo_ssh_keys"] = {"thing": ""}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty ssh key")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_repo_ssh_keys_threads_into_clonespec():
+    import copy
+    from agentic.planner import plan_clones
+    rig = copy.deepcopy(reg)
+    rig.projects["mitos"]["repo_ssh_keys"] = {"mitos": "id_github_mitos"}
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.ssh_key == "id_github_mitos"
+    # a project without a repo_ssh_keys entry carries an empty key (ambient default identity)
+    rig.projects["mitos"].pop("repo_ssh_keys")
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.ssh_key == ""
+
+def test_git_clone_pins_core_ssh_command_for_the_chosen_key():
+    """`_git_clone` passes `-c core.sshCommand=...` on the clone itself (so the network call
+    authenticates with the right key) and persists it on the checkout afterwards (so later
+    pulls, including a bare cron `git pull`, keep using it without mitos re-stating it)."""
+    import tempfile
+    from agentic import commands
+    git_clone = commands._real_git_clone
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        return 0, "", ""
+
+    tmp = Path(tempfile.mkdtemp(prefix="ae-sshkey-"))
+    dest = tmp / "y"
+    # a real file so the ssh-key-exists preflight check passes and the clone actually proceeds
+    key_file = tmp / "id_github_y"
+    key_file.write_text("fake key", encoding="utf-8")
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        rc, err = git_clone("git@github.com:x/y.git", dest, ssh_key=str(key_file))
+        assert rc == 0 and err == ""
+        clone_call = calls[0]
+        assert clone_call[0] == "-c" and "core.sshCommand=" in clone_call[1]
+        assert key_file.as_posix() in clone_call[1]
+        assert "clone" in clone_call
+        # persisted onto the checkout for future pulls
+        config_call = calls[-1]
+        assert config_call[:2] == ["config", "core.sshCommand"]
+    finally:
+        commands._git = orig
+
+def test_git_clone_reports_missing_key_file_without_touching_the_network():
+    """A `repo_ssh_keys:` entry naming a file this machine doesn't have fails fast with a
+    named path — never git's cryptic 'Permission denied (publickey)' / '...and the repository
+    exists.' after a real network round-trip."""
+    import tempfile
+    from agentic import commands
+    git_clone = commands._real_git_clone
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        return 0, "", ""
+
+    dest = Path(tempfile.mkdtemp(prefix="ae-sshkey-")) / "y"
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        rc, err = git_clone("git@github.com:x/y.git", dest,
+                            ssh_key="definitely-not-a-real-key-9d3f1a")
+        assert rc != 0
+        assert "ssh key not found" in err and ".ssh" in err
+        assert calls == []   # no git invocation at all — failed before touching the network
+    finally:
+        commands._git = orig
+
+def test_git_pull_reconciles_ssh_key_before_fetching():
+    """`_git_pull` reconciles the checkout's `core.sshCommand` with `repo_ssh_keys:` before any
+    fetch, so a key changed (or removed) in the manifest takes effect on the very next deploy."""
+    import tempfile
+    from agentic import commands
+    git_pull = commands._real_git_pull
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        if args[:1] == ["status"]:
+            return 0, "", ""
+        if args[:1] == ["symbolic-ref"]:
+            return 0, "main", ""
+        if args[:1] == ["rev-parse"]:
+            return 0, "origin/main", ""
+        return 0, "", ""
+
+    # a real file so the ssh-key-exists check passes and the pull actually proceeds
+    key_file = Path(tempfile.mkdtemp(prefix="ae-sshkey-")) / "id_github_mitos"
+    key_file.write_text("fake key", encoding="utf-8")
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        outcome, detail = git_pull(Path("x"), "main", str(key_file))
+        assert outcome == "pulled"
+        assert calls[0][:2] == ["config", "core.sshCommand"]
+        assert key_file.as_posix() in calls[0][2]
+        # no key configured → the checkout's core.sshCommand is cleared, not left stale
+        commands._git = fake_git
+        calls.clear()
+        git_pull(Path("x"), "main", "")
+        assert calls[0] == ["config", "--unset", "core.sshCommand"]
+    finally:
+        commands._git = orig
+
 def test_git_pull_is_fast_forward_only_and_nondestructive():
     """_git_pull refuses to touch a dirty or diverged checkout — it only ever fast-forwards
     a clean, tracking branch. Driven by a stubbed `_git` so no real repo is needed."""

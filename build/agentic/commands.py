@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 from ruamel.yaml import YAML
 
-from . import loader, lockfile, render, selfdoc
+from . import loader, lockfile, render, selfdoc, sshkey
 from .io import (dump_json, expand, safe_rel, sha256, write_bytes, write_text,
                  zip_bytes, zip_bytes_multiple)
 from .loader import Registry
@@ -371,26 +371,59 @@ def _git(args: list[str], *, cwd: Path | None = None,
     return proc.returncode, (proc.stdout or "").strip(), (tail[-1] if tail else "")
 
 
-def _git_clone(repo: str, dest: Path, branch: str = "") -> tuple[int, str]:
-    """Clone `repo` into `dest`, optionally onto `branch`. A FULL clone, not shallow: these
-    are working checkouts, and a `--depth 1` clone is implicitly single-branch (fetch refspec
-    pinned to the default branch), which silently breaks `git checkout <other-branch>` later.
+def _apply_ssh_key(dest: Path, ssh_key: str) -> str:
+    """Persist `ssh_key` (a `repo_ssh_keys:` entry) as this checkout's `core.sshCommand`, so
+    every future fetch/pull on it — even a bare cron `git pull` — authenticates with the right
+    key; clearing it when unset keeps the manifest the single source of truth. Mirrors
+    `sync/git.py`'s `_apply_ssh_key`, but reports rather than raises (deploy failures are never
+    fatal). Returns a warning when the named key file doesn't exist on this machine, else ""."""
+    cmd = sshkey.ssh_command(ssh_key)
+    if cmd is None:
+        _git(["config", "--unset", "core.sshCommand"], cwd=dest)
+        return ""
+    _git(["config", "core.sshCommand", cmd], cwd=dest)
+    key = sshkey.resolve_key_path(ssh_key)
+    if not key.exists():
+        return (f"ssh key not found at {key.as_posix()} (from repo_ssh_keys: {ssh_key!r}) — "
+                f"clone/pull will fail to authenticate")
+    return ""
+
+
+def _git_clone(repo: str, dest: Path, branch: str = "", ssh_key: str = "") -> tuple[int, str]:
+    """Clone `repo` into `dest`, optionally onto `branch` and authenticating with `ssh_key` (a
+    `repo_ssh_keys:` entry — bare filename or path, resolved by `agentic.sshkey`; "" = the
+    ambient default identity). A FULL clone, not shallow: these are working checkouts, and a
+    `--depth 1` clone is implicitly single-branch (fetch refspec pinned to the default branch),
+    which silently breaks `git checkout <other-branch>` later.
     Returns (returncode, error-tail). Module-level so tests can substitute it."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    args = ["clone"]
+    cmd = sshkey.ssh_command(ssh_key)
+    if cmd:
+        key = sshkey.resolve_key_path(ssh_key)
+        if not key.exists():
+            return 1, (f"ssh key not found at {key.as_posix()} "
+                       f"(from repo_ssh_keys: {ssh_key!r})")
+    args = (["-c", f"core.sshCommand={cmd}"] if cmd else []) + ["clone"]
     if branch:
         args += ["--branch", branch]
     args += [repo, str(dest)]
     rc, _out, err = _git(args)
+    if rc == 0 and cmd:
+        _git(["config", "core.sshCommand", cmd], cwd=dest)   # persist for future pulls
     return rc, ("" if rc == 0 else (err or "git clone failed"))
 
 
-def _git_pull(dest: Path, branch: str = "") -> tuple[str, str]:
+def _git_pull(dest: Path, branch: str = "", ssh_key: str = "") -> tuple[str, str]:
     """Fast-forward an existing checkout to its upstream — read-only-ish and NON-destructive
     (design rule #8). Never resets, stashes, checks out over local work, or force-updates.
     Skips (with a reason) when the tree is dirty, detached, on a different branch than the
     manifest names, has no upstream, or has diverged. Returns (outcome, detail) where outcome
     is one of 'pulled' | 'skipped' | 'failed'."""
+    # Reconcile the checkout's key with the manifest before touching the network — repo_ssh_keys
+    # may have changed (or a key file may be missing) since the last deploy.
+    warning = _apply_ssh_key(dest, ssh_key)
+    if warning:
+        return "failed", warning
     # A dirty working tree is the owner's — never touch it.
     rc, out, err = _git(["status", "--porcelain"], cwd=dest)
     if rc != 0:
@@ -550,6 +583,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
               f"fast-forwarded, never reset):")
         for c in clones:
             onto = f" @{c.branch}" if c.branch else ""
+            onto += f" (key: {c.ssh_key})" if c.ssh_key else ""
             here = "present -> fast-forward if clean" \
                 if _checkout_present(_dest(c.dest, root)) else "absent -> will clone"
             print(f"  [clone    ] {c.dest}{onto} — {here}")
@@ -660,7 +694,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
     for c in clones:
         dest = _dest(c.dest, root)
         if _checkout_present(dest):
-            outcome, detail = _git_pull(dest, c.branch)
+            outcome, detail = _git_pull(dest, c.branch, c.ssh_key)
             if outcome == "pulled":
                 pulled += 1
                 print(f"  pulled {c.slug} ({detail}) <- upstream")
@@ -671,7 +705,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
                 clone_failed += 1
                 print(f"  pull failed for {c.slug}: {detail} — reported, not fatal")
             continue
-        rc_c, err = _git_clone(c.repo, dest, c.branch)
+        rc_c, err = _git_clone(c.repo, dest, c.branch, c.ssh_key)
         if rc_c == 0:
             cloned += 1
             onto = f" (branch {c.branch})" if c.branch else ""

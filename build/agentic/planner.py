@@ -323,6 +323,7 @@ class CloneSpec:
     repo: str          # git URL from the manifest
     dest: str          # POSIX checkout dir — under agentic_context_root or local_path
     branch: str = ""   # branch to check out / fast-forward (repo_branches:); "" = default
+    ssh_key: str = ""  # private key to auth with (repo_ssh_keys:); "" = ambient default identity
 
 
 def _project_repos(proj: dict) -> list[str]:
@@ -351,6 +352,12 @@ def _repo_branch(proj: dict, basename: str) -> str:
     """The branch to check out for a repo, keyed by checkout basename (`repo_branches:`).
     Empty string means the repo's default branch."""
     return str((proj.get("repo_branches") or {}).get(basename, "")).strip()
+
+
+def _repo_ssh_key(proj: dict, basename: str) -> str:
+    """The private key to authenticate with for a repo, keyed by checkout basename
+    (`repo_ssh_keys:`). Empty string means the ambient default git/ssh identity."""
+    return str((proj.get("repo_ssh_keys") or {}).get(basename, "")).strip()
 
 
 def _reg_root_norm(reg: Registry) -> str:
@@ -385,7 +392,8 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
         for repo in _project_repos(proj):
             bn = _repo_basename(repo)
             specs.append(CloneSpec(slug=slug, repo=repo, dest=f"{parent}/{bn}",
-                                   branch=_repo_branch(proj, bn)))
+                                   branch=_repo_branch(proj, bn),
+                                   ssh_key=_repo_ssh_key(proj, bn)))
         return specs
 
     out: list[CloneSpec] = []
