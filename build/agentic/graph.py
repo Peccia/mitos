@@ -693,7 +693,10 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
         groups[e.iri] = []
     for d in _by_recency(pg.documents):
         groups.setdefault(d.is_part_of or "", []).append(d)
-    has_efforts = any(len(v) > 0 for k, v in groups.items() if k)
+    # An effort is worth rendering for its own declared contract, not only for the documents it
+    # happens to hold — see `_doc_block`. Empty-but-declared still renders, with an explicit
+    # "no documents" note beneath it rather than silent absence.
+    has_efforts = bool(pg.efforts)
     return groups, has_efforts
 
 
@@ -714,7 +717,13 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
     if emit_heading:
         lines += [f"{h} {heading}", ""]
     lines += [intro, ""]
-    if not pg.documents:
+    # No documents AND no efforts is the only case with nothing to say. An effort with no
+    # documents mapped yet still carries its goal, its expected deliverables and its requirements
+    # coverage — the forward and interview contracts a coding harness reads — plus the stable id a
+    # downstream record keys on. Those are declared in the graph, not derived from documents, so
+    # gating them on a document existing hid a project's whole contract until somebody mapped a
+    # file to it, while the deliverables line is documented as ungated in EVERY generated view.
+    if not pg.documents and not pg.efforts:
         lines.append("_No documents mapped yet._")
         return "\n".join(lines).rstrip("\n") + "\n"
 

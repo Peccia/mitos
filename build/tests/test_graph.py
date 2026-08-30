@@ -1307,3 +1307,37 @@ def test_effort_keywords_roundtrips_and_renders():
     assert line in graph.project_index_markdown(pg)
     assert line in graph.project_details_markdown(pg)
     assert line in graph.project_full_markdown(pg)
+
+
+def test_an_effort_with_no_documents_still_renders_its_contract():
+    """An effort's goal, expected deliverables and requirements coverage are DECLARED in the
+    graph, not derived from its documents — and the deliverables line is documented as ungated,
+    in every generated view. Two guards used to hide them until somebody mapped a file to the
+    effort: `_doc_block` returned early on `not pg.documents`, and `_grouped`'s `has_efforts`
+    asked whether any effort HELD one. A project could therefore declare its whole forward
+    contract and have no harness ever read it."""
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    effort = graph.CreativeWork(
+        id="fnp", name="Financial Narrative Processing", description="d",
+        is_part_of=proj_iri, goal="ship the pipeline",
+        deliverables=("documentation", "tests"),
+        requirements_coverage=("security",), keywords="apdicts")
+    pg = graph.ProjectGraph(slug="p", name="P", description="",
+                            documents=[], efforts=[effort])
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(pg)
+        assert "Financial Narrative Processing (fnp)" in out, render.__name__
+        assert "ship the pipeline" in out, render.__name__
+        assert "documentation" in out and "tests" in out, render.__name__
+        assert "security" in out, render.__name__
+        assert "_Also known as: apdicts._" in out, render.__name__
+        assert "_No documents in this effort._" in out, render.__name__
+
+
+def test_a_project_with_neither_documents_nor_efforts_still_says_so():
+    """The one case with genuinely nothing to report keeps its original line."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="", documents=[], efforts=[])
+    assert "_No documents mapped yet._" in graph.project_index_markdown(pg)

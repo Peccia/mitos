@@ -1700,9 +1700,18 @@ def test_effort_unknown_coverage_is_rejected():
 
 
 def test_effort_valid_coverage_passes_validation():
+    """The other half of the check above: every name in graph.KNOWN_COVERAGE passes. Without this
+    a validator that rejected EVERYTHING would still satisfy the rejection test."""
     import copy
     from dataclasses import replace as _replace
 
+    from agentic import graph
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0],
+                           requirements_coverage=tuple(graph.KNOWN_COVERAGE))]         + list(pg.efforts[1:])
     _validate(rig)          # must not raise
 
 
