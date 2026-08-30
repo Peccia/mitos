@@ -143,10 +143,10 @@ List anything you built that no requirement asked for. Be honest and specific he
 is frequently the most valuable part of the record, because it is where the requirement
 nobody wrote down shows up. If there was nothing, omit the section.
 
-## 6. If you also filed this somewhere else
+## 6. The `locator:` field
 
-If the same content went to an issue tracker or a wiki, add a `locator:` line to the header
-naming where:
+`locator:` names where this record ALSO landed — the shared connection (next section), or an issue
+tracker or wiki if you filed it there too:
 
 ```
 locator: https://example.atlassian.net/browse/PROJ-412
@@ -155,7 +155,23 @@ locator: https://example.atlassian.net/browse/PROJ-412
 The local record is still written, always. It is the source of truth; the remote copy is a
 convenience. Mitos never makes a network call to find out what you did.
 
-## 7. Report back
+## 7. Publish to the shared connection
+
+The local record is a file on one machine. The owner's planning harness, and anyone reviewing this
+work later, read the shared document store — so put a copy there too.
+
+Look at your always-on context for a connection section headed ``## <Name> (`key`)``. That names
+the document store this machine has wired.
+
+- **If one is named**, create a document there titled `<work item key> — requirements-receipt`,
+  with this record's body as its content, and add the URL it returns as the `locator:` line above.
+- **If none is named**, you cannot reach a store and must not guess at one. Say so, and print the
+  exact title and the body for the owner to add by hand.
+
+Never let this step fail the work. An unwired store is a normal machine, and the local record —
+which is what the loop actually parses — is already written by the time you get here.
+
+## 8. Report back
 
 Tell the owner, in one or two lines: the run folder you wrote, how many requirements you
 reported, and — separately and explicitly — anything you marked `contested` or `blocked`.

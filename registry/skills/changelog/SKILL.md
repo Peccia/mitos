@@ -88,6 +88,23 @@ If the same content also went somewhere else (a wiki page, an issue), add a `loc
 header naming it. The local record is still written, always — it is the source of truth and the
 remote copy is a convenience.
 
+## Publish to the shared connection
+
+The local record is a file on one machine. The owner's planning harness, and anyone reviewing this
+work later, read the shared document store — so put a copy there too.
+
+Look at your always-on context for a connection section headed ``## <Name> (`key`)``. That names
+the document store this machine has wired.
+
+- **If one is named**, create a document there titled `<work item key> — changelog`, with this
+  record's body as its content, and add the URL it returns as a `locator:` line in the local
+  record's header.
+- **If none is named**, you cannot reach a store and must not guess at one. Say so, and print the
+  exact title and the body for the owner to add by hand.
+
+Never let this step fail the work. An unwired store is a normal machine, and the local record —
+which is what the loop actually parses — is already written by the time you get here.
+
 ## Report back
 
 Quote the entry you added and say where. If you deliberately wrote nothing, say that and why.
