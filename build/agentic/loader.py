@@ -22,6 +22,19 @@ VALID_SKILL_SCOPES = {"global", "project"}
 # harness always did before this feature existed. See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
+
+def is_manual_skill_target(tspec: dict) -> bool:
+    """Whether this target's skill lane ends with a human, rather than with the compiler.
+
+    `mode: zip` is that set by construction: it exists precisely because claude.ai exposes no
+    filesystem to write and no upload API, so the compiler can only stage a file for someone to
+    upload (targets/claude-app.yaml). Nothing else emits skills that way.
+
+    A manual target stages a MENU. It takes no curation, and it deploys nothing that could leak
+    a `scope: project` skill globally — the human decides both, at upload time."""
+    return ((tspec or {}).get("skills") or {}).get("mode") == "zip"
+
+
 # The registry-wide user config (registry/user.yaml + registry/local/user.yaml overlay).
 # Two groups of settings, both resolved core-then-overlay with last-layer-wins:
 #
@@ -1061,6 +1074,15 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"machine {name}: skills.{tname} must be a mapping "
                         f"({{include: [...]}} or {{exclude: [...]}})")
+                # A manual target stages a pile for a human to upload from; the choice already
+                # happens at upload time, so curating the pile only removes options. Rejected
+                # loudly for the reason the target-side rejection below gives — a list that
+                # quietly does nothing is worse than one that fails.
+                if is_manual_skill_target(reg.targets.get(tname) or {}):
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} cannot be curated — {tname} stages "
+                        f"skills for you to upload by hand, so every compatible skill is "
+                        f"offered and you choose at upload time. Remove the block.")
                 inc, exc = curation.get("include"), curation.get("exclude")
                 for label, lst in (("include", inc), ("exclude", exc)):
                     if lst is None:

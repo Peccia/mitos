@@ -641,6 +641,22 @@ def test_machine_side_skill_curation_validation():
     reg2.machines["example-linux"]["skills"] = {"mitos-agent": {"include": ["gws"]}}
     _validate(reg2)
 
+def test_machine_side_curation_of_a_manual_target_rejected():
+    """A manual target stages a menu the operator picks from at upload time, so the planner
+    ignores curation there. Rejected loudly rather than silently ignored — the same posture
+    the target-side rejection takes, and for the same reason: a list that quietly does nothing
+    is worse than one that fails."""
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    reg2 = copy.deepcopy(reg)
+    reg2.machines["example-windows"]["skills"] = {"claude-app": {"exclude": ["gws"]}}
+    try:
+        _validate(reg2)
+        raise AssertionError("expected RegistryError for curation on a manual target")
+    except RegistryError as e:
+        assert "cannot be curated" in str(e) and "upload" in str(e)
+
 def test_deselect_then_prune():
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel
@@ -1993,19 +2009,79 @@ def test_skill_deploy_warnings_name_the_missing_connection():
                and "document_store" in w for w in warnings)
     assert not any("curation" in w for w in warnings)
 
-def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
-    """A scope: project skill that also targets claude-app (a scope-ignoring target)
-    still deploys globally there — warn-only, so the leaked confinement is visible."""
+def test_skill_deploy_warnings_flags_project_scope_leak_on_mitos_agent():
+    """A scope: project skill that also targets mitos-agent still deploys globally there —
+    warn-only, so the leaked confinement is visible. mitos-agent is the only such target: it
+    WRITES the file, automatically, machine-wide."""
+    r = _connected_rig("example-linux")
+    r.machines["example-linux"]["skills"] = {}
+    r.skills["proj-and-agent"] = loader.Skill(
+        name="proj-and-agent", rel="local/skills/proj-and-agent/SKILL.md",
+        frontmatter={"name": "proj-and-agent", "targets": ["mitos-agent"],
+                     "scope": "project"}, body="body")
+    warnings = planner.skill_deploy_warnings(r, "example-linux")
+    assert any("'proj-and-agent'" in w and "'mitos-agent'" in w
+               and "ignores scope" in w for w in warnings)
+
+
+# ── manual targets stage a menu: no curation, no leak ─────────────────────────
+def test_a_manual_target_stages_every_compatible_skill_ignoring_curation():
+    """claude-app STAGES a zip; a human uploads it. The choice already happens at upload time,
+    so curating the pile only removes options the operator can no longer reach without a
+    registry edit and a redeploy."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.skills["stage-me"] = loader.Skill(
+        name="stage-me", rel="local/skills/stage-me/SKILL.md",
+        frontmatter={"name": "stage-me", "targets": ["claude-app"]}, body="body")
+    # a curation list the loader would now reject, forced in to prove the planner ignores it
+    r.machines["example-windows"]["skills"] = {"claude-app": {"exclude": ["stage-me"]}}
+    sk_spec = r.targets["claude-app"]["skills"]
+    selected = {s.name for s in planner._selected_skills(r, sk_spec,
+                                                         r.machines["example-windows"])}
+    assert "stage-me" in selected
+
+
+def test_a_manual_target_never_reports_a_scope_leak_or_a_curation_exclusion():
+    """Every diagnostic has to leave a configuration that is correct AND quiet. On claude-app
+    both lines used to fire whatever the operator did — exclude the skill and it warned that it
+    was excluded, keep it and it warned that it leaked — so the only silent configuration was to
+    drop the target from the skill's frontmatter, i.e. to give the capability up."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["skills"] = {}
     r.skills["proj-and-claude-app"] = loader.Skill(
         name="proj-and-claude-app", rel="local/skills/proj-and-claude-app/SKILL.md",
         frontmatter={"name": "proj-and-claude-app", "targets": ["claude-app"],
-                    "scope": "project"}, body="body")
+                     "scope": "project"}, body="body")
     warnings = planner.skill_deploy_warnings(r, "example-windows")
-    assert any("'proj-and-claude-app'" in w and "'claude-app'" in w
-              and "ignores scope" in w for w in warnings)
+    assert not any("proj-and-claude-app" in w for w in warnings)
+
+
+def test_a_manual_target_still_honours_requires_server():
+    """Which MCP connections a box has is a fact about the box, not a preference. A skill that
+    is nothing but instructions for a server this machine never wired is a dangling instruction
+    whether a human uploaded it or the compiler wrote it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.skills["needs-gws"] = loader.Skill(
+        name="needs-gws", rel="local/skills/needs-gws/SKILL.md",
+        frontmatter={"name": "needs-gws", "targets": ["claude-app"],
+                     "requires_server": "gws"}, body="body")
+    r.machines["example-windows"].pop("document_store", None)
+    sk_spec = r.targets["claude-app"]["skills"]
+    selected = {s.name for s in planner._selected_skills(r, sk_spec,
+                                                         r.machines["example-windows"])}
+    assert "needs-gws" not in selected
+    assert any("needs-gws" in w and "requires the 'gws' connection" in w
+               for w in planner.skill_deploy_warnings(r, "example-windows"))
+
+
+def test_is_manual_skill_target_is_the_zip_mode_set():
+    assert loader.is_manual_skill_target(reg.targets["claude-app"])
+    assert not loader.is_manual_skill_target(reg.targets["claude-code"])
+    assert not loader.is_manual_skill_target(reg.targets["mitos-agent"])
+    assert not loader.is_manual_skill_target({})
 
 # ── delivers: pairing an effort's forward contract with the skill that answers it ──
 def _rig_wanting(term: str, *, delivered_by: str | None = None):

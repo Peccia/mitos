@@ -58,6 +58,23 @@ manifest. The `scope:` frontmatter key picks which one:
   manifest's `skills:` key, never the shared directory. `mitos-agent` and `claude-app` have no
   project-scoped surface at all, so they ignore `scope` and stay global regardless.
 
+**`claude-app` is the exception worth understanding**, because it is the one target that
+*deploys nothing*. `deploy` writes a zip to the machine's `claude_skills_staging` path and
+stops; a human uploads it in Customize > Skills. So a `scope: project` skill staged there has
+not leaked anywhere — it is a file on disk until someone chooses it. That has two consequences:
+
+- **Manual targets take no curation.** `skills: {claude-app: {include:/exclude:}}` on a machine
+  profile is refused at load. The staged set is a *menu*, and the choice already happens at
+  upload time; filtering the menu only removes options you would then need a registry edit and
+  a redeploy to reach. Automated targets (`mitos-agent`, `claude-code`, `antigravity`) still
+  curate normally.
+- **`requires_server:` still applies.** Which MCP connections a machine has is a fact about the
+  machine, not a preference — a skill that is nothing but instructions for a server you never
+  wired is a dangling instruction whether a human uploaded it or the compiler wrote it.
+
+`mitos-agent` is therefore the only target `skill_deploy_warnings` reports a scope leak for: it
+writes the file itself, automatically, machine-wide.
+
 ### Deliverable-producing skills: `delivers:`
 
 An effort in the knowledge graph declares its **expected deliverables** — the artifacts every

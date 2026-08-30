@@ -15,8 +15,8 @@ import yaml
 
 from . import render
 from .io import safe_rel
-from .loader import (Registry, RegistryError, resolve_local_path, _repo_basename,
-                     document_stores)
+from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_local_path,
+                     _repo_basename, document_stores)
 
 # A dynamically discovered agentic branch: any partial whose logical key matches
 # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch (see
@@ -681,10 +681,16 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
     return None, ""
 
 
-# mitos-agent and claude-app have no project-scoped surface (loader.PROJECT_SCOPE_CAPABLE_
-# TARGETS is the other two) — they IGNORE `scope: project` and always deploy globally.
-# Kept in sync with loader.KNOWN_TARGETS - loader.PROJECT_SCOPE_CAPABLE_TARGETS.
-SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent", "claude-app"}
+# Targets that deploy a `scope: project` skill GLOBALLY, defeating the confinement its scope
+# promises. `mitos-agent` is the only one: it writes real files, automatically, machine-wide.
+#
+# `claude-app` ignores scope too, but it is NOT here, because it deploys nothing — `deploy`
+# stages a zip and the last mile is a human uploading it (targets/claude-app.yaml). A staged
+# zip is inert, so there is no leak to warn about, and warning anyway left the operator no
+# quiet correct state: excluding the skill warned that it was excluded, keeping it warned that
+# it leaked, and the only silent configuration was to drop the target from the skill's
+# frontmatter — i.e. to give the capability up. See is_manual_skill_target.
+SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent"}
 
 
 def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
@@ -705,9 +711,19 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     tools is noise — or worse, a dangling instruction — on a box where that server was
     never wired, and a brand-new coding-harness user should not have to hand-write an
     `exclude:` list to keep the maintainer's workspace skills off their machine.
+
+    **A MANUAL target takes no curation** (`is_manual_skill_target`): staging a zip is not
+    deploying it, so the pile is a menu and the operator picks from it at upload time. Curating
+    the menu buys nothing and costs the choice — a skill filtered out here is one they cannot
+    upload later without a registry edit and a redeploy. The `requires_server:` gate still
+    applies: which MCP connections a box has is a fact about the box, not a preference, and a
+    skill that is nothing but instructions for a server this machine never wired is a dangling
+    instruction whether a human uploaded it or the compiler wrote it. Rejected at load time
+    (loader) so a curation list here cannot quietly do nothing.
     """
     tgt = sk_spec["include_target"]
-    curation = ((machine or {}).get("skills") or {}).get(tgt) or {}
+    manual = is_manual_skill_target({"skills": sk_spec})
+    curation = {} if manual else (((machine or {}).get("skills") or {}).get(tgt) or {})
     include = curation.get("include")
     exclude = set(curation.get("exclude") or [])
     stores = set(document_stores((machine or {}).get("document_store")))
@@ -725,7 +741,12 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     filtered out by this machine's curation, dropped because their `requires_server:`
     connection isn't wired here, or landing on a scope-ignoring target while marked
     `scope: project` (its confinement guarantee doesn't hold there). Warn-only: nothing
-    here changes what deploys, it only surfaces filters that were previously silent."""
+    here changes what deploys, it only surfaces filters that were previously silent.
+
+    A MANUAL target (`is_manual_skill_target`) reaches only the `requires_server:` line: it
+    takes no curation, and it deploys nothing to leak. Every diagnostic here has to leave the
+    operator a configuration that is both correct and quiet — one that fires whatever they do
+    is not a diagnostic, it is a standing alarm, and it trains them to stop reading the rest."""
     machine = reg.machines.get(machine_name) or {}
     machine_targets = set(machine.get("targets", []))
     stores = set(document_stores(machine.get("document_store")))

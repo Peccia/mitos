@@ -253,6 +253,11 @@ surface you want) in its own `targets:`. The manifest decides *which projects*; 
 lives globally on Mitos Agent and never appears in a project manifest — binding it there is a category
 error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
+**claude.ai is a menu, not a deploy target.** `deploy` stages one zip per compatible skill and a
+human uploads the ones they want, so it takes no `include:`/`exclude:` curation (a curation block
+for it on a machine profile is refused) and never reports a `scope: project` skill as leaking —
+a staged zip is inert until someone chooses it. Its `requires_server:` gate still applies.
+
 Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
 `skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
 [overlay configuration reference](registry/README.md).
