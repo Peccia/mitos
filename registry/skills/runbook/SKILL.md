@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: runbook
 category: devops
-hermes:
+mitos_agent:
   tags: [runbook, operations, oncall, return, sdlc]
 ---
 # Runbook

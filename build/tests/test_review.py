@@ -16,7 +16,7 @@ def _one_machine_rig(**machine):
 
 def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     """The console shows every registry item but TAGS each with `deploys_here`, so a fresh
-    coding-harness install opens on its own content instead of the hermes-only core skills.
+    coding-harness install opens on its own content instead of the agent-only core skills.
 
     The tag is asked of `planner._selected_skills` — the same function deploy uses — so the
     connection gate counts too: `gws` targets claude-code but declares `requires_server:
@@ -42,9 +42,9 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
 
 
-def test_deploys_here_is_a_no_op_on_a_hermes_machine():
+def test_deploys_here_is_a_no_op_on_a_mitos_agent_machine():
     """The guard for 'no impact on current functionality': an agentic machine's view is
-    unchanged, since every core skill targets hermes."""
+    unchanged, since every core skill targets mitos-agent."""
     from agentic.review import prompt_index
 
     rig = _one_machine_rig(targets=["mitos-agent", "agents-md"], document_store="gws")
@@ -82,7 +82,7 @@ def test_console_only_prompt_always_reads_as_available():
 def test_state_exposes_machine_targets_separately_from_known_targets():
     """Two lists, not interchangeable: `known_targets` is every adapter (the AUTHORING
     forms — a skill may target a machine you haven't built), `machine_targets` is only what
-    your machines declare (the FILTER chips). Mixing them is what offered a `hermes` filter
+    your machines declare (the FILTER chips). Mixing them is what offered a `mitos-agent` filter
     chip on a coding-harness box."""
     from agentic.review import state
 
@@ -1125,7 +1125,7 @@ def test_propose_graph_change_valid_deliverables_reach_the_candidate():
 def test_prompt_index_frontmatter_whitelist_shape():
     """Skills/prompts carry a `frontmatter` dict scoped to the per-kind editable
     whitelist — never the full raw frontmatter (which may carry e.g. a skill's
-    `hermes:` block that has no place in the console's metadata panel)."""
+    `mitos-agent:` block that has no place in the console's metadata panel)."""
     from agentic.review import _PROMPT_META_WHITELIST, _SKILL_META_WHITELIST, prompt_index
 
     result = prompt_index(reg)
@@ -1359,7 +1359,7 @@ def test_propose_meta_edit_rejects_invalid_scope_value():
 
 def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
     """Unlike the extends_skill/target-binding checks, scope: project has no per-target
-    incompatibility — hermes/claude-app targets simply ignore it (see loader.
+    incompatibility — mitos-agent/claude-app targets simply ignore it (see loader.
     validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
     from agentic.review import propose_meta_edit
 

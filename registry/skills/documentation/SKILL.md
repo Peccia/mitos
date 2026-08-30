@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: documentation
 category: devops
-hermes:
+mitos_agent:
   tags: [documentation, docs, return, sdlc]
 ---
 # Documentation

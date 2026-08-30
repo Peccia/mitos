@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: changelog
 category: devops
-hermes:
+mitos_agent:
   tags: [changelog, release, return, sdlc]
 ---
 # Changelog

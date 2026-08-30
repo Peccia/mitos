@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: deploy-book
 category: devops
-hermes:
+mitos_agent:
   tags: [deploy, release, rollback, return, sdlc]
 ---
 # Deploy Book

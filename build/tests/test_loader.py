@@ -204,7 +204,7 @@ def test_machine_role_exclusivity_assistant_vs_coding():
     rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md", "claude-code"]
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError due to hermes + coding target on one machine")
+        raise AssertionError("expected RegistryError due to mitos-agent + coding target on one machine")
     except RegistryError as e:
         assert "cannot share a machine with coding harness target(s)" in str(e)
         assert "claude-code" in str(e)
@@ -223,7 +223,7 @@ def test_mitos_agent_requires_agents_md():
         assert "requires 'agents-md'" in str(e)
 
 def test_machine_role_agents_md_alone_is_not_a_coding_harness():
-    """agents-md is the context format, not a harness — it may coexist with hermes
+    """agents-md is the context format, not a harness — it may coexist with mitos-agent
     (the agentic machine-mount combo) with no exclusivity violation."""
     import copy
     from agentic.loader import _validate
@@ -232,15 +232,15 @@ def test_machine_role_agents_md_alone_is_not_a_coding_harness():
     _validate(rig)  # must not raise
 
 def test_agents_md_without_assistant_target_never_leaks_org_routing():
-    """The actual bug this exists to prevent: `agents-md` alone (no `hermes` target) is a
+    """The actual bug this exists to prevent: `agents-md` alone (no `mitos-agent` target) is a
     valid, common shape — example-windows.yaml ships exactly this (claude-code +
     antigravity + claude-app + agents-md) — but org skills declare `targets: [mitos-agent]`
     only, so they never deploy there. Both org-rendering surfaces (the agentic-graph
     reference mount via agentic_context_root, and the org-domain table on the
     agents-md/assistant tree) must therefore omit orgs entirely on such a machine, even
     though example-project's 'Launch Prep' effort IS tagged orgDomain: marketing.
-    A real hermes machine (example-linux) must still carry both."""
-    rig = _full_windows_rig()  # agents-md, no hermes — mirrors example-windows.yaml exactly
+    A real mitos-agent machine (example-linux) must still carry both."""
+    rig = _full_windows_rig()  # agents-md, no mitos-agent — mirrors example-windows.yaml exactly
     outs = planner.plan_machine(rig, "example-windows")
     graph_tree = [o for o in outs if o.target == "agentic-graph"]
     assert graph_tree, "agentic_context_root must still materialize the reference mount"
@@ -248,11 +248,11 @@ def test_agents_md_without_assistant_target_never_leaks_org_routing():
         assert "org-marketing" not in o.content
         assert "runs under the `marketing` org" not in o.content
 
-    hermes_outs = planner.plan_machine(reg, "example-linux")
-    projects_agents = next(o for o in hermes_outs
+    agent_outs = planner.plan_machine(reg, "example-linux")
+    projects_agents = next(o for o in agent_outs
                            if o.deploy_path.endswith("Projects/AGENTS.md"))
     assert "org-marketing" in projects_agents.content        # org-domain table present
-    example_agents = next(o for o in hermes_outs
+    example_agents = next(o for o in agent_outs
                           if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
     assert "runs under the `marketing` org" in example_agents.content
 
@@ -629,7 +629,7 @@ def test_init_scaffolds_overlay_and_org_template_reaches_soul():
     assert "MitosAgent" in soul.content, "{{project_root}} must expand in a seeded SOUL"
     assert "{{project_root}}" not in soul.content
     assert "{{skills_root}}" not in soul.content
-    # domain org skills ship in core and are available on all hermes machines
+    # domain org skills ship in core and are available on all mitos-agent machines
     assert "org-software" in reg2.skills
     assert "org-design" in reg2.skills
     assert "org-marketing" in reg2.skills
@@ -651,8 +651,8 @@ def test_init_scaffolds_overlay_and_org_template_reaches_soul():
 
 def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
     """scaffold_machine writes a registry/local/machines/<name>.yaml whose `targets:` list
-    matches the chosen use case, and — since org skills target hermes only and the
-    org-domain table/routing lines render exclusively on the agents-md/hermes tree — only
+    matches the chosen use case, and — since org skills target mitos-agent only and the
+    org-domain table/routing lines render exclusively on the agents-md/mitos-agent tree — only
     the 'mitos-agent' use case's plan carries orgs or an agents-md tree. 'workstation' and
     'coding' must never deploy either, matching what a claude-code/antigravity-only user
     expects (the bug this wizard exists to prevent)."""
@@ -746,7 +746,7 @@ def test_scaffold_machine_rejects_illegal_target_sets():
             pass
         assert not (tmp / "registry/local/machines/box.yaml").exists(), \
             f"{kwargs}: refused, but still wrote a profile"
-    # hermes pulls agents-md in with it — the tree is the point of that target
+    # mitos-agent pulls agents-md in with it — the tree is the point of that target
     assert initmod.resolve_targets(targets=["mitos-agent"]) == ["mitos-agent", "agents-md"]
 
 def test_scaffold_machine_document_store_is_asked_not_assumed():
@@ -1515,8 +1515,8 @@ def test_validate_skill_scope_accepts_global_and_project_on_capable_targets():
     assert validate_skill_scope(
         "x", {"targets": ["claude-code", "antigravity"], "scope": "project"}) is None
 
-def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairing():
-    """A skill may target hermes/claude-app alongside a project-scope-capable target —
+def test_validate_skill_scope_project_scope_ignores_mitos_agent_and_claude_app_pairing():
+    """A skill may target mitos-agent/claude-app alongside a project-scope-capable target —
     neither has a project-scoped surface, so both just ignore `scope` (always ship
     globally) rather than being flagged incompatible."""
     from agentic.loader import validate_skill_scope
@@ -1555,10 +1555,10 @@ def test_project_cannot_bind_skill_with_no_project_scope_capable_target():
     import copy
     from agentic.loader import RegistryError, Skill, _validate
     rig = copy.deepcopy(reg)
-    rig.skills["hermes-only"] = Skill(
-        name="hermes-only", rel="local/skills/hermes-only/SKILL.md",
+    rig.skills["agent-only"] = Skill(
+        name="agent-only", rel="local/skills/agent-only/SKILL.md",
         frontmatter={"targets": ["mitos-agent"]}, body="body")
-    rig.projects["example-project"]["skills"] = ["hermes-only"]
+    rig.projects["example-project"]["skills"] = ["agent-only"]
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError")
@@ -1586,7 +1586,7 @@ def test_skill_resources_loaded_from_examples_and_scripts():
 
 def test_skill_resources_loaded_from_all_harness_convention_dirs():
     """_SKILL_RESOURCE_DIRS is the union of the harnesses' documented conventions:
-    examples/scripts (Claude Code, Antigravity), references/templates (Hermes),
+    examples/scripts (Claude Code, Antigravity), references/templates (Mitos Agent),
     resources (Antigravity). A file under any of them loads; anything else is ignored."""
     treg, tmp = _temp_registry()
     skill_dir = tmp / "registry" / "skills" / "conv-skill"

@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: tests
 category: devops
-hermes:
+mitos_agent:
   tags: [tests, testing, coverage, return, sdlc]
 ---
 # Tests

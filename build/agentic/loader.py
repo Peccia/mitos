@@ -1049,12 +1049,11 @@ def _validate(reg: Registry) -> None:
             if "ssh_key" in git_cfg and not isinstance(git_cfg["ssh_key"], str):
                 raise RegistryError(
                     f"machine {name}: sync.git.ssh_key must be a string path to the private key")
-        # 5. (retired) The `hermes_settings` validation block went with the Hermes settings
-        #    lane — Mitos Agent owns its own config file whole (targets/mitos-agent.yaml), so
-        #    there is no third-party config.yaml to reach settings leaves into. A leftover
-        #    `hermes_settings:` in a profile is silently ignored (machine keys are not a
-        #    closed set), so the machine profiles drop it explicitly rather than relying on a
-        #    validation error to catch it.
+        # 5. (retired) The third-party settings-merge lane is gone — Mitos Agent owns its
+        #    own config file whole (targets/mitos-agent.yaml), so there is no third-party
+        #    config.yaml to reach settings leaves into. Unknown machine keys are silently
+        #    ignored (machine keys are not a closed set), so profiles drop retired settings
+        #    blocks explicitly rather than relying on a validation error to catch them.
         # 6. skills (optional): per-target curation of the compatible skill set —
         #    `{<target>: {include: [...] | exclude: [...]}}`. The overlayable home for
         #    what target-side skills.include/exclude used to do (rejected above); this

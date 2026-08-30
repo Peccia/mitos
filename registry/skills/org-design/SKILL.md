@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [mitos-agent]
 category: productivity
 org_domain: design
-hermes:
+mitos_agent:
   tags: [org, planning, delegation, execution, design]
 ---
 # Design Organization

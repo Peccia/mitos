@@ -7,7 +7,7 @@ license: MIT
 platforms: [linux, macos, windows]
 targets: [mitos-agent]
 category: productivity
-hermes:
+mitos_agent:
   tags: [new, session, project, memory, routing]
 ---
 

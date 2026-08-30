@@ -1,7 +1,7 @@
 # The `mitos-agent` target
 
-**Mitos Agent** is the first-party agentic planning harness Mitos feeds — the replacement for the
-retired `hermes` target. It is one of exactly two harness classes Mitos supports (the other being the
+**Mitos Agent** is the first-party agentic planning harness Mitos feeds. It is one of exactly two
+harness classes Mitos supports (the other being the
 third-party coding harnesses: `claude-code`, `antigravity`, `claude-app`). The harness itself is a
 separate, public product; this page documents only what the **`mitos-agent` target emits** into a
 machine.
@@ -133,10 +133,9 @@ machine keeps a matching-named key. Without it, `deploy` uses whatever identity 
 or the default `~/.ssh` key) — the same identity for every repo, which is what breaks when a repo's
 access is scoped to its own deploy key.
 
-## Retirement note
+## Merge residue from retired targets
 
-The `hermes` target it replaced merged eleven owned keys into a third-party `config.yaml` (an
-`mcp_servers` merge plus a `hermes_settings:` leaf-path lane). Both are gone — Mitos Agent owns its
-config whole. One consequence of that history: a retired `merge` leaves its keys behind in the
-third-party file (merges are not lockfile-tracked, so they never become reportable orphans). See the
+Mitos Agent owns its config whole — it never merges into a third-party file. Any target that *did*
+merge leaves its keys behind in the third-party file when retired, because merges are not
+lockfile-tracked and so never become reportable orphans; clearing them is a manual edit. See the
 merge-residue note in [`../managing-state.md`](../managing-state.md).

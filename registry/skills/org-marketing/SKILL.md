@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [mitos-agent]
 category: productivity
 org_domain: marketing
-hermes:
+mitos_agent:
   tags: [org, planning, delegation, execution, marketing]
 ---
 # Marketing Organization

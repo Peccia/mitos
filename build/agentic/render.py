@@ -533,12 +533,9 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
-        # The per-skill tag block is still authored under the legacy `hermes:` key in
-        # registry SKILL.md frontmatter — inert metadata (tags), not a target reference —
-        # so the rename deliberately left those files alone (decision 4). Emitted under the
-        # current name; rename the authored key when Mitos Agent defines its own skill
-        # frontmatter (B-Stage 5b).
-        tag_meta = fm.get("mitos_agent") or fm.get("hermes")
+        # The per-skill tag block is authored under `mitos_agent:` in registry SKILL.md
+        # frontmatter — inert metadata (tags), not a target reference.
+        tag_meta = fm.get("mitos_agent")
         if tag_meta:
             meta["metadata"] = {"mitos_agent": tag_meta}
         return _frontmatter_doc(meta, b)
@@ -592,8 +589,8 @@ def flat_tools(server: dict) -> list[str]:
 def mitos_agent_mcp_config(servers: dict) -> dict:
     """The whole mcp.json Mitos Agent reads: one entry per wired store (keyed by server
     name), each carrying its transport, the URL as seen from this machine, and the flat
-    tool list. A one-store machine yields a single entry — the same shape Hermes had, minus
-    the surgical merge. See planner._agent_servers for the server map this consumes."""
+    tool list. A one-store machine yields a single entry. See planner._agent_servers for
+    the server map this consumes."""
     return {"mcpServers": {alias: {
         "url": server["url"],
         "transport": server.get("transport", "streamable-http"),

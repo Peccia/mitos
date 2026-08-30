@@ -78,11 +78,11 @@ def test_machine_document_store_validated_like_project():
 # ── expand_placeholders ───────────────────────────────────────────────────────
 def test_expand_substitutes_all_five_tokens():
     user = {"given_name": "Paul", "full_name": "Paul Peccia",
-            "email": "example@domain.com", "location": "Buffalo, NY"}
+            "email": "example@domain.com", "location": "Your City, State"}
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
     out = render.expand_placeholders(_FakeReg(user), text)
-    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Buffalo, NY"
+    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Your City, State"
 
 def test_expand_possessive_trailing_s_uses_bare_apostrophe():
     user = {"given_name": "Chris", "full_name": "", "email": "", "location": ""}
@@ -118,7 +118,7 @@ def test_user_token_map_agrees_with_expand_placeholders():
     """The map must never drift from the real expansion: substituting it by hand has to
     produce exactly what a deploy would write."""
     user = {"given_name": "Chris", "full_name": "Chris Smith",
-            "email": "c@example.com", "location": "Buffalo, NY"}
+            "email": "c@example.com", "location": "Your City, State"}
     reg_ = _FakeReg(user)
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
@@ -227,7 +227,7 @@ def test_reverse_expand_project_root_matches_any_machines_root():
         r, "No token here.", "Path ~/MitosAgent stays.") == "Path ~/MitosAgent stays."
 
 def test_soul_and_new_session_skill_expand_project_root():
-    # acceptance: on the rig machine (hermes + agents-md, assistant_root set) SOUL.md
+    # acceptance: on the rig machine (mitos-agent + agents-md, assistant_root set) SOUL.md
     # and the deployed new-session skill name the concrete root, no literal token left.
     treg, _tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")

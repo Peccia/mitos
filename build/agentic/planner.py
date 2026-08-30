@@ -859,7 +859,7 @@ def _agent_servers(reg: Registry, machine_name: str) -> dict:
     whole `mcp.json` Mitos Agent reads (design §3.1). Generalizes _gws from one hard-coded
     server to the machine's full `document_store:` list, resolving each server's per-machine
     URL the same way. `none`/unset yields {} (no mcp.json). A one-store machine yields
-    {"gws": <server>} — identical in effect to what _gws did for Hermes."""
+    {"gws": <server>} — identical in effect to what the single-server _gws did."""
     machine = reg.machines[machine_name]
     servers: dict = {}
     for name in document_stores(machine.get("document_store")):

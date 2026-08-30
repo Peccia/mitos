@@ -1038,7 +1038,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # ── structured metadata editing (Track A — no raw YAML ever reaches the operator) ──
 # Per-kind editable whitelist: `name` is deliberately never editable (it must stay in
 # sync with the skill's folder / the prompt's registered identity). Everything else in
-# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `hermes:`/`mitos_agent:` tag block)
+# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `mitos_agent:` tag block)
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",

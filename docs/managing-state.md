@@ -203,8 +203,8 @@ ever overlap.
 
 > **Merge residue on retirement (a known asymmetry).** A `merge` output is never recorded in the
 > lockfile — the deploy write loop `continue`s before the lock entry is built (`build/agentic/commands.py`).
-> So a retired merge (e.g. the old Hermes `config.yaml` `mcp_servers`/settings lane, removed when the
-> `hermes` target became `mitos-agent`) leaves its keys **in** the third-party file, and — because
+> So a retired merge (e.g. a third-party `config.yaml` `mcp_servers`/settings lane, removed when the
+> target that owned it was retired) leaves its keys **in** the third-party file, and — because
 > orphans are computed as lockfile-paths minus planned-paths — those keys never surface as a
 > reportable orphan and `--prune` cannot reach them. Invariant #9's "deletion is explicit" holds; its
 > companion "orphans are reported" does not, because merges live outside the orphan mechanism. Removing

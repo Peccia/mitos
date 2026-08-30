@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [mitos-agent]
 category: productivity
 org_domain: software
-hermes:
+mitos_agent:
   tags: [org, planning, delegation, execution, engineering, software]
 ---
 # Software Organization

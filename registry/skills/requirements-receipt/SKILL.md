@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: requirements-receipt
 category: devops
-hermes:
+mitos_agent:
   tags: [requirements, return, receipt, handoff, sdlc]
 ---
 # Requirements Receipt

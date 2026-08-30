@@ -274,7 +274,7 @@ def test_graph_doc_type_round_trip_and_rendering():
         assert "**Brief** `T2` (2026-01-01)" in out   # no annotation when absent
     det_line = next(l for l in det.splitlines() if "Budget" in l)
     full_line = next(l for l in full.splitlines() if "Budget" in l)
-    assert det_line == full_line, "claude-code and hermes doc lines must stay identical"
+    assert det_line == full_line, "claude-code and mitos-agent doc lines must stay identical"
 
 
 def test_order_deliverables_canonical_order_dedup_and_unknown_last():
@@ -677,7 +677,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert [s for s, _ in proj.section_bodies if render.is_generated_source(s)], \
         "must carry a generated section tagged for marker-free split"
     # full doc context is INLINE here (concise: id inline, no URL), unlike the lean
-    # agents-md/Hermes index that lists titles only
+    # agents-md/Mitos Agent index that lists titles only
     assert "`1AbCxyz`" in proj.content and "drive.google.com" not in proj.content
     # the connection section is the bound store's (gws) stable label at H2 (under the
     # project's prose H1), not a second H1 or "<project> — documents"
@@ -1003,9 +1003,9 @@ def test_effort_domain_line_renders_in_all_three_markdown_views():
         assert "`org-marketing`" in out
 
 def test_effort_domain_line_suppressed_when_org_routing_false():
-    """project_full_markdown's org_routing=False (the non-hermes claude-code workstation
+    """project_full_markdown's org_routing=False (the non-mitos-agent claude-code workstation
     path, planner._plan_claude_code) omits the org routing line entirely — org skills
-    target hermes only, so a claude-code-only checkout must never be told to load one
+    target mitos-agent only, so a claude-code-only checkout must never be told to load one
     that was never deployed there. The goal line and everything else still renders."""
     from agentic import graph
     pg = graph.ProjectGraph(slug="p", name="P", description="")

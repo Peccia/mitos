@@ -80,7 +80,7 @@ A flat mapping in **two groups** — identity, and registry-wide defaults:
 given_name: Paul
 full_name: Paul Peccia
 email: example@domain.com
-location: Buffalo, NY
+location: Your City, State
 
 # DEFAULTS — what a new effort inherits when it names none of its own
 default_deliverables: [documentation, tests]

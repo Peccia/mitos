@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [claude-code, antigravity, claude-app, mitos-agent]
 delivers: migration-notes
 category: devops
-hermes:
+mitos_agent:
   tags: [migration, breaking-change, upgrade, return, sdlc]
 ---
 # Migration Notes
