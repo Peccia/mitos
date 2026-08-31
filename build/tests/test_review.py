@@ -762,8 +762,76 @@ def test_extract_identity_effort_ignores_malformed_json():
     assert review.extract_identity_effort(broken, pg) == ""
 
 
+def _return_record_fragment(effort_id: str, delivers: str = "tests") -> str:
+    """A published return record's body — the `return-record` variant of the same contract,
+    the shape the seven `delivers:` skills tell a coding harness to append to the STORE copy."""
+    return (
+        f"# {delivers}\n\n## Added\n\n- a test\n\n"
+        "## Identity\n\n```json\n"
+        '{\n  "@context": {"@vocab": "https://schema.org/"},\n'
+        '  "@type": "DigitalDocument",\n'
+        '  "additionalType": "return-record",\n'
+        f'  "isPartOf": {{"@id": "http://peccia.net/creativework/{effort_id}"}},\n'
+        '  "identifier": "demo__launch-prep-20260828T212400Z",\n'
+        f'  "http://peccia.net/deliverable": "{delivers}"\n}}\n```\n')
+
+
+def test_extract_identity_effort_finds_a_published_return_record():
+    """A return record published to the store is the other half of the contract: without a
+    fragment it reaches Discovery anonymous and the operator remaps by hand what the harness
+    already knew."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    assert review.extract_identity_effort(_return_record_fragment("launch-prep"), pg) == \
+        "launch-prep"
+
+
+def test_return_record_fragment_obeys_the_same_effort_gate():
+    """The second type widens WHAT is recognized, never the trust placed in it — an id this
+    project's graph has never heard of still yields no suggestion."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    assert review.extract_identity_effort(_return_record_fragment("no-such-effort"), pg) == ""
+
+
+def test_identity_types_are_a_closed_set():
+    from agentic import review
+    assert review.IDENTITY_TYPES == ("implemented-requirements", "return-record")
+
+
+def test_every_delivers_skill_publishes_a_well_formed_identity_fragment():
+    """Each skill must name ITS OWN deliverable in the fragment, using a term Mitos's graph
+    already validates on the effort — one vocabulary in both directions. A copy-paste slip
+    here would file a `tests` record under `runbook` in the graph, which nothing downstream
+    could detect."""
+    import json as _json
+    import pathlib
+    import re as _re
+    from agentic import graph as graphmod
+    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
+    seen = 0
+    for p in sorted(skills.glob("*/SKILL.md")):
+        body = p.read_text(encoding="utf-8")
+        if "\ndelivers:" not in body:
+            continue
+        seen += 1
+        declared = _re.search(r"^delivers:\s*(\S+)", body, _re.M).group(1)
+        block = _re.search(r'```json\n(\{.*?"additionalType": "return-record".*?\})\n```',
+                           body, _re.S)
+        assert block, f"{p.parent.name}: no return-record fragment"
+        frag = _json.loads(block.group(1).replace("<effort-id>", "e").replace("<run>", "r"))
+        assert frag["additionalType"] == "return-record"
+        assert frag["@context"] == graphmod.JSONLD_CONTEXT, f"{p.parent.name}: context drift"
+        assert frag[graphmod.DELIVERABLE_PRED] == declared, f"{p.parent.name}: names another"
+        assert declared in graphmod.KNOWN_DELIVERABLES, f"{p.parent.name}: unknown deliverable"
+        assert frag["isPartOf"]["@id"].startswith(graphmod.CREATIVE_WORK_NS)
+    assert seen >= 7, f"expected the seven return-lane skills, found {seen}"
+
+
 def test_extract_identity_effort_ignores_the_wrong_additional_type():
-    """Only `implemented-requirements` counts — any other JSON-LD block a document happens
+    """Only the two `IDENTITY_TYPES` count — any other JSON-LD block a document happens
     to carry is not this contract and must not be read as one."""
     from agentic import review
     treg, _tmp = _temp_registry()

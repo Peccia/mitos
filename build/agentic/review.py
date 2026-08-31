@@ -1917,10 +1917,17 @@ def _store_for_doc(staged: dict, doc_id: str) -> str:
     return ""
 
 
+# The closed set of identity-fragment kinds, per docs/implemented-document-identity.md: the
+# Implemented Document one graduation produces, and the return record each `delivers:` skill
+# publishes beside its local copy. Closed on purpose — an unrecognized value is ignored exactly
+# like a malformed block, because a type this cannot interpret must not become a suggestion.
+IDENTITY_TYPES = ("implemented-requirements", "return-record")
+
+
 def extract_identity_effort(text: str, pg) -> str:
     """The effort id Mitos-Agent's identity fragment names, when the fragment parses AND that
     id exists in `pg` (this project's CURRENT graph, possibly None). Untrusted candidate text:
-    a malformed block, the wrong `additionalType`, or an id this project has never heard of all
+    a malformed block, an unknown `additionalType`, or an id this project has never heard of all
     degrade to `""` — the console's existing manual flow — never a guess and never an error."""
     from . import graph as graphmod
     known = {e.id for e in (pg.efforts if pg else [])}
@@ -1929,7 +1936,7 @@ def extract_identity_effort(text: str, pg) -> str:
             frag = json.loads(m.group(1))
         except ValueError:
             continue
-        if not isinstance(frag, dict) or frag.get("additionalType") != "implemented-requirements":
+        if not isinstance(frag, dict) or frag.get("additionalType") not in IDENTITY_TYPES:
             continue
         part_of = frag.get("isPartOf")
         iri = part_of.get("@id") if isinstance(part_of, dict) else None

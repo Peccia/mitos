@@ -28,6 +28,16 @@ rendered Markdown document:
 }
 ```
 
+There are **two** `additionalType` values, and they are a closed set:
+
+| `additionalType` | The document | Written by |
+|---|---|---|
+| `implemented-requirements` | the Implemented Document, one per graduation | Mitos-Agent (`evaluation.py::identity_fragment`) |
+| `return-record` | one deliverable's return record, published to the store beside its local copy | the coding harness, following a `delivers:` skill |
+
+An unrecognized value is ignored exactly like a malformed block — the reader degrades to the
+manual flow rather than guessing what a type it has never heard of means.
+
 - `isPartOf` — the Work item's IRI, in Mitos's own `CREATIVE_WORK_NS` form
   (`http://peccia.net/creativework/` + the effort id — no hyphen in "creativework"). `<effort-id>`
   is the SAME id Mitos renders into the effort's tree heading (`### Auth rework (auth-rework)`,
@@ -49,6 +59,44 @@ rendered Markdown document:
 Omitted entirely — no `## Identity` section at all — when the dossier carries no effort id (a
 per-project record, or a tree deployed before Mitos started rendering effort ids into headings).
 There is nothing to point at, so nothing is asserted.
+
+## The `return-record` variant
+
+A return record published to the shared store carries the same block with one extra key:
+
+```json
+{
+  "@context": {"@vocab": "https://schema.org/"},
+  "@type": "DigitalDocument",
+  "additionalType": "return-record",
+  "isPartOf": {"@id": "http://peccia.net/creativework/<effort-id>"},
+  "identifier": "<run>",
+  "http://peccia.net/deliverable": "<delivers>"
+}
+```
+
+- `http://peccia.net/deliverable` — the deliverable this record answers for, written as the FULL
+  predicate IRI because that is exactly how Mitos serializes it on the effort itself
+  (`graph.DELIVERABLE_PRED`; see any `registry/graph/<slug>.jsonld`, where an effort's forward
+  contract appears as `"http://peccia.net/deliverable": [...]` under the same bare
+  `{"@vocab": "https://schema.org/"}` context). One vocabulary in both directions: the effort
+  declares `tests` as expected, and the record answers with `tests`. Its value is a member of
+  `graph.KNOWN_DELIVERABLES`.
+- `identifier` — the run, the same string the record's own `run:` header field carries. It is what
+  groups the several records of one run back together once they are flat documents in a store.
+- `isPartOf` and `@type` are unchanged, and carry the same meaning.
+
+**Where it goes, and where it must not.** The fragment belongs ONLY in the copy published to the
+store. The local record at `{{returns_root}}/<run>/<delivers>.md` is written first and left exactly
+as `artifact/returns.py` expects — that parser is the offline source of truth for the whole return
+lane, and an identity block is for Mitos's Discovery view, which never reads the local file. A
+harness that cannot publish therefore writes no fragment anywhere, which is correct: there is no
+store document for it to identify.
+
+**Why a return record wants one at all.** Without it, a published `<work> — tests` document reaches
+Discovery as an anonymous file, and the operator reconstructs by hand a mapping the harness knew
+when it wrote the thing. That is the same waste the Implemented Document's fragment already
+removes; there is no reason the other six deliverables should pay it.
 
 ## How each side uses it
 

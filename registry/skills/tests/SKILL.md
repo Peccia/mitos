@@ -114,6 +114,34 @@ your always-on context would name.
 Never let this step fail the work. An unwired store is a normal machine, and the local record —
 which is what the loop actually parses — is already written by the time you get here.
 
+### Identify the copy you publish
+
+The store copy — and **only** the store copy — ends with an `## Identity` section, so the document
+arrives in Mitos knowing which Work item it belongs to instead of as an anonymous file someone has
+to map by hand. Append it as the last section, exactly this shape:
+
+```json
+{
+  "@context": {"@vocab": "https://schema.org/"},
+  "@type": "DigitalDocument",
+  "additionalType": "return-record",
+  "isPartOf": {"@id": "http://peccia.net/creativework/<effort-id>"},
+  "identifier": "<run>",
+  "http://peccia.net/deliverable": "tests"
+}
+```
+
+`<effort-id>` is the part of the work item key after `__` (`northwind__auth-rework` → `auth-rework`)
+— the same id Mitos shows in an effort's heading, `### Auth rework (auth-rework)`, as the last
+parenthesised group. `<run>` is the run folder name.
+
+Two rules, and both matter:
+
+- **Never add this section to the local record.** That file is parsed offline by Mitos and is the
+  return lane's source of truth; it is written before you get here and must stay as written.
+- **If the work item key has no `__`, omit the section entirely.** There is no effort to point at,
+  and a mapping to nothing is worse than no mapping. Publish the document without it.
+
 ## Report back
 
 Say how many tests you added, which ones you verified by reverting, and what you left uncovered and
