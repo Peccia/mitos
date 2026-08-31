@@ -693,6 +693,18 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
 SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent"}
 
 
+def _declared_deliverables(reg: Registry) -> set[str]:
+    """Demand for the return lane: every deliverable term some effort actually asks for.
+
+    Example graphs step aside once real projects exist — the same rule the graph roster
+    applies (_suppressed_examples), and for the same reason: a shipped sample must not
+    switch the return lane on for a fleet that never opted into it.
+    """
+    suppressed = _suppressed_examples(reg)
+    return {d for slug, pg in (reg.graphs or {}).items() if slug not in suppressed
+            for e in pg.efforts for d in e.deliverables}
+
+
 def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
     """Skills a target receives, for ONE machine. Two layers compose:
     - push: the skill's `targets:` frontmatter declares which tools it is FOR;
@@ -712,6 +724,19 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     never wired, and a brand-new coding-harness user should not have to hand-write an
     `exclude:` list to keep the maintainer's workspace skills off their machine.
 
+    A fourth gate, non-curatable for the same reason: a skill declaring `delivers:` is
+    dropped unless some effort in the registry declares that deliverable
+    (_declared_deliverables). It is the exact inverse of _undelivered_warnings — that
+    reports demand with no supply, this stops shipping supply with no demand. A procedure
+    for an artifact nothing asks for is not inert: every harness pays for it in the skill
+    roster of every session, which is what put seven return-lane skills on a laptop that
+    runs one coding harness and nothing that reads a return record.
+
+    It keys off the REGISTRY, not this machine, and that distinction is load-bearing: a
+    coding-only box whose records a Mitos Agent elsewhere harvests still receives them
+    (render._machine_value's `returns_root` fallback exists for exactly that box). A gate
+    on `mitos-agent` being a target HERE would have deleted that configuration.
+
     **A MANUAL target takes no curation** (`is_manual_skill_target`): staging a zip is not
     deploying it, so the pile is a menu and the operator picks from it at upload time. Curating
     the menu buys nothing and costs the choice — a skill filtered out here is one they cannot
@@ -727,10 +752,12 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     include = curation.get("include")
     exclude = set(curation.get("exclude") or [])
     stores = set(document_stores((machine or {}).get("document_store")))
+    declared = _declared_deliverables(reg)
     return [s for s in reg.skills.values()
             if tgt in s.targets
             and not s.frontmatter.get("extends_skill")
             and (s.requires_server is None or s.requires_server in stores)
+            and (s.delivers is None or s.delivers in declared)
             and (include is None or s.name in include)
             and s.name not in exclude]
 
@@ -743,6 +770,12 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     `scope: project` (its confinement guarantee doesn't hold there). Warn-only: nothing
     here changes what deploys, it only surfaces filters that were previously silent.
 
+    The `delivers:` gate (_declared_deliverables) is deliberately NOT reported: unlike the
+    three above it is the DEFAULT state — a fresh clone declares no deliverables — so a line
+    here would fire on every deploy of a correct configuration, and the only way to silence
+    it would be to declare work you do not do. The reverse direction stays loud in
+    _undelivered_warnings, where the gap is real.
+
     A MANUAL target (`is_manual_skill_target`) reaches only the `requires_server:` line: it
     takes no curation, and it deploys nothing to leak. Every diagnostic here has to leave the
     operator a configuration that is both correct and quiet — one that fires whatever they do
@@ -750,6 +783,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     machine = reg.machines.get(machine_name) or {}
     machine_targets = set(machine.get("targets", []))
     stores = set(document_stores(machine.get("document_store")))
+    declared = _declared_deliverables(reg)
     warnings: list[str] = []
     # Every deliverable term this machine can actually satisfy, accumulated across targets:
     # a term is covered if ANY target here deploys a skill declaring it.
@@ -766,12 +800,15 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
         selected_names = {s.name for s in selected}
         delivered.update(s.delivers for s in selected if s.delivers)
         for name in sorted(candidates - selected_names):
-            req = reg.skills[name].requires_server
+            sk = reg.skills[name]
+            req = sk.requires_server
             if req and req not in stores:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but requires the '{req}' "
                     f"connection, which machines/{machine_name}.yaml does not declare "
                     f"(document_store:) — not deployed")
+            elif sk.delivers and sk.delivers not in declared:
+                continue        # the default state, not a filter — see the docstring
             else:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but is excluded by this machine's "

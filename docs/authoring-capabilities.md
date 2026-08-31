@@ -108,6 +108,20 @@ confuse, so the boundary is fixed:
 | `runbook` | How do I **operate and troubleshoot** the result afterward? | Outlives the release |
 | `migration-notes` | What changed for **existing data and consumers**, and what must they do? | One release, different audience |
 
+**A `delivers:` skill deploys only where the deliverable is declared.** If no effort in the
+registry asks for `runbook`, no machine receives the `runbook` skill — the same gate as
+`requires_server:` below, and not a preference either: a machine cannot `include:` its way to
+a procedure for an artifact nothing asks for. It is the exact inverse of the `--dry-run`
+warning above (that reports demand with no supply; this stops shipping supply with no demand),
+and it is why a fresh clone, which declares no deliverables anywhere, receives none of the
+return-lane skills instead of seven procedures for a lane it has not opted into.
+
+The gate reads the **registry**, not the machine. A coding-only box whose records a Mitos
+Agent elsewhere harvests still gets them — that box is what `{{returns_root}}`'s
+`.mitos-returns/` fallback is for. To turn the lane on, declare the deliverable on an effort
+(console effort editor, or `peccia:deliverable` in the graph) and redeploy; to clear copies a
+machine already has, `deploy --machine <name> --prune`.
+
 ### Connection-bound skills: `requires_server:`
 
 Some skills are nothing but instructions for one MCP server's tools — the shipped `gws`

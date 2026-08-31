@@ -2083,6 +2083,42 @@ def test_is_manual_skill_target_is_the_zip_mode_set():
     assert not loader.is_manual_skill_target({})
 
 # ── delivers: pairing an effort's forward contract with the skill that answers it ──
+def test_delivers_skill_deploys_only_where_the_deliverable_is_declared():
+    """The regression: seven return-lane skills landed on a laptop running one coding harness
+    and nothing that reads a return record, because their `targets:` list claude-code. A
+    procedure for an artifact nothing asks for is not inert — every session pays for it in the
+    skill roster. Demand is read off the registry graph, the inverse of the undelivered
+    warning below."""
+    from dataclasses import replace as _replace
+    spec = {"include_target": "claude-code"}
+    wired = {"document_store": "gws"}
+    # core registry: the shipped example project declares no deliverables
+    assert not planner._declared_deliverables(reg)
+    shipped = {n for n, sk in reg.skills.items() if sk.delivers and "claude-code" in sk.targets}
+    assert shipped, "guard: the registry ships deliverable skills for claude-code"
+    assert not shipped & {s.name for s in planner._selected_skills(reg, spec, wired)}
+
+    r = _connected_rig("example-linux")
+    pg = r.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("changelog",))] + list(pg.efforts[1:])
+    selected = {s.name for s in planner._selected_skills(r, spec, wired)}
+    # per term, not all-or-nothing: only the declared one comes back
+    assert "changelog" in selected and "runbook" not in selected
+    # curation cannot smuggle it back in — like requires_server, this is not a preference
+    assert "runbook" not in {s.name for s in planner._selected_skills(
+        r, spec, {**wired, "skills": {"claude-code": {"include": ["runbook"]}}})}
+
+
+def test_an_undeclared_deliverable_is_dropped_without_a_warning():
+    """Unlike curation and requires_server, this gate is the DEFAULT state — a fresh clone
+    declares no deliverables anywhere — so a line here would fire on every deploy of a correct
+    configuration, and the only way to silence it would be to declare work you do not do. It
+    must not be misreported as a curation exclusion either."""
+    warnings = planner.skill_deploy_warnings(reg, "example-windows")
+    assert not any(sk.delivers and sk.name in w
+                   for w in warnings for sk in reg.skills.values())
+
+
 def _rig_wanting(term: str, *, delivered_by: str | None = None):
     """A connected rig whose example-project effort declares `term`, optionally with a
     mitos-agent skill that declares `delivers: term`."""

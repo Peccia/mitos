@@ -7,10 +7,21 @@ from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
 def _one_machine_rig(**machine):
-    """A registry whose fleet is exactly one machine — the fresh-install shape."""
+    """A registry whose fleet is exactly one machine — the fresh-install shape.
+
+    Its example effort declares the whole deliverable vocabulary, because a skill declaring
+    `delivers:` deploys only where some effort asks for that term (planner._selected_skills).
+    Without it this rig would stand for a fleet that never opted into the return lane, and
+    every test below would be asserting the connection gate against a roster the DELIVERABLE
+    gate had already emptied — passing or failing for the wrong reason."""
+    from dataclasses import replace as _replace
+    from agentic import graph as graphmod
     rig = copy.deepcopy(reg)
     rig.machines.clear()
     rig.machines["box"] = {"name": "box", "os": "windows", "paths": {}, **machine}
+    pg = rig.graphs["example-project"]
+    pg.efforts = ([_replace(pg.efforts[0], deliverables=graphmod.KNOWN_DELIVERABLES)]
+                  + list(pg.efforts[1:]))
     return rig
 
 
