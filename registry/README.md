@@ -111,8 +111,9 @@ fold back on `adopt`/review-accept (`render.reverse_expand_placeholders`) so an 
 you make to a deployed file routes back to the registry with placeholders intact, not your
 name baked in. An unrecognized `{{...}}` token is left as literal text, never silently eaten.
 
-Two additional tokens are machine-scoped rather than user-scoped, resolved from the
-deploying machine's `paths:` in `machines/<name>.yaml`:
+Four additional tokens are machine-scoped rather than user-scoped. Three resolve from the
+deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolves from its
+`document_store:` instead:
 
 - `{{project_root}}` — the agent tree root: `assistant_root`, else
   `agentic_context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
@@ -131,8 +132,18 @@ deploying machine's `paths:` in `machines/<name>.yaml`:
   harness's own resolver never looks at *while looking like it had worked* — a silently
   wrong path is worse than an obviously separate one. The seven shipped deliverable skills
   write to `{{returns_root}}/<run>/<deliverable>.md`.
+- `{{connection}}` — the machine's wired document store, named as the stable section label
+  `<Name> (`key`)` that `render.connection_label` mints, so a skill naming the store and a
+  tree node heading it can never drift apart. A multi-store machine expands to every label,
+  comma-joined. Resolved from `document_store:`, **not** from `paths:` — a connection is not
+  a filesystem fact. The same seven deliverable skills use it to publish a copy of each
+  record to the store: `connections_block` renders a connection heading into tree roots
+  only, so a coding-only box (no `agents-md` target) had a live `mcp.json` and nothing in
+  its context naming it, and every publish step correctly refused to guess.
 
-On a machine that defines no matching path a machine token stays literal. Reversal on
+On a machine that defines no matching path — or, for `{{connection}}`, no document store —
+a machine token stays literal. That literal is load-bearing for the deliverable skills:
+their "no store wired, print it for the owner by hand" branch keys on it. Reversal on
 `adopt`/review-accept matches any machine's value, scoped as above to partials that
 actually carry the token.
 

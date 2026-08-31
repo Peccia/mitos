@@ -171,7 +171,7 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             f"machine {machine_name}: markdown-structure contract violated "
             f"({len(md_problems)} problem(s)):\n" + "\n".join(md_problems))
 
-    return [_expand_output(reg, o, paths) for o in outputs]
+    return [_expand_output(reg, o, paths, machine) for o in outputs]
 
 
 # The reserved H2 sections, in the canonical order every tree-node file follows. SOUL and
@@ -228,15 +228,19 @@ def lint_node_markdown(o: "Output") -> list[str]:
     return problems
 
 
-def _expand_output(reg: Registry, o: Output, machine_paths: dict | None = None) -> Output:
+def _expand_output(reg: Registry, o: Output, machine_paths: dict | None = None,
+                   machine: dict | None = None) -> Output:
     """Personalization pass (the dynamic-context-enhancements design): substitute the
     fixed `{{user_*}}` placeholders — plus the machine-scoped `{{project_root}}` —
     in every markdown/text output and skill-zip member.
     Tool-owned merge configs (yaml_merge/json_merge) and env templates are excluded —
     they are machine wiring, not prose the model reads, and the .local/ env overlay
-    must never flow through this pass (see io/secrets invariant)."""
+    must never flow through this pass (see io/secrets invariant).
+
+    `machine` is threaded through for `{{connection}}`, which resolves from the profile's
+    `document_store:` rather than its `paths:`."""
     def _x(text: str) -> str:
-        return render.expand_placeholders(reg, text, machine_paths)
+        return render.expand_placeholders(reg, text, machine_paths, machine)
     if o.kind == "text":
         return replace(
             o, content=_x(o.content),

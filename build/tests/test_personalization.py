@@ -132,14 +132,14 @@ def test_user_token_map_agrees_with_expand_placeholders():
 def test_machine_token_names_are_the_machine_scoped_tokens():
     """The console leaves these literal rather than prompting: a copied prompt goes to a
     chat app, not a machine deploy, so no machine's paths apply."""
-    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root"}
+    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root", "connection"}
 
 
 def test_state_exposes_both_token_sets():
     from agentic.review import state
     treg, _tmp = _temp_registry()
     st = state(treg)
-    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root"}
+    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root", "connection"}
     # every advertised user token must carry a real value — the console substitutes blind
     assert all(v for v in st["user_tokens"].values())
 
@@ -169,6 +169,84 @@ def test_returns_root_does_not_reuse_project_roots_fallback():
 def test_returns_root_stays_literal_when_a_machine_defines_neither_path():
     from agentic import render
     assert render.expand_placeholders(_FakeReg({}), "{{returns_root}}", {}) == "{{returns_root}}"
+
+
+# ── {{connection}} (the store a return-lane skill publishes to) ──────────────
+_SERVERS = {"servers": {"gws": {"description": "Google Workspace suite — the source of truth."},
+                        "notion": {"description": "Notion"}}}
+
+
+class _ConnReg(_FakeReg):
+    """_FakeReg plus a servers map — only {{connection}} reads it."""
+    def __init__(self, user: dict, machines: dict | None = None, servers: dict | None = None):
+        super().__init__(user, machines)
+        self.servers = servers if servers is not None else _SERVERS
+
+
+def test_connection_expands_to_the_same_label_the_tree_heading_uses():
+    """The skill names the store and a tree node headings it. If those two strings could
+    differ, a harness told to look for one would miss the other — so both come from
+    `connection_label`, asserted here against each other rather than against a literal."""
+    machine = {"document_store": "gws"}
+    expected = render.connection_label(_SERVERS["servers"], "gws")[0]
+    out = render.expand_placeholders(_ConnReg({}), "store: {{connection}}", {}, machine)
+    assert out == f"store: {expected}"
+    assert out == "store: Google Workspace suite (`gws`)"
+
+
+def test_connection_reads_document_store_not_paths():
+    """The one machine token that is not a filesystem fact: a box with no `paths:` at all
+    still names its store, and a box with every path and no store does not."""
+    assert render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", None, {"document_store": "gws"}) \
+        == "Google Workspace suite (`gws`)"
+    assert render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", {"assistant_root": "~/MitosAgent"}, {}) == "{{connection}}"
+
+
+def test_connection_stays_literal_for_an_unwired_or_unknown_store():
+    """A publish step keys its 'say so, print it by hand' branch on this staying literal, so
+    an unset store, the literal 'none', and a name servers.yaml has never heard of must all
+    read the same. Naming a store the machine cannot reach is the one wrong answer."""
+    for ds in (None, "", "none", "nosuchserver"):
+        assert render.expand_placeholders(
+            _ConnReg({}), "{{connection}}", {}, {"document_store": ds}) == "{{connection}}"
+    # ...and with no machine profile threaded through at all (every pre-A1 caller)
+    assert render.expand_placeholders(_ConnReg({}), "{{connection}}", {}) == "{{connection}}"
+
+
+def test_connection_names_every_store_a_multi_store_machine_wires():
+    """One name would make the skill pick a store silently. Naming both makes the choice the
+    harness's, out loud."""
+    out = render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", {}, {"document_store": ["gws", "notion"]})
+    assert out == "Google Workspace suite (`gws`), Notion (`notion`)"
+
+
+def test_connection_survives_a_registry_stand_in_with_no_servers():
+    """Only {{connection}} reads `.servers`; a caller without one must lose that token, not
+    every other placeholder in the document."""
+    out = render.expand_placeholders(
+        _FakeReg({"given_name": "Paul"}), "{{user_given_name}} {{connection}}", {},
+        {"document_store": "gws"})
+    assert out == "Paul {{connection}}"
+
+
+def test_every_delivers_skill_names_the_store_through_the_token():
+    """A1's point: the seven return-lane skills must not depend on a connection section that
+    only renders into `agents-md` tree roots — that is precisely why a coding-only box
+    published nothing. Each must carry the token exactly once (a second occurrence would be
+    expanded too, turning the 'no store wired' branch into nonsense on a wired machine)."""
+    import pathlib
+    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
+    delivers = [p for p in sorted(skills.glob("*/SKILL.md"))
+                if "\ndelivers:" in p.read_text(encoding="utf-8")]
+    assert len(delivers) >= 7, "expected the return-lane skills to be found"
+    for p in delivers:
+        body = p.read_text(encoding="utf-8")
+        assert body.count("{{connection}}") == 1, f"{p.parent.name}: token count"
+        assert "always-on context for a connection section" not in body, \
+            f"{p.parent.name}: still depends on a tree-root-only heading"
 
 
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────

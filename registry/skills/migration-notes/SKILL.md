@@ -121,14 +121,16 @@ remote copy is a convenience.
 The local record is a file on one machine. The owner's planning harness, and anyone reviewing this
 work later, read the shared document store — so put a copy there too.
 
-Look at your always-on context for a connection section headed ``## <Name> (`key`)``. That names
-the document store this machine has wired.
+This machine's wired document store is **{{connection}}**. Mitos expands that name at deploy
+time from the machine's own configuration, so it is the same store any connection section in
+your always-on context would name.
 
-- **If one is named**, create a document there titled `<work item key> — migration-notes`, with this
+- **If a store is named above**, create a document there titled `<work item key> — migration-notes`, with this
   record's body as its content, and add the URL it returns as a `locator:` line in the local
   record's header.
-- **If none is named**, you cannot reach a store and must not guess at one. Say so, and print the
-  exact title and the body for the owner to add by hand.
+- **If no store is named above** — the line shows an unexpanded placeholder rather than a store
+  name — this machine has no store wired. You cannot reach one and must not guess at one. Say
+  so, and print the exact title and the body for the owner to add by hand.
 
 Never let this step fail the work. An unwired store is a normal machine, and the local record —
 which is what the loop actually parses — is already written by the time you get here.

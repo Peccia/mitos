@@ -129,10 +129,19 @@ def rejoin_regions(carved: list[tuple[str, str]], src: str) -> str:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root")
+_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root", "connection")
 
 
-def _machine_value(paths: dict | None, key: str) -> str | None:
+def _servers(reg) -> dict:
+    """The `servers.yaml` server map off a Registry, tolerating a stand-in that has none.
+    Matches `reverse_expand_placeholders`'s existing `getattr(reg, "machines", {})` posture:
+    only `{{connection}}` reads this, so a caller passing a reg without it gets that one
+    token left literal rather than an AttributeError on every placeholder in the document."""
+    return (getattr(reg, "servers", None) or {}).get("servers") or {}
+
+
+def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
+                   servers: dict | None = None) -> str | None:
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
     - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
@@ -154,7 +163,33 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
       `project_root`: it resolves to `projects_root` on a coding box, which would put the
       records inside a path the harness's own resolver never looks at while LOOKING like it
       had worked — a silently wrong path is worse than an obviously separate one.
+    - `connection`: the wired document store, named as the STABLE section label
+      `<Name> (`key`)` that `connection_label` mints — the same string `connections_block`
+      renders as a heading, so a skill naming the store and a tree node heading it can
+      never drift apart.
+
+      This exists because a store being WIRED and a store being NAMED are different facts,
+      and only the second reaches a skill. `connections_block` renders into tree/branch
+      roots only, so a coding-only machine (no `agents-md` target) has a live `mcp.json`
+      and nothing in its always-on context that says so — and every return-lane skill's
+      publish step, which looks for that heading, correctly refuses to guess and writes
+      nothing. Expanding the label into the skill itself carries the name to exactly the
+      machines that were missing it, without inventing a tree they never asked for.
+
+      Multi-store machines expand to every label, comma-joined, in `document_stores` order:
+      the skill then names each store it could publish to rather than silently picking one.
+      `None` (token stays literal) when the machine wires no store — which is the honest
+      signal a publish step keys its "say so, print it for the owner" branch on.
     """
+    if key == "connection":
+        # Reads `machine`/`servers`, never `paths` — deliberately the only token that does,
+        # since a connection is not a filesystem fact.
+        labels = []
+        for ds in document_stores((machine or {}).get("document_store")):
+            label = connection_label(servers or {}, ds)
+            if label:
+                labels.append(label[0])
+        return ", ".join(labels) if labels else None
     if not paths:
         return None
     if key == "project_root":
@@ -219,15 +254,21 @@ def machine_token_names() -> list[str]:
     return list(_MACHINE_TOKENS)
 
 
-def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None) -> str:
+def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None,
+                        machine: dict | None = None) -> str:
     """Substitute the fixed personalization tokens with `reg.user` values, plus the
     machine-scoped tokens (`_MACHINE_TOKENS`) resolved from the deploying machine's
     paths (`_machine_value`). Without `machine_paths` (or on a machine that defines
-    no matching path) a machine token stays literal, like any other unconfigured one."""
+    no matching path) a machine token stays literal, like any other unconfigured one.
+
+    `machine` is the whole machine profile, needed by `{{connection}}` alone — it resolves
+    from `document_store:` and `connections/servers.yaml`, not from `paths:`. Omitting it
+    leaves that one token literal and changes nothing else, so every existing caller keeps
+    its exact behaviour."""
     def _sub(m: re.Match) -> str:
         key = m.group(1)
-        val = (_machine_value(machine_paths, key) if key in _MACHINE_TOKENS
-               else _user_value(reg.user, key))
+        val = (_machine_value(machine_paths, key, machine, _servers(reg))
+               if key in _MACHINE_TOKENS else _user_value(reg.user, key))
         return val if val is not None else m.group(0)
     return _PLACEHOLDER_RE.sub(_sub, text)
 
@@ -251,7 +292,8 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     pairs = []
     for tok in tokens:
         if tok in _MACHINE_TOKENS:
-            vals = {_machine_value((m or {}).get("paths"), tok)
+            servers = _servers(reg)
+            vals = {_machine_value((m or {}).get("paths"), tok, m, servers)
                     for m in getattr(reg, "machines", {}).values()}
             pairs += [(v, f"{{{{{tok}}}}}") for v in vals if v]
             continue
