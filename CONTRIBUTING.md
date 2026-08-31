@@ -13,6 +13,9 @@ interpreter paths are identical.
 
 Mitos runs from a project virtualenv — every command uses that interpreter directly (never a bare
 `python`). The paths below are the venv interpreter; `python3` on Linux/macOS, `python` on Windows.
+Once the virtualenv exists, the repo-root shim (`./mitos` on Linux/macOS, `.\mitos` on Windows)
+picks that interpreter for you and routes the verb to `build/mitos.py` or `build/compile.py`; the
+test runner has no verb, so run it with the interpreter path as shown below.
 
 1. **Create a parent `Mitos/` directory, clone your fork into it as `mitos`, and add `upstream`**
    (replace `YOUR-USERNAME`). The parent folder is what lets Mitos track its own repo as a project,
@@ -59,7 +62,7 @@ Mitos runs from a project virtualenv — every command uses that interpreter dir
    Prefer pytest? Install the dev extra (`build/.venv/bin/python -m pip install pytest`) and run
    `pytest build/tests/` — both run the same suite.
 
-4. Initialize your personal overlay: `build/.venv/bin/python build/mitos.py init`.
+4. Initialize your personal overlay: `./mitos init`.
 
 5. **Set up Mitos as a self-managed project on your machine.** Add a machine profile under
    `registry/local/machines/` whose `projects_root` is the parent of your `Mitos/` folder, and
@@ -93,7 +96,7 @@ Run both checks with the venv interpreter (`build/.venv/bin/python`, or
 
 1. Create a feature branch from `main`.
 2. Ensure `build/.venv/bin/python build/tests/test_compiler.py` passes all tests.
-3. Run `build/.venv/bin/python build/compile.py compile` to validate the registry schema.
+3. Run `./mitos compile` to validate the registry schema.
 4. A new verb, target, or schema field lands **together with** its schema validation, its docs,
    and a test — or not at all (see the contribution rule in [`AGENTS.md`](AGENTS.md)).
 5. Open a PR with a clear description of what changed and why.

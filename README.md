@@ -66,7 +66,10 @@ Keep your private machine profiles, identity, and projects under `registry/local
 
 Get started in 5 steps. Mitos requires **Python 3.11+** and **Git**. 
 
-All commands below run the project's virtualenv interpreter directly to avoid system conflicts.
+Steps 1-2 run the project's virtualenv interpreter directly to avoid system conflicts. From
+step 3 on, the repo-root `mitos` shim does that for you: it finds `build/.venv`'s interpreter
+and routes the verb to the right script, so nothing needs activating and there is one command
+to remember.
 
 ### Linux / macOS
 
@@ -81,14 +84,14 @@ python3 -m venv build/.venv
 build/.venv/bin/python -m pip install -r build/requirements.txt
 
 # Step 3: Initialize your private overlay and machine profile (e.g. named 'my-machine')
-build/.venv/bin/python build/mitos.py init
+./mitos init
 
 # Step 4: Compile and preview your first dry-run deployment (writes nothing)
-build/.venv/bin/python build/compile.py compile
-build/.venv/bin/python build/compile.py deploy --machine my-machine --dry-run
+./mitos compile
+./mitos deploy --machine my-machine --dry-run
 
 # Step 5: Launch the Operator Console to review and manage your registry
-build/.venv/bin/python build/compile.py review
+./mitos review
 ```
 
 ### Windows (PowerShell)
@@ -104,20 +107,22 @@ python -m venv build/.venv
 build/.venv/Scripts/python.exe -m pip install -r build/requirements.txt
 
 # Step 3: Initialize your private overlay and machine profile (e.g. named 'my-machine')
-build/.venv/Scripts/python.exe build/mitos.py init
+.\mitos init
 
 # Step 4: Compile and preview your first dry-run deployment (writes nothing)
-build/.venv/Scripts/python.exe build/compile.py compile
-build/.venv/Scripts/python.exe build/compile.py deploy --machine my-machine --dry-run
+.\mitos compile
+.\mitos deploy --machine my-machine --dry-run
 
 # Step 5: Launch the Operator Console to review and manage your registry
-build/.venv/Scripts/python.exe build/compile.py review
+.\mitos review
 ```
 
 > [!NOTE]
 > The compiler validates machine profiles against your host OS before writing files. Rehearse any cross-machine deployments safely using the `--root <dir>` flag to write into a sandbox directory.
 >
-> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. In later commands, `python build/...` is used as shorthand for the virtual environment interpreter (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`). Ensure you use the venv path when running them.
+> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. The repo-root shims — `mitos` (Linux/macOS) and `mitos.cmd` (Windows) — are the supported way to call it: they pick the venv interpreter and route the verb to `build/mitos.py` (`init`, `project`, `connect`, `connectors`, `sync`) or `build/compile.py` (everything else). Later commands written as `python build/compile.py <verb>` are the same thing as `./mitos <verb>`; if you invoke the scripts directly, use the venv path (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`).
+>
+> To type a bare `mitos` from anywhere, add the repo root to your `PATH`, or on Windows add `Set-Alias mitos <repo>\mitos.cmd` to your PowerShell `$PROFILE`.
 
 > [!TIP]
 > **Staying up to date.** When you run `mitos.py init` or `mitos.py sync`, Mitos checks whether
@@ -196,8 +201,8 @@ To customize your machine paths or add new machines to your fleet:
 3. Compile and deploy your machine:
 
    ```bash
-   build/.venv/bin/python build/compile.py compile
-   build/.venv/bin/python build/compile.py deploy --machine <name>
+   ./mitos compile
+   ./mitos deploy --machine <name>
    ```
 
 Once your overlay defines a real machine profile, `compile` automatically **skips the `example-*`

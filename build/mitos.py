@@ -734,7 +734,7 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             pass
-    p = argparse.ArgumentParser(prog="mitos.py", description=__doc__)
+    p = argparse.ArgumentParser(prog="mitos", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="scaffold the private overlay at registry/local/")
     pp = sub.add_parser("project", help="scaffold a project manifest (Stage 1 of graph init)")

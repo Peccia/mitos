@@ -2849,11 +2849,13 @@ function buildContextualEditor(opts) {
 
   // The one deliberate, narrowly-scoped exception to this file's "textContent only,
   // never innerHTML" rule (see the header comment) — a sanitized markdown preview.
-  // window.snarkdown's output ALWAYS passes through window.DOMPurify.sanitize()
+  // window.marked's output ALWAYS passes through window.DOMPurify.sanitize()
   // before touching the DOM; never used for candidate/registry raw text elsewhere.
+  // breaks: true keeps the single-newline-is-a-line-break feel prompts were written
+  // against; marked itself does no sanitizing, which is DOMPurify's job below.
   function updatePreview() {
     if (preview.hidden) return;
-    const html = window.snarkdown ? window.snarkdown(ta.value) : "";
+    const html = window.marked ? window.marked.parse(ta.value, {gfm: true, breaks: true}) : "";
     preview.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html) : "";
   }
 

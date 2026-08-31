@@ -1953,3 +1953,32 @@ def test_state_exposes_the_registry_wide_default_read_only():
     from agentic import review
     st = review.state(reg)
     assert st["registry_default_deliverables"] == ["documentation", "tests"]
+
+
+def test_vendored_ui_libs_match_their_recorded_hashes():
+    """VENDOR.md is the provenance record for the two files the preview loads. A bumped or
+    hand-edited vendored build with a stale row would leave that record lying."""
+    import hashlib
+    import re
+
+    from agentic import review
+    vendor = (review.UI_DIR / "VENDOR.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^\| `([\w.]+)` \|.*\| `([0-9a-f]{64})` \|", vendor, re.M)
+    assert {name for name, _ in rows} == {"marked.min.js", "dompurify.min.js"}
+    for name, recorded in rows:
+        blob = (review.UI_DIR / name).read_bytes()
+        assert hashlib.sha256(blob).hexdigest() == recorded, f"{name} differs from VENDOR.md"
+
+
+def test_markdown_preview_loads_marked_and_still_sanitizes():
+    """snarkdown cannot render nested lists (its indented-block rule wins over its list
+    rule), so the preview renders with marked — which sanitizes nothing itself, making the
+    DOMPurify hop the one thing that must never be dropped alongside it."""
+    from agentic import review
+    html = (review.UI_DIR / "index.html").read_text(encoding="utf-8")
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert '<script src="marked.min.js"></script>' in html
+    assert "snarkdown" not in html and "snarkdown" not in app
+    assert not (review.UI_DIR / "snarkdown.js").exists()
+    assert "window.marked.parse(" in app
+    assert "window.DOMPurify.sanitize(html)" in app
