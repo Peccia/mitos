@@ -45,6 +45,7 @@ Take control of your registry, author custom capabilities, and select organizati
 - **[Operator console](operator-console.md)** — Running the local `review` console to reconcile proposals, curate knowledge graphs, and use the Prompt Library.
 - **[Authoring custom capabilities](authoring-capabilities.md)** — A guide to writing and binding custom Skills, Subagents, and Prompts in Mitos.
 - **[Organization templates](org-templates.md)** — Selecting and customizing default C-suite delegation models (Solo Assistant, Software Firm, Design Firm).
+- **[The Implemented Document's identity fragment](implemented-document-identity.md)** — The shared JSON-LD contract Mitos-Agent embeds in a graduated Work item's Implemented Document, and how the console's map-to-effort flow reads it as a hint.
 
 ---
 

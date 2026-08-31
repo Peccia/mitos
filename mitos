@@ -8,7 +8,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # Verbs owned by build/mitos.py (interactive / network reach). Everything else
 # routes to build/compile.py, so a new deterministic verb needs no edit here.
 # Kept in sync with mitos.py's subparsers by test_cli_shim_verbs_match_mitos_py.
-MITOS_INTERACTIVE_VERBS="init project connect connectors sync"
+MITOS_INTERACTIVE_VERBS="init project connect connectors peek sync"
 
 if [ -x "$ROOT/build/.venv/bin/python" ]; then
   PY="$ROOT/build/.venv/bin/python"

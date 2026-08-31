@@ -7,7 +7,7 @@ rem   .\mitos compile ^| deploy ^| review ^| connect --project X ^| sync --machi
 rem Verbs owned by build\mitos.py (interactive / network reach). Everything else
 rem routes to build\compile.py, so a new deterministic verb needs no edit here.
 rem Kept in sync with mitos.py's subparsers by test_cli_shim_verbs_match_mitos_py.
-set "MITOS_INTERACTIVE_VERBS=init project connect connectors sync"
+set "MITOS_INTERACTIVE_VERBS=init project connect connectors peek sync"
 
 set "ROOT=%~dp0"
 set "PY=%ROOT%build\.venv\Scripts\python.exe"

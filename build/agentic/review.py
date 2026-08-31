@@ -1883,6 +1883,88 @@ def refresh_staging(reg: Registry, slug: str, pool: str = "", scope_key: str = "
     return {"ok": True, "log": log, "staged": load_staged(reg, slug, pool)}
 
 
+# ── the identity handshake (docs/implemented-document-identity.md) ───────────
+# When an operator opens the map-to-effort flow ("Tweak & map") for a Discovery document,
+# the console fetches its content and scans it for the JSON-LD block Mitos-Agent embeds in a
+# graduated Work item's Implemented Document. A hint, never an authority: the operator still
+# confirms or changes the suggestion before Propose, and every degraded case (unreachable,
+# unparseable, names an unknown effort) is a silent no-suggestion, not an error.
+_IDENTITY_FRAGMENT_RE = re.compile(r"```json\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+
+
+def _store_for_doc(staged: dict, doc_id: str) -> str:
+    """Which store produced one staged document, by looking up the `scope_keys`
+    `staging.merge_documents` already tagged it with against the listing summaries'
+    `scope.store` — the same provenance `_in_scope_flags` reads, for one id instead of all of
+    them. First matching listing wins; empty when the id isn't staged or names no store."""
+    doc = next((d for d in staged.get("documents") or [] if str(d.get("id")) == doc_id), None)
+    if not doc:
+        return ""
+    by_key = {l["scope_key"]: l for l in staged.get("listings") or []}
+    for key in doc.get("scope_keys") or []:
+        listing = by_key.get(key)
+        store = (listing or {}).get("scope", {}).get("store")
+        if store:
+            return str(store)
+    return ""
+
+
+def extract_identity_effort(text: str, pg) -> str:
+    """The effort id Mitos-Agent's identity fragment names, when the fragment parses AND that
+    id exists in `pg` (this project's CURRENT graph, possibly None). Untrusted candidate text:
+    a malformed block, the wrong `additionalType`, or an id this project has never heard of all
+    degrade to `""` — the console's existing manual flow — never a guess and never an error."""
+    from . import graph as graphmod
+    known = {e.id for e in (pg.efforts if pg else [])}
+    for m in _IDENTITY_FRAGMENT_RE.finditer(text or ""):
+        try:
+            frag = json.loads(m.group(1))
+        except ValueError:
+            continue
+        if not isinstance(frag, dict) or frag.get("additionalType") != "implemented-requirements":
+            continue
+        part_of = frag.get("isPartOf")
+        iri = part_of.get("@id") if isinstance(part_of, dict) else None
+        if not isinstance(iri, str) or not iri.startswith(graphmod.CREATIVE_WORK_NS):
+            continue
+        effort_id = iri[len(graphmod.CREATIVE_WORK_NS):]
+        if effort_id in known:
+            return effort_id
+    return ""
+
+
+def peek_identity_effort(reg: Registry, slug: str, doc_id: str, pool: str = "",
+                         timeout: int = 30) -> dict:
+    """The map-to-effort flow's prefill lookup: fetch one staged document's content and scan
+    it for an identity-fragment suggestion. Shells out to `build/mitos.py peek`, mirroring
+    `refresh_staging`'s invariant-#11 construction — `compile.py` still imports no connector
+    code; the reach lives in a child process, same trust model as the console already running
+    compile/deploy.
+
+    Always answers `{"ok": True, "effort_id": <id-or-"">}` — a store that can't be reached, a
+    document with no recorded store, or a subprocess failure are exactly as valid an outcome
+    as a document with no fragment at all: none of them are errors the console needs to show,
+    since the operator always still picks (or overrides) the effort by hand."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": True, "effort_id": ""}
+    staged = load_staged(reg, slug, pool)
+    if not staged.get("ok"):
+        return {"ok": True, "effort_id": ""}
+    store = _store_for_doc(staged, doc_id)
+    if not store:
+        return {"ok": True, "effort_id": ""}
+    cmd = [sys.executable, str(Path(__file__).resolve().parents[1] / "mitos.py"),
+           "peek", "--store", store, "--id", doc_id]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              cwd=str(Path(__file__).resolve().parents[2]))
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ok": True, "effort_id": ""}
+    if proc.returncode != 0:
+        return {"ok": True, "effort_id": ""}
+    return {"ok": True, "effort_id": extract_identity_effort(proc.stdout, reg.graphs.get(slug))}
+
+
 def _open_staging(reg: Registry, slug: str, pool: str, scope_key: str) -> tuple:
     """Shared front half of the two pure-file watch edits (remove_watch/rename_watch):
     validate the slug + scope_key, resolve which staging file backs this pool, and parse it
@@ -2400,6 +2482,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
                                   "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/graph/purge", "/api/graph/refresh",
+                                  "/api/graph/peek-identity",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
                                   "/api/project/edit",
                                   "/api/reload",
@@ -2549,6 +2632,17 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     str(body.get("pool", "") or ""),
                     str(body.get("scope_key", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/peek-identity":
+                # "Tweak & map" opening on a staged document — fetch its content and scan
+                # for Mitos-Agent's identity fragment (docs/implemented-document-identity.md)
+                # via a mitos.py subprocess. Always 200: an unreachable store or a document
+                # with no fragment is exactly as valid an outcome as finding one, never an
+                # error the console needs to surface.
+                result = peek_identity_effort(
+                    holder["reg"], str(body.get("slug", "")),
+                    str(body.get("id", "")),
+                    str(body.get("pool", "") or ""))
+                return self._json(200, result)
             if self.path == "/api/graph/unwatch":
                 # "Remove watch" — drop one listing from the staging file. Pure file edit,
                 # no connector involved, console-only (no CLI counterpart).

@@ -721,6 +721,152 @@ def test_refresh_staging_with_multiple_listings_requires_scope_key(monkeypatch):
     assert out3["ok"] is False
 
 
+def _identity_fragment(effort_id: str, extra: str = "") -> str:
+    """A Mitos-Agent-shaped Implemented Document body carrying the identity fragment
+    (docs/implemented-document-identity.md) — mirrors mitos-agent's
+    `evaluation.identity_fragment` output exactly, so these tests exercise the real contract
+    rather than a stand-in shape."""
+    return (
+        "# Implemented: demo__launch-prep\n\n"
+        "_Run `r-1` · score 100/100._\n\n" + extra +
+        "## Identity\n\n```json\n"
+        '{\n  "@context": {"@vocab": "https://schema.org/"},\n'
+        '  "@type": "DigitalDocument",\n'
+        '  "additionalType": "implemented-requirements",\n'
+        f'  "isPartOf": {{"@id": "http://peccia.net/creativework/{effort_id}"}},\n'
+        '  "identifier": "r-1"\n}\n```\n')
+
+
+def test_extract_identity_effort_finds_a_known_effort():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]   # ships an effort with id "launch-prep"
+    assert review.extract_identity_effort(_identity_fragment("launch-prep"), pg) == \
+        "launch-prep"
+
+
+def test_extract_identity_effort_ignores_an_unknown_effort_id():
+    """The fragment parses fine but names an effort this project's graph has never heard
+    of — degrades to no suggestion, never a guess."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    assert review.extract_identity_effort(_identity_fragment("no-such-effort"), pg) == ""
+
+
+def test_extract_identity_effort_ignores_malformed_json():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    broken = "## Identity\n\n```json\n{ not: valid json\n```\n"
+    assert review.extract_identity_effort(broken, pg) == ""
+
+
+def test_extract_identity_effort_ignores_the_wrong_additional_type():
+    """Only `implemented-requirements` counts — any other JSON-LD block a document happens
+    to carry is not this contract and must not be read as one."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    other = ('```json\n{"@type": "DigitalDocument", "additionalType": "something-else", '
+             '"isPartOf": {"@id": "http://peccia.net/creativework/launch-prep"}}\n```\n')
+    assert review.extract_identity_effort(other, pg) == ""
+
+
+def test_extract_identity_effort_with_no_graph_yet_finds_nothing():
+    """A project with no knowledge graph at all — `pg` is None — must not crash; there is
+    nothing to confirm the suggestion against, so none is offered."""
+    from agentic import review
+    assert review.extract_identity_effort(_identity_fragment("launch-prep"), None) == ""
+
+
+def test_peek_identity_effort_prefills_from_a_staged_document(monkeypatch):
+    """End-to-end through the console function the API endpoint calls: a staged document
+    whose content carries the fragment yields the prefilled suggestion."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Implemented: demo"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Done:
+        returncode = 0
+        stdout = _identity_fragment("launch-prep")
+        stderr = ""
+
+    seen = {}
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.peek_identity_effort(treg, "example-project", "D1")
+    assert out == {"ok": True, "effort_id": "launch-prep"}
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("mitos.py") and "peek" in cmd
+    assert cmd[cmd.index("--store") + 1] == "gws"
+    assert cmd[cmd.index("--id") + 1] == "D1"
+
+
+def test_peek_identity_effort_degrades_silently_when_theres_no_fragment(monkeypatch):
+    """The overwhelmingly common case (an ordinary document with no fragment at all): no
+    error, just no suggestion — the operator maps by hand exactly as before this existed."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Some other doc"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Done:
+        returncode = 0
+        stdout = "# Some other doc\n\njust prose, no identity block.\n"
+        stderr = ""
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _Done())
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+
+
+def test_peek_identity_effort_degrades_silently_on_a_failed_fetch(monkeypatch):
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Fail:
+        returncode = 1
+        stdout = ""
+        stderr = "connector error: token expired"
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _Fail())
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+
+
+def test_peek_identity_effort_with_no_recorded_store_skips_the_fetch(monkeypatch):
+    """A document with no `scope_keys`/store provenance (or simply not staged at all) can't
+    be fetched — never guess a store, just answer no suggestion without shelling out."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}])   # default scope carries store: ""
+
+    called = []
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: called.append(cmd))
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+    assert not called
+
+
 def test_remove_watch_drops_one_listing_leaves_the_other():
     from agentic import review
     treg, tmp = _temp_registry()

@@ -2138,9 +2138,31 @@ function effortEditorCard(g) {
   return card;
 }
 
-function openTweak(g, d) {
+async function openTweak(g, d) {
   openEditor = { where: "staged", lockId: true, kind: "doc", vals: stagedDoc(d) };
   renderStagedRows(g);
+  // Identity-fragment prefill (docs/implemented-document-identity.md): fetched AFTER the
+  // editor opens so the map-to-effort flow never blocks on a network round trip — a
+  // document with no fragment, or a slow/unreachable store, just leaves the field on
+  // "Project root" exactly as it did before this existed.
+  try {
+    const r = await fetch("/api/graph/peek-identity", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: g.slug, id: d.id,
+                             pool: stagedPool === "unassigned" ? "unassigned" : "" }),
+    });
+    const out = await r.json();
+    const effortId = out && out.ok ? (out.effort_id || "") : "";
+    // Only apply if this document's editor is still open and untouched — the operator may
+    // have cancelled, tweaked another row, or already picked a parent while this was in flight.
+    if (effortId && openEditor && openEditor.where === "staged"
+        && openEditor.vals && openEditor.vals.id === d.id && !openEditor.vals.parentId) {
+      openEditor.vals.parentId = effortId;
+      renderStagedRows(g);
+    }
+  } catch (e) {
+    // no suggestion — the operator maps by hand, exactly as before this existed
+  }
 }
 
 // ── persistent proposal dock ──────────────────────────────────────────────────

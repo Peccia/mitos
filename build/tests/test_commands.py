@@ -744,6 +744,50 @@ def test_cmd_connectors_smoke():
     assert rc == 0
     assert "available connectors" in out.getvalue()
 
+def test_cmd_peek_prints_content_via_the_mock_backend():
+    """Console-only verb behind review.peek_identity_effort (docs/implemented-document-identity.md):
+    no staging, no proposing, just the raw content on stdout."""
+    import argparse
+    import contextlib
+    import importlib
+    import io
+
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    mitos_mod = importlib.import_module("mitos")
+    args = argparse.Namespace(store=None, backend="mock", id="F1")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = mitos_mod._cmd_peek(args)
+    assert rc == 0
+    assert out.getvalue() == "(mock body for F1)"
+
+
+def test_cmd_peek_reports_a_connector_error_on_stderr():
+    import argparse
+    import contextlib
+    import importlib
+    import io
+
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    mitos_mod = importlib.import_module("mitos")
+    # no --store and no --backend: connector_for_store(reg, None, ...) can't resolve — this
+    # is the "operator forgot --store" case, and it must fail loudly, never guess.
+    args = argparse.Namespace(store="not-a-real-server", backend=None, id="F1")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = mitos_mod._cmd_peek(args)
+    assert rc == 1
+    assert "connector error" in err.getvalue()
+
+
+def test_peek_is_registered_as_an_interactive_verb_in_both_shims():
+    """Guards the exact failure test_cli_shim_verbs_match_mitos_py describes: an unlisted
+    verb would silently fall through to build/compile.py and answer `invalid choice`."""
+    for shim in ("mitos", "mitos.cmd"):
+        text = (REPO_ROOT / shim).read_text(encoding="utf-8")
+        assert "peek" in text.split("MITOS_INTERACTIVE_VERBS")[1].splitlines()[0]
+
+
 def test_cli_compile_and_mitos_entrypoints():
     import contextlib
     import importlib

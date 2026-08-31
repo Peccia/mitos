@@ -597,6 +597,31 @@ def _cmd_connectors(_args) -> int:
     return 0
 
 
+def _cmd_peek(args) -> int:
+    """Print one document's raw content to stdout — console-only, behind the Knowledge Graph
+    tab's map-to-effort flow (docs/implemented-document-identity.md): the console's
+    `review.peek_identity_effort` runs this as a subprocess to scan a staged document for
+    Mitos-Agent's identity fragment. No staging, no proposing, no interactive folder pick.
+    Invariant #11 holds the same way `connect` already does: this is the separate
+    `build/mitos.py` entrypoint, never imported by `compile.py`."""
+    from agentic import loader
+    from agentic.connectors import ConnectorError, connector_for_store, get_connector
+    try:
+        reg = loader.load(REPO_ROOT)
+    except loader.RegistryError as e:
+        print(f"registry error: {e}", file=sys.stderr)
+        return 2
+    try:
+        connector = get_connector(args.backend, root=REPO_ROOT) if args.backend else \
+            connector_for_store(reg, args.store, root=REPO_ROOT)
+        content = connector.get_file_content(args.id)
+    except ConnectorError as e:
+        print(f"connector error: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(content)
+    return 0
+
+
 def _load_machine_yaml(repo_root: Path, machine_name: str) -> dict | None:
     """Read one machine's yaml directly, bypassing full registry validation.
 
@@ -764,6 +789,15 @@ def main(argv: list[str] | None = None) -> int:
                          "needed when the project binds more than one store; omit to loop "
                          "all of them (one candidate per store; not supported with --stage)")
     sub.add_parser("connectors", help="list available workspace connectors")
+    pk = sub.add_parser("peek",
+                        help="print one document's raw content to stdout (console-only "
+                             "identity-fragment lookup — see build/agentic/review.py)")
+    pk.add_argument("--store", default=None,
+                    help="the document's document_store (a connections/servers.yaml server "
+                         "name); required unless --backend forces the demo connector")
+    pk.add_argument("--backend", default=None,
+                    help="force the in-process demo connector (mock)")
+    pk.add_argument("--id", required=True, help="the document's store-native id")
     ps = sub.add_parser("sync", help="set up and run git-only overlay sync")
     ps.add_argument("--machine", required=True)
     ps.add_argument("action", nargs="?", default="all",
@@ -791,6 +825,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_connect(args)
     if args.cmd == "connectors":
         return _cmd_connectors(args)
+    if args.cmd == "peek":
+        return _cmd_peek(args)
     if args.cmd == "sync":
         return _cmd_sync(args)
     return 1
