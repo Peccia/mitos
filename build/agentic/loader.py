@@ -765,6 +765,13 @@ def _validate(reg: Registry) -> None:
         # their own overlay projects). Optional, but must be a bool if set — same as machines.
         if "example" in proj and not isinstance(proj["example"], bool):
             raise RegistryError(f"project {slug}: 'example' must be true/false")
+        # `hidden: true` — a finished/parked project stays in the registry and graph
+        # (still loads, still queries) but plans no output on any machine (planner._visible_projects
+        # is the single choke point). Reusing `stage:` was considered and rejected: a `maintain`
+        # project still needs context, so stage cannot double as visibility. Optional, default
+        # absent/false, same bool-or-nothing shape as `example`.
+        if "hidden" in proj and not isinstance(proj["hidden"], bool):
+            raise RegistryError(f"project {slug}: 'hidden' must be true/false")
         # `description:` feeds the generated Project Roster on Projects/AGENTS.md.
         # Optional, but a set value must be a non-empty string.
         if "description" in proj:

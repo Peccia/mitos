@@ -756,6 +756,11 @@ function buildProjectPanel(container, g) {
   head.append(el("h1", "project-panel-title", g.name), el("code", "", g.slug));
   if (g.stage) head.append(el("span", "badge stage", g.stage));
   if (g.is_local) head.append(el("span", "badge overlay", "overlay"));
+  if (g.hidden) {
+    const badge = el("span", "badge", "hidden");
+    badge.title = "Kept out of every deployed tree — the manifest and graph still load and query fine.";
+    head.append(badge);
+  }
   head.append(el("span", "muted", `${docCount} mapped`));
   if (repoCount) head.append(el("span", "muted", `${repoCount} repo${repoCount === 1 ? "" : "s"}`));
 
@@ -767,6 +772,7 @@ function buildProjectPanel(container, g) {
   editBtn.onclick = () => {
     projectEditVals = {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
+      hidden: !!g.hidden,
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
       // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
       // inherits nothing". Two different answers, and the absent case must not collapse to [].
@@ -847,6 +853,18 @@ function projectEditorCard(g) {
   }
   stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
 
+  // Hidden — keeps a finished/parked project out of every deployed tree (no tree node, no
+  // roster entry, no clone, no per-project AGENTS.md/CLAUDE.md) without touching the
+  // manifest or graph, which still load and query fine. Deliberately separate from Stage:
+  // a `maintain` project still needs its context deployed.
+  const hiddenWrap = el("div", "graph-field");
+  const hiddenBox = el("input"); hiddenBox.type = "checkbox"; hiddenBox.checked = !!vals.hidden;
+  const hiddenLbl = el("label", "target-check");
+  hiddenLbl.append(hiddenBox, document.createTextNode(
+    " Hidden — keep out of every deployed tree"));
+  hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
+  inputs.hidden = hiddenBox;
+
   // Default deliverables — what a NEW effort under this project starts checked with. Three
   // states, not two: inherit (key absent), an explicit set, or an explicit EMPTY set meaning
   // "inherit nothing". The checkbox toggles between inherit and explicit; the group under it
@@ -923,6 +941,7 @@ function projectEditorCard(g) {
     for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
     const fields = {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      hidden: inputs.hidden.checked,
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
     if (inputs.ddInherit && !inputs.ddInherit.checked) {

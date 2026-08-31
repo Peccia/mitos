@@ -443,6 +443,58 @@ def test_workstation_produces_no_clones_and_context_root_produces_clones():
     assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must fire"
     assert not any("apocalyptic_adventure" in d for d in dests), "local_path lane must not fire"
 
+def test_hidden_project_disappears_from_every_planned_output():
+    """`hidden: true` (registry/projects/<slug>.yaml): no tree node, no roster entry, no
+    clone, no per-project AGENTS.md/CLAUDE.md — on EVERY machine, not just one lane. Its
+    graph still loads and queries (untouched — only planning is blind to it), and un-hiding
+    restores byte-identical outputs, proving the filter adds no side effect of its own."""
+    import copy
+    rig = _full_windows_rig()
+    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)                    # don't let the shipped-sample guard hide it
+    proj["local_path"]["example-windows"] = "example-project"
+    proj["repo"] = "git@github.com:Peccia/example.git"   # so the clone lane has something to suppress
+    assert "example-project" in rig.graphs, "fixture must ship a graph to prove it survives"
+
+    def _plan():
+        outs = planner.plan_machine(rig, "example-windows")
+        clones = planner.plan_clones(rig, "example-windows")
+        return outs, clones
+
+    before, clones_before = _plan()
+    paths_before = {o.deploy_path for o in before}
+    assert any("example-project" in p or "Example Project" in p for p in paths_before), \
+        "sanity: the project must actually plan something before it's hidden"
+    assert any(c.slug == "example-project" for c in clones_before), \
+        "sanity: the project must actually clone something before it's hidden"
+
+    proj["hidden"] = True
+    after, clones_after = _plan()
+    paths_after = {o.deploy_path for o in after}
+    assert not any("example-project" in p or "Example Project" in p for p in paths_after), \
+        f"hidden project still planned: {[p for p in paths_after if 'example' in p.lower()]}"
+    assert not any(c.slug == "example-project" for c in clones_after), \
+        "hidden project must not clone"
+    # the graph itself is untouched — still loadable/queryable outside planning
+    assert "example-project" in rig.graphs
+    assert rig.graphs["example-project"].efforts, "graph content must survive being hidden"
+
+    proj["hidden"] = False
+    restored, clones_restored = _plan()
+    assert {o.deploy_path for o in restored} == paths_before, "un-hiding must restore identical outputs"
+    assert {(c.slug, c.dest) for c in clones_restored} == {(c.slug, c.dest) for c in clones_before}
+
+def test_hidden_field_must_be_a_bool():
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["hidden"] = "yes"
+    try:
+        loader._validate(rig)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as e:
+        assert "hidden" in str(e)
+
 def test_claude_app_target_stages_uploadable_zip():
     import copy
     import json as _json

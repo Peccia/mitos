@@ -858,7 +858,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables"}
+                            "default_deliverables", "hidden"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -933,6 +933,14 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
                         "error": f"unknown default deliverable(s) {bad}; valid: "
                                  f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
             updated["default_deliverables"] = list(graphmod.order_deliverables(names))
+    if "hidden" in fields:
+        # docs/README's "no side effect once you already answered" convention (mirrors
+        # default_deliverables above): only a truthy value is stored, so an un-hidden
+        # project's manifest reads exactly as it did before this field existed.
+        if fields["hidden"]:
+            updated["hidden"] = True
+        else:
+            updated.pop("hidden", None)
     if "repo_notes" in fields:
         raw_notes = fields["repo_notes"] or {}
         if not isinstance(raw_notes, dict):
@@ -2076,6 +2084,7 @@ def graph_index(reg: Registry) -> list[dict]:
             # everything else). is_local flags where an accepted edit will land.
             "description": proj.get("description") or "",
             "stage": proj.get("stage") or "",
+            "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),

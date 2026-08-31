@@ -82,7 +82,28 @@ class Output:
                                     # so adopt can route edits back without in-file markers
 
 
+def _visible_projects(reg: Registry) -> Registry:
+    """A shallow copy of `reg` with `hidden: true` projects dropped from BOTH `.projects` and
+    `.graphs` — the single choke point `plan_machine` and `plan_clones` route every
+    project-planning loop through, so a hidden project contributes NO planned output on any
+    machine: no tree node, no roster entry, no clone, no per-project AGENTS.md/CLAUDE.md.
+    Both collections have to be filtered: most lanes iterate `reg.projects`, but
+    `_plan_graph_tree` (the agentic-graph reference tree) drives its roster and per-project
+    doc index straight from `reg.graphs`, independently of `reg.projects` — missing either
+    one leaves the project half-hidden. `loader.load()` itself never filters, so the
+    manifest and graph still load and query fine outside planning (`mitos graph`, the
+    console) — this copy exists only for the duration of one plan call. A no-op copy when
+    nothing is hidden, so the common case costs nothing."""
+    if not any(p.get("hidden") for p in reg.projects.values()):
+        return reg
+    hidden = {s for s, p in reg.projects.items() if p.get("hidden")}
+    return replace(reg,
+                   projects={s: p for s, p in reg.projects.items() if s not in hidden},
+                   graphs={s: g for s, g in reg.graphs.items() if s not in hidden})
+
+
 def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
+    reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name)
     if machine is None:
         raise KeyError(f"unknown machine: {machine_name}")
@@ -382,6 +403,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     existing checkout (never resetting or deleting one — design rule #8). Machines that host
     no project tree (no mitos-agent and no claude-code + agents-md reference tree) get nothing.
     """
+    reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name) or {}
     targets = machine.get("targets", [])
     paths = machine.get("paths") or {}

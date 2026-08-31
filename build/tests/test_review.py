@@ -2067,6 +2067,32 @@ def test_project_edit_rejects_an_unknown_default_deliverable():
     assert "deployment-book" in out["error"] and "deploy-book" in out["error"]
 
 
+def test_project_edit_hides_and_unhides_through_the_same_candidate_valve():
+    """The Project panel's Hidden toggle (Batch 3): a kind: project candidate exactly like
+    every other project edit — no second write path, and un-hiding restores the manifest to
+    having no `hidden:` key at all (the absent/false state), not a stored `false`."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, graph_index, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"hidden": True})
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"]["hidden"] is True
+    idx = next(g for g in graph_index(reloaded) if g["slug"] == "example-project")
+    assert idx["hidden"] is True
+
+    out2 = propose_project_edit(reloaded, "example-project", {"hidden": False})
+    assert out2["ok"], out2
+    result2 = decide(reloaded, out2["id"], "accept", "")
+    assert result2["ok"], result2
+    twice_reloaded = loadermod.load(tmp)
+    assert "hidden" not in twice_reloaded.projects["example-project"]
+
+
 def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
     """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
     Collapsing them would make "this project wants no defaults" unauthorable."""
