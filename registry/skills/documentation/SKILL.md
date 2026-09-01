@@ -101,11 +101,13 @@ time from the machine's own configuration, so it is the same store any connectio
 your always-on context would name.
 
 - **If a store is named above**, create a document there titled `<work item key> — documentation`, with this
-  record's body as its content, and add the URL it returns as a `locator:` line in the local
-  record's header.
+  complete record as its content — the `---` header included, exactly as you wrote it locally —
+  and add the URL it returns as a `locator:` line in the local record's header. The header is what
+  tells the reader which work item and which run this document belongs to; a store copy published
+  without it is indistinguishable from any other file in the folder and is skipped in silence.
 - **If no store is named above** — the line shows an unexpanded placeholder rather than a store
   name — this machine has no store wired. You cannot reach one and must not guess at one. Say
-  so, and print the exact title and the body for the owner to add by hand.
+  so, and print the exact title and the full record for the owner to add by hand.
 
 Never let this step fail the work. An unwired store is a normal machine, and the local record —
 which is what the loop actually parses — is already written by the time you get here.
