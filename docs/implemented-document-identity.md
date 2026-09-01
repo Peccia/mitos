@@ -28,12 +28,19 @@ rendered Markdown document:
 }
 ```
 
-There are **two** `additionalType` values, and they are a closed set:
+There are **two** `additionalType` values, and they have **different readers**:
 
-| `additionalType` | The document | Written by |
-|---|---|---|
-| `implemented-requirements` | the Implemented Document, one per graduation | Mitos-Agent (`evaluation.py::identity_fragment`) |
-| `return-record` | one deliverable's return record, published to the store beside its local copy | the coding harness, following a `delivers:` skill |
+| `additionalType` | The document | Written by | Read by |
+|---|---|---|---|
+| `implemented-requirements` | the Implemented Document, one per graduation | Mitos-Agent (`evaluation.py::identity_fragment`) | **Mitos** — Discovery maps it to its effort |
+| `return-record` | one deliverable's return record, published to the evaluation folder | the coding harness, following a `delivers:` skill | **Mitos-Agent** — its store reader, never Mitos |
+
+**Only the Implemented Document enters Mitos's graph.** A run's return records are Mitos-Agent's
+raw input — the several per-deliverable documents it reads to produce that one document — and
+Mitos deliberately does not recognize them (`review.IDENTITY_TYPES` holds one value). Mapping them
+was tried and reverted: a document mapped to an effort is rendered into that project's generated
+`AGENTS.md`, so a finished run's claims became always-on context that every later session read as
+current fact about the code. One run, many records, **one** document in the graph.
 
 An unrecognized value is ignored exactly like a malformed block — the reader degrades to the
 manual flow rather than guessing what a type it has never heard of means.
@@ -62,7 +69,8 @@ There is nothing to point at, so nothing is asserted.
 
 ## The `return-record` variant
 
-A return record published to the shared store carries the same block with one extra key:
+A return record published to the evaluation folder carries the same block, extended to carry the
+record's whole header:
 
 ```json
 {
@@ -71,9 +79,26 @@ A return record published to the shared store carries the same block with one ex
   "additionalType": "return-record",
   "isPartOf": {"@id": "http://peccia.net/creativework/<effort-id>"},
   "identifier": "<run>",
-  "http://peccia.net/deliverable": "<delivers>"
+  "http://peccia.net/deliverable": "<delivers>",
+  "http://peccia.net/schema": "mitos.return/1",
+  "http://peccia.net/work": "<work item key>",
+  "http://peccia.net/format": "markdown",
+  "http://peccia.net/produced_by": "<the harness>"
 }
 ```
+
+**Why it carries the whole header.** This block is the record's SECOND identity carrier, and the
+one that survives. A store is not a text file: a harness that creates its document by importing
+markdown loses the `---` header to a horizontal rule — an element, not characters — and no reader
+can recover it. The block is content rather than markup, so it comes back out of any store intact,
+and `mitos-agent`'s `artifact/returns_store.py` rebuilds the header from it when the fence is
+gone. That is only possible if every required header field is here, which is why the four
+namespaced keys are not optional.
+
+`isPartOf` is the one part Mitos-Agent does not need: it is kept because it costs nothing and
+records which effort the run belonged to. When the work item key has no `__` there is no effort to
+name, and that ONE line is omitted — never the whole block, which would throw away the work key
+and the run along with it.
 
 - `http://peccia.net/deliverable` — the deliverable this record answers for, written as the FULL
   predicate IRI because that is exactly how Mitos serializes it on the effort itself
@@ -89,9 +114,15 @@ A return record published to the shared store carries the same block with one ex
 **Where it goes, and where it must not.** The fragment belongs ONLY in the copy published to the
 store. The local record at `{{returns_root}}/<run>/<delivers>.md` is written first and left exactly
 as `artifact/returns.py` expects — that parser is the offline source of truth for the whole return
-lane, and an identity block is for Mitos's Discovery view, which never reads the local file. A
+lane, and it needs no fragment because a run folder already says which run a record belongs to. A
 harness that cannot publish therefore writes no fragment anywhere, which is correct: there is no
 store document for it to identify.
+
+**And the folder matters as much as the fragment.** The copy goes to the connection's
+`returns_container` — expanded into every `delivers:` skill as `{{returns_container}}`, and the
+same id `mitos-agent config get returns_container` returns. It is not a project folder. A record
+published into one of those is not evaluated; it is ingested as project context, which is the
+failure this whole page exists to prevent.
 
 **Why a return record wants one at all.** Without it, a published `<work> — tests` document reaches
 Discovery as an anonymous file, and the operator reconstructs by hand a mapping the harness knew

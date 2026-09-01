@@ -1917,11 +1917,21 @@ def _store_for_doc(staged: dict, doc_id: str) -> str:
     return ""
 
 
-# The closed set of identity-fragment kinds, per docs/implemented-document-identity.md: the
-# Implemented Document one graduation produces, and the return record each `delivers:` skill
-# publishes beside its local copy. Closed on purpose — an unrecognized value is ignored exactly
-# like a malformed block, because a type this cannot interpret must not become a suggestion.
-IDENTITY_TYPES = ("implemented-requirements", "return-record")
+# The closed set of identity-fragment kinds, per docs/implemented-document-identity.md. ONE
+# kind: the Implemented Document a graduation produces — the single evaluated document that
+# reports what a Work item actually became.
+#
+# `return-record` is deliberately NOT here. A run's return records are Mitos-Agent's raw input,
+# the several per-deliverable documents it reads to produce that one Implemented Document, and
+# they belong in the evaluation folder and in Mitos-Agent's own context — not in this graph. They
+# still carry an identity block, but it is read by `mitos-agent`'s store reader, not by Discovery.
+#
+# Mapping them here looked harmless and was not: a document mapped to an effort is rendered into
+# that project's generated AGENTS.md, so a finished run's claims ("npm audit reports 0
+# vulnerabilities") became always-on context that every later session read as current fact about
+# the code. Closed on purpose — an unrecognized value is ignored exactly like a malformed block,
+# because a type this cannot interpret must not become a suggestion.
+IDENTITY_TYPES = ("implemented-requirements",)
 
 
 def extract_identity_effort(text: str, pg) -> str:

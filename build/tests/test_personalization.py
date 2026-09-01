@@ -132,14 +132,16 @@ def test_user_token_map_agrees_with_expand_placeholders():
 def test_machine_token_names_are_the_machine_scoped_tokens():
     """The console leaves these literal rather than prompting: a copied prompt goes to a
     chat app, not a machine deploy, so no machine's paths apply."""
-    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root", "connection"}
+    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root",
+                                                 "connection", "returns_container"}
 
 
 def test_state_exposes_both_token_sets():
     from agentic.review import state
     treg, _tmp = _temp_registry()
     st = state(treg)
-    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root", "connection"}
+    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root",
+                                         "connection", "returns_container"}
     # every advertised user token must carry a real value — the console substitutes blind
     assert all(v for v in st["user_tokens"].values())
 
@@ -538,3 +540,58 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     written = initmod.scaffold_overlay(tmp, given_name="", backend="mock")
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
+
+
+# ── {{returns_container}} (the store folder those records are published INTO) ─
+_RET_SERVERS = {"servers": {
+    "gws": {"description": "Google Workspace suite — the source of truth.",
+            "returns_container": "FOLDER-1"},
+    "notion": {"description": "Notion", "returns_container": "FOLDER-2"},
+    "plain": {"description": "Plain store"},          # no folder configured
+}}
+
+
+def test_returns_container_expands_to_the_folder_the_connection_names():
+    """The regression this exists for: a deliverable skill was told the STORE and not a
+    destination, so the harness picked a folder — the project's own watched folder — and four
+    return records were ingested as project context instead of being evaluated."""
+    out = render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
+                                     "publish into {{returns_container}}", {},
+                                     {"document_store": "gws"})
+    assert out == "publish into FOLDER-1"
+
+
+def test_returns_container_is_read_off_the_connection_not_the_machine():
+    """The folder belongs to the STORE. Every machine wired to it publishes into the same one,
+    and duplicating the id per machine is how two of them drift."""
+    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/MitosAgent"}):
+        assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
+                                          "{{returns_container}}", paths,
+                                          {"document_store": "gws"}) == "FOLDER-1"
+
+
+def test_a_multi_store_machine_names_the_folder_per_store():
+    """Naming one folder without saying which store it belongs to is how a record goes to the
+    right id in the wrong place."""
+    out = render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                     {}, {"document_store": ["gws", "notion"]})
+    assert "FOLDER-1" in out and "FOLDER-2" in out
+    assert "gws" in out and "notion" in out
+
+
+def test_a_store_with_no_folder_leaves_the_token_literal():
+    """Read exactly as an unwired store is: the publish step's 'say so and print it for the
+    owner' branch, never a guessed folder."""
+    assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                      {}, {"document_store": "plain"}) == "{{returns_container}}"
+    assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                      {}, {}) == "{{returns_container}}"
+
+
+def test_the_container_token_and_the_root_token_are_different_places():
+    """One is where the harness WRITES the record locally, the other is where the copy GOES.
+    Collapsing them is how the store lane read an empty folder while records piled up on disk."""
+    reg = _ConnReg({}, servers=_RET_SERVERS)
+    paths, machine = {"assistant_root": "~/MitosAgent"}, {"document_store": "gws"}
+    assert render.expand_placeholders(reg, "{{returns_root}}", paths, machine) \
+        != render.expand_placeholders(reg, "{{returns_container}}", paths, machine)

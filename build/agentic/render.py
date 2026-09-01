@@ -129,7 +129,8 @@ def rejoin_regions(carved: list[tuple[str, str]], src: str) -> str:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root", "connection")
+_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root", "connection",
+                   "returns_container")
 
 
 def _servers(reg) -> dict:
@@ -163,6 +164,13 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
       `project_root`: it resolves to `projects_root` on a coding box, which would put the
       records inside a path the harness's own resolver never looks at while LOOKING like it
       had worked — a silently wrong path is worse than an obviously separate one.
+    - `returns_container`: the store folder an implementation's return records are published
+      into — the store-side twin of `returns_root`, and the same id `mitos-agent` reads back.
+      Read off the CONNECTION (`servers.yaml`), not the machine: the folder belongs to the
+      store, so every machine wired to it publishes into the same one and no two machines can
+      drift. `None` (token stays literal) when the store has no folder configured, which the
+      publish step reads exactly as it reads an unwired store — say so, print it for the owner,
+      and never guess a folder.
     - `connection`: the wired document store, named as the STABLE section label
       `<Name> (`key`)` that `connection_label` mints — the same string `connections_block`
       renders as a heading, so a skill naming the store and a tree node heading it can
@@ -190,6 +198,29 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
             if label:
                 labels.append(label[0])
         return ", ".join(labels) if labels else None
+    if key == "returns_container":
+        # The store-side twin of `returns_root`: where the return records GO, as opposed to
+        # where they are written locally first. Read off the connection rather than the machine,
+        # because the folder belongs to the store — every machine wired to that store publishes
+        # into the same one, and duplicating the id per machine is how two of them drift.
+        #
+        # Multi-store machines expand to `<label>: <id>` per store that HAS one, in
+        # `document_stores` order, so a skill names the folder for the store it is publishing
+        # to instead of silently taking the first. A store with no folder configured contributes
+        # nothing: the token stays literal, and the publish step's "say so, print it for the
+        # owner" branch is the honest outcome — exactly as it is for an unwired store.
+        stores = document_stores((machine or {}).get("document_store"))
+        parts = []
+        for ds in stores:
+            container = ((servers or {}).get(ds) or {}).get("returns_container")
+            container = str(container or "").strip()
+            if not container:
+                continue
+            if len(stores) == 1:
+                return container
+            label = connection_label(servers or {}, ds)
+            parts.append(f"{label[0] if label else ds}: {container}")
+        return ", ".join(parts) if parts else None
     if not paths:
         return None
     if key == "project_root":

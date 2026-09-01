@@ -776,29 +776,34 @@ def _return_record_fragment(effort_id: str, delivers: str = "tests") -> str:
         f'  "http://peccia.net/deliverable": "{delivers}"\n}}\n```\n')
 
 
-def test_extract_identity_effort_finds_a_published_return_record():
-    """A return record published to the store is the other half of the contract: without a
-    fragment it reaches Discovery anonymous and the operator remaps by hand what the harness
-    already knew."""
+def test_a_return_record_is_not_offered_as_a_project_document():
+    """The regression this exists for. A run's return records are Mitos-Agent's raw input — the
+    several per-deliverable documents it reads to produce ONE Implemented Document — and they are
+    not project context. Recognizing them here mapped four of them to an effort, which rendered
+    them into that project's generated AGENTS.md, which made a finished run's claims ("npm audit
+    reports 0 vulnerabilities") always-on fact for every later session.
+
+    The block still parses and still names a real effort; Mitos simply does not claim it."""
     from agentic import review
     treg, _tmp = _temp_registry()
     pg = treg.graphs["example-project"]
-    assert review.extract_identity_effort(_return_record_fragment("launch-prep"), pg) == \
-        "launch-prep"
+    assert review.extract_identity_effort(_return_record_fragment("launch-prep"), pg) == ""
 
 
-def test_return_record_fragment_obeys_the_same_effort_gate():
-    """The second type widens WHAT is recognized, never the trust placed in it — an id this
-    project's graph has never heard of still yields no suggestion."""
+def test_the_implemented_document_is_still_recognized():
+    """The narrowing must not take the graduation document with it: ONE evaluated document per
+    Work item is exactly what this view exists to map."""
     from agentic import review
     treg, _tmp = _temp_registry()
     pg = treg.graphs["example-project"]
-    assert review.extract_identity_effort(_return_record_fragment("no-such-effort"), pg) == ""
+    frag = _return_record_fragment("launch-prep").replace("return-record",
+                                                          "implemented-requirements")
+    assert review.extract_identity_effort(frag, pg) == "launch-prep"
 
 
 def test_identity_types_are_a_closed_set():
     from agentic import review
-    assert review.IDENTITY_TYPES == ("implemented-requirements", "return-record")
+    assert review.IDENTITY_TYPES == ("implemented-requirements",)
 
 
 def test_every_delivers_skill_publishes_a_well_formed_identity_fragment():

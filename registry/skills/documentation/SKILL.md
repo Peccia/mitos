@@ -100,16 +100,24 @@ This machine's wired document store is **{{connection}}**. Mitos expands that na
 time from the machine's own configuration, so it is the same store any connection section in
 your always-on context would name.
 
-- **If a store is named above**, create a document there titled `<work item key> — documentation`, with this
-  complete record as its content — the `---` header included, exactly as you wrote it locally —
+The folder to publish into is **{{returns_container}}**, expanded from that connection at deploy
+time. It is the only folder the evaluation lane reads, and it is not a project's own folder — a
+record dropped anywhere else in the store is not evaluated, it is ingested as project context,
+which is a different thing entirely.
+
+- **If a store AND a folder are named above**, create a document in that folder titled
+  `<work item key> — documentation`, with this complete record as its content — the `---` header
+  included, exactly as you wrote it locally —
   and add the URL it returns as a `locator:` line in the local record's header. The header is what
   tells the reader which work item and which run this document belongs to. Publish it even though
   the identity block below repeats it: the two carriers exist because either one can be lost to a
   store's own formatting, and a document that loses both is indistinguishable from any other file
   in the folder and is skipped in silence.
-- **If no store is named above** — the line shows an unexpanded placeholder rather than a store
-  name — this machine has no store wired. You cannot reach one and must not guess at one. Say
-  so, and print the exact title and the full record for the owner to add by hand.
+- **If either line shows an unexpanded placeholder** rather than a store name or a folder id,
+  this machine has no store wired, or the connection names no evaluation folder. You cannot
+  reach one and **must not guess at one — least of all a project folder that happens to be in
+  the same store.** Say so, and print the exact title and the full record for the owner to add
+  by hand.
 
 Never let this step fail the work. An unwired store is a normal machine, and the local record —
 which is what the loop actually parses — is already written by the time you get here.
@@ -167,6 +175,18 @@ If the store reformatted either one, **say so in your report to the owner**, nam
 A store that eats a `---` fence will do it to every record from this harness, and the owner is
 the only one who can change how the handoff is made. Do not retry silently and do not paper over
 it — a handoff that half-landed is worth more as a reported fact than as a fixed-up document.
+
+**Report the id of every document you created**, as its own line, in the form the store returns
+it:
+
+```
+published: <deliverable> — <document id or URL>
+```
+
+You are the only one who knows where the record landed. The store holds many folders, this step
+names none of them, and nothing downstream can find a document by guessing at a title — so an
+unreported id is a record the owner has to go looking for. One line per document, and print them
+even when everything went perfectly.
 
 ## Report back
 
