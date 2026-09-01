@@ -113,12 +113,17 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     org = None
     if is_agent:
         templates = initmod.org_templates(REPO_ROOT)
+        # Describe where an org domain is actually tagged. This used to say "each project's
+        # `org:` field", which `loader._validate` rejects outright — routing is per TASK, from
+        # the effort's `orgDomain` in the knowledge graph (console effort editor), never a
+        # manifest field. A wizard that names a field the loader refuses teaches a new user
+        # the one thing guaranteed to fail.
         print("\nOrg routing (optional):")
         print("  blank (recommended) — dynamic multi-org router: all three domain orgs are")
-        print("    available and the correct one activates per-project via each project's")
-        print("    org: field. Best for mixed-domain work.")
+        print("    available and the right one activates per TASK, from the effort's org")
+        print("    domain in the knowledge graph. Best for mixed-domain work.")
         print("  a template name — locks the assistant to one domain's delegation chain")
-        print("    for all project work, regardless of the project's org: field.")
+        print("    for all project work, whatever an effort is tagged with.")
         print(f"  Available templates: {', '.join(templates) or '(none found)'}")
         org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
         org = org_raw if org_raw else None
