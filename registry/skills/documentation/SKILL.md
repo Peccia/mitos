@@ -103,8 +103,10 @@ your always-on context would name.
 - **If a store is named above**, create a document there titled `<work item key> — documentation`, with this
   complete record as its content — the `---` header included, exactly as you wrote it locally —
   and add the URL it returns as a `locator:` line in the local record's header. The header is what
-  tells the reader which work item and which run this document belongs to; a store copy published
-  without it is indistinguishable from any other file in the folder and is skipped in silence.
+  tells the reader which work item and which run this document belongs to. Publish it even though
+  the identity block below repeats it: the two carriers exist because either one can be lost to a
+  store's own formatting, and a document that loses both is indistinguishable from any other file
+  in the folder and is skipped in silence.
 - **If no store is named above** — the line shows an unexpanded placeholder rather than a store
   name — this machine has no store wired. You cannot reach one and must not guess at one. Say
   so, and print the exact title and the full record for the owner to add by hand.
@@ -114,9 +116,15 @@ which is what the loop actually parses — is already written by the time you ge
 
 ### Identify the copy you publish
 
-The store copy — and **only** the store copy — ends with an `## Identity` section, so the document
-arrives in Mitos knowing which Work item it belongs to instead of as an anonymous file someone has
-to map by hand. Append it as the last section, exactly this shape:
+The store copy — and **only** the store copy — ends with an `## Identity` section. It is the
+**second carrier of this record's identity, and it is the one that survives**: a store is not a
+text file, and a document created by importing markdown loses its `---` header to a horizontal
+rule — an element, not characters — which no reader can recover. The identity block is content
+rather than markup, so it comes back out of any store intact.
+
+Write it even when you are confident the header survived. Either carrier alone is enough for the
+record to be read; neither is enough on its own to be relied on. Append it as the last section,
+exactly this shape:
 
 ```json
 {
@@ -125,20 +133,40 @@ to map by hand. Append it as the last section, exactly this shape:
   "additionalType": "return-record",
   "isPartOf": {"@id": "http://peccia.net/creativework/<effort-id>"},
   "identifier": "<run>",
-  "http://peccia.net/deliverable": "documentation"
+  "http://peccia.net/deliverable": "documentation",
+  "http://peccia.net/schema": "mitos.return/1",
+  "http://peccia.net/work": "<the work item key>",
+  "http://peccia.net/format": "markdown",
+  "http://peccia.net/produced_by": "<the harness you are>"
 }
 ```
 
 `<effort-id>` is the part of the work item key after `__` (`northwind__auth-rework` → `auth-rework`)
 — the same id Mitos shows in an effort's heading, `### Auth rework (auth-rework)`, as the last
-parenthesised group. `<run>` is the run folder name.
+parenthesised group. `<run>` is the run folder name. **Every field above is required** — the block
+has to carry enough to rebuild the header on its own, or it is not a carrier.
 
 Two rules, and both matter:
 
 - **Never add this section to the local record.** That file is parsed offline by Mitos and is the
   return lane's source of truth; it is written before you get here and must stay as written.
-- **If the work item key has no `__`, omit the section entirely.** There is no effort to point at,
-  and a mapping to nothing is worse than no mapping. Publish the document without it.
+- **If the work item key has no `__`, omit the `isPartOf` line only** — keep the rest of the
+  block. There is no effort to point at, and a mapping to nothing is worse than no mapping; but
+  the work key, the run and the deliverable are still exactly what a reader needs, and throwing
+  them away to avoid one absent mapping is how a record becomes anonymous.
+
+### Verify the copy actually landed
+
+Read the document back from the store — the same way anyone else would — and check it against
+what you meant to publish:
+
+- the first line is `---`, and the header fields are below it as plain text
+- the identity block is present, and its JSON is intact
+
+If the store reformatted either one, **say so in your report to the owner**, naming the document.
+A store that eats a `---` fence will do it to every record from this harness, and the owner is
+the only one who can change how the handoff is made. Do not retry silently and do not paper over
+it — a handoff that half-landed is worth more as a reported fact than as a fixed-up document.
 
 ## Report back
 
