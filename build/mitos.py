@@ -113,12 +113,17 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     org = None
     if is_agent:
         templates = initmod.org_templates(REPO_ROOT)
+        # Describe where an org domain is actually tagged. This used to say "each project's
+        # `org:` field", which `loader._validate` rejects outright — routing is per TASK, from
+        # the effort's `orgDomain` in the knowledge graph (console effort editor), never a
+        # manifest field. A wizard that names a field the loader refuses teaches a new user
+        # the one thing guaranteed to fail.
         print("\nOrg routing (optional):")
         print("  blank (recommended) — dynamic multi-org router: all three domain orgs are")
-        print("    available and the correct one activates per-project via each project's")
-        print("    org: field. Best for mixed-domain work.")
+        print("    available and the right one activates per TASK, from the effort's org")
+        print("    domain in the knowledge graph. Best for mixed-domain work.")
         print("  a template name — locks the assistant to one domain's delegation chain")
-        print("    for all project work, regardless of the project's org: field.")
+        print("    for all project work, whatever an effort is tagged with.")
         print(f"  Available templates: {', '.join(templates) or '(none found)'}")
         org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
         org = org_raw if org_raw else None
@@ -173,12 +178,9 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
               f"`{store}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
     elif not is_agent:
-        # No connection, and every core skill but `gws` is mitos-agent-only — so this box's
-        # first deploy carries no skills at all. Say so, and point at the two ways to
-        # add one, rather than letting an empty skills directory read as a broken install.
-        print("\nNo connection declared, so nothing connection-bound deploys here yet. The "
-              "skills that ship in core are for the agentic assistant, so your first deploy "
-              "will not install any — add your own:")
+        print("\nYour first deploy will install the 7 standard deliverable skills "
+              "(documentation, tests, changelog, deploy-book, runbook, migration-notes, "
+              "requirements-receipt). You can add your own custom skills:")
         print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
         print("  - the console's Skills & Orgs tab: python build/compile.py review")
         print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "
@@ -600,6 +602,31 @@ def _cmd_connectors(_args) -> int:
     return 0
 
 
+def _cmd_peek(args) -> int:
+    """Print one document's raw content to stdout — console-only, behind the Knowledge Graph
+    tab's map-to-effort flow (docs/implemented-document-identity.md): the console's
+    `review.peek_identity_effort` runs this as a subprocess to scan a staged document for
+    Mitos-Agent's identity fragment. No staging, no proposing, no interactive folder pick.
+    Invariant #11 holds the same way `connect` already does: this is the separate
+    `build/mitos.py` entrypoint, never imported by `compile.py`."""
+    from agentic import loader
+    from agentic.connectors import ConnectorError, connector_for_store, get_connector
+    try:
+        reg = loader.load(REPO_ROOT)
+    except loader.RegistryError as e:
+        print(f"registry error: {e}", file=sys.stderr)
+        return 2
+    try:
+        connector = get_connector(args.backend, root=REPO_ROOT) if args.backend else \
+            connector_for_store(reg, args.store, root=REPO_ROOT)
+        content = connector.get_file_content(args.id)
+    except ConnectorError as e:
+        print(f"connector error: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(content)
+    return 0
+
+
 def _load_machine_yaml(repo_root: Path, machine_name: str) -> dict | None:
     """Read one machine's yaml directly, bypassing full registry validation.
 
@@ -737,7 +764,7 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             pass
-    p = argparse.ArgumentParser(prog="mitos.py", description=__doc__)
+    p = argparse.ArgumentParser(prog="mitos", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="scaffold the private overlay at registry/local/")
     pp = sub.add_parser("project", help="scaffold a project manifest (Stage 1 of graph init)")
@@ -767,6 +794,15 @@ def main(argv: list[str] | None = None) -> int:
                          "needed when the project binds more than one store; omit to loop "
                          "all of them (one candidate per store; not supported with --stage)")
     sub.add_parser("connectors", help="list available workspace connectors")
+    pk = sub.add_parser("peek",
+                        help="print one document's raw content to stdout (console-only "
+                             "identity-fragment lookup — see build/agentic/review.py)")
+    pk.add_argument("--store", default=None,
+                    help="the document's document_store (a connections/servers.yaml server "
+                         "name); required unless --backend forces the demo connector")
+    pk.add_argument("--backend", default=None,
+                    help="force the in-process demo connector (mock)")
+    pk.add_argument("--id", required=True, help="the document's store-native id")
     ps = sub.add_parser("sync", help="set up and run git-only overlay sync")
     ps.add_argument("--machine", required=True)
     ps.add_argument("action", nargs="?", default="all",
@@ -794,6 +830,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_connect(args)
     if args.cmd == "connectors":
         return _cmd_connectors(args)
+    if args.cmd == "peek":
+        return _cmd_peek(args)
     if args.cmd == "sync":
         return _cmd_sync(args)
     return 1

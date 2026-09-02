@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 targets: [mitos-agent]
 requires_server: gws       # reaches Drive through the gws MCP server
 category: devops
-hermes:
+mitos_agent:
   tags: [graph, drive, bootstrap, registry, gws]
 ---
 # Graph Bootstrap

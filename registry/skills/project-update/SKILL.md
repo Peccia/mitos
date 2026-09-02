@@ -7,7 +7,7 @@ license: MIT
 platforms: [linux, macos, windows]
 targets: [mitos-agent]
 category: devops
-hermes:
+mitos_agent:
   tags: [update, devops, registry, compile, deploy]
 ---
 # Project Update

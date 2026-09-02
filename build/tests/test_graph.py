@@ -152,7 +152,7 @@ def test_project_full_markdown_inlines_docs_and_caps():
     from agentic import graph
     docs = [_doc(f"id{i:03}", f"Doc {i:03}", f"desc {i}", f"2026-01-{(i % 28) + 1:02}")
             for i in range(graph.INDEX_LIMIT + 5)]
-    pg = graph.ProjectGraph(slug="apdict", name="Ascenzio", description="d", documents=docs)
+    pg = graph.ProjectGraph(slug="sampledict", name="Sample Analytics", description="d", documents=docs)
     full = graph.project_full_markdown(pg)
     # concise one-line entries: bare document ID inline, no URL (the MCP server resolves by ID)
     assert "`id" in full
@@ -274,7 +274,104 @@ def test_graph_doc_type_round_trip_and_rendering():
         assert "**Brief** `T2` (2026-01-01)" in out   # no annotation when absent
     det_line = next(l for l in det.splitlines() if "Budget" in l)
     full_line = next(l for l in full.splitlines() if "Budget" in l)
-    assert det_line == full_line, "claude-code and hermes doc lines must stay identical"
+    assert det_line == full_line, "claude-code and mitos-agent doc lines must stay identical"
+
+
+def test_order_deliverables_canonical_order_dedup_and_unknown_last():
+    from agentic import graph
+    # vocabulary order regardless of input order, deduplicated
+    assert graph.order_deliverables(["tests", "documentation", "tests"]) == \
+        ("documentation", "tests")
+    # an unknown name sorts last (alphabetically), and ordering never raises
+    assert graph.order_deliverables(["zebra", "tests", "apple"]) == \
+        ("tests", "apple", "zebra")
+    assert graph.order_deliverables([]) == ()
+
+
+def test_new_deliverable_terms_are_appended_never_inserted():
+    """The one way KNOWN_DELIVERABLES can break a repo nobody pointed it at.
+
+    _ordered walks the vocabulary in order and filters, so a term added at the END leaves every
+    existing effort's serialized bytes untouched. Inserting one mid-tuple silently reorders every
+    effort that already declares a later term, producing a graph diff on projects nobody edited.
+    This pins the four terms that shipped first, in their shipped order, at the FRONT."""
+    from agentic import graph
+    assert graph.KNOWN_DELIVERABLES[:4] == ("documentation", "tests", "changelog", "deploy-book")
+    # a term added later orders AFTER the originals, never among them
+    assert graph.order_deliverables(["requirements-receipt", "deploy-book", "tests"]) == \
+        ("tests", "deploy-book", "requirements-receipt")
+
+
+def test_the_three_return_lane_terms_are_known():
+    """runbook / migration-notes / requirements-receipt are real vocabulary, not free text — an
+    effort declaring one must survive validation, and it must order canonically like the rest."""
+    from agentic import graph
+    for term in ("runbook", "migration-notes", "requirements-receipt"):
+        assert term in graph.KNOWN_DELIVERABLES
+    assert graph.order_deliverables(["migration-notes", "runbook"]) == \
+        ("runbook", "migration-notes")
+
+
+def test_graph_deliverables_round_trip_and_ordering():
+    """A repeated peccia:deliverable predicate loads into a canonical-ordered tuple regardless of
+    the JSON array's order on disk, and canonical bytes are deterministic across a reload."""
+    import json, tempfile
+    from pathlib import Path
+    from agentic import graph
+    SC = '{"@vocab":"https://schema.org/"}'
+    # authored with the deliverable array OUT of canonical order — the read path must canonicalize
+    raw_in = ('{"@context":%s,"@graph":['
+              '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
+              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+              '"name":"Effort One","description":"d",'
+              '"isPartOf":{"@id":"http://peccia.net/project/p"},'
+              '"http://peccia.net/deliverable":["tests","documentation"]}]}' % SC)
+    p = Path(tempfile.mktemp(suffix=".jsonld"))
+    p.write_text(raw_in, encoding="utf-8")
+    loaded = graph.load_project_graph(p)
+    # loaded back as a canonical-ordered tuple (vocabulary index, not disk order)
+    assert loaded.efforts[0].deliverables == ("documentation", "tests")
+
+    # canonical output is in vocabulary order and stable across a reload
+    canon = graph.canonical_jsonld(loaded)
+    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
+    assert node[graph.DELIVERABLE_PRED] == ["documentation", "tests"]
+    p.write_text(canon, encoding="utf-8")
+    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
+    p.unlink()
+
+
+def test_graph_no_deliverables_emits_no_key():
+    """An untagged effort emits NO deliverable key, so an existing graph round-trips byte-identically."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
+    raw = graph.canonical_jsonld(pg)
+    assert graph.DELIVERABLE_PRED not in raw
+    assert "deliverable" not in raw
+
+
+def test_graph_deliverables_line_renders_in_all_three_views_ungated():
+    """The forward-contract line renders in project_index/details/full — and is NOT suppressed by
+    org_routing=False (unlike the org line), because it names no skill to load."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
+                                is_part_of=proj_iri,
+                                deliverables=("documentation", "tests"))
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
+        efforts=[effort])
+    line = "_Expected deliverables: documentation, tests._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)
+    # the claude-code workstation surface suppresses the ORG line but must still show deliverables
+    full_no_org = graph.project_full_markdown(pg, org_routing=False)
+    assert line in full_no_org
+    assert "load the `org-" not in full_no_org      # org line IS suppressed there
 
 
 def test_graph_store_round_trip():
@@ -551,26 +648,26 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     import copy
     from agentic.loader import Partial
     rig = copy.deepcopy(reg)
-    rig.projects["apdict"] = {
-        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"},
-        "context": {"assistant": "registry/context/projects/apdict.md"},
+    rig.projects["sampledict"] = {
+        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+        "local_path": {"example-windows": "sampledict"},
+        "context": {"assistant": "registry/context/projects/sampledict.md"},
         "document_store": "gws",
     }
-    rig.partials["context/projects/apdict.md"] = Partial(
-        rel="context/projects/apdict.md", audience=["agents-md"],
-        body="# Apdict\n\nApdict prose context"
+    rig.partials["context/projects/sampledict.md"] = Partial(
+        rel="context/projects/sampledict.md", audience=["agents-md"],
+        body="# Sampledict\n\nSampledict prose context"
     )
     from agentic.graph import ProjectGraph
-    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+    rig.graphs["sampledict"] = ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
     from agentic import graph as graphmod
-    rig.graphs["apdict"] = graphmod.upsert_document(
-        rig.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+    rig.graphs["sampledict"] = graphmod.upsert_document(
+        rig.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
 
     win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
            if o.target == "agentic-graph"}
     # real (local) graphs are present — example-project core graph steps aside
-    proj = next(o for p, o in win.items() if p.endswith("Projects/apdict/AGENTS.md"))
+    proj = next(o for p, o in win.items() if p.endswith("Projects/sampledict/AGENTS.md"))
     # one self-contained file: NO companion details file on the agentic-harness side
     assert not any(p.endswith("AGENTS_DETAILS.md") for p in win)
     assert not any(p.endswith("Projects/example-project/AGENTS.md") for p in win)
@@ -580,13 +677,13 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert [s for s, _ in proj.section_bodies if render.is_generated_source(s)], \
         "must carry a generated section tagged for marker-free split"
     # full doc context is INLINE here (concise: id inline, no URL), unlike the lean
-    # agents-md/Hermes index that lists titles only
+    # agents-md/Mitos Agent index that lists titles only
     assert "`1AbCxyz`" in proj.content and "drive.google.com" not in proj.content
     # the connection section is the bound store's (gws) stable label at H2 (under the
     # project's prose H1), not a second H1 or "<project> — documents"
     assert "## Google Workspace suite (`gws`)" in proj.content
     assert proj.content.count("\n# ") <= 1 and not proj.content.startswith("# Google")
-    assert "Ascenzio Predictions — Documents" not in proj.content
+    assert "Sample Predictions — Documents" not in proj.content
     # the roster stays wholly generated (no prose, non-adoptable)
     roster = next(o for p, o in win.items() if p.endswith("MitosAgent/AGENTS.md"))
     assert roster.drift_policy == "generated" and roster.sources == []
@@ -800,17 +897,17 @@ def test_graph_tree_deploys_only_on_claude_code_env():
     import copy
     from agentic.loader import Partial
     rig = copy.deepcopy(reg)
-    rig.projects["apdict"] = {
-        "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-        "local_path": {"example-windows": "apdict"},
-        "context": {"assistant": "registry/context/projects/apdict.md"},
+    rig.projects["sampledict"] = {
+        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+        "local_path": {"example-windows": "sampledict"},
+        "context": {"assistant": "registry/context/projects/sampledict.md"},
     }
-    rig.partials["context/projects/apdict.md"] = Partial(
-        rel="context/projects/apdict.md", audience=["agents-md"],
-        body="# Apdict\n\nApdict prose context"
+    rig.partials["context/projects/sampledict.md"] = Partial(
+        rel="context/projects/sampledict.md", audience=["agents-md"],
+        body="# Sampledict\n\nSampledict prose context"
     )
     from agentic.graph import ProjectGraph
-    rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
+    rig.graphs["sampledict"] = ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
 
     # example-linux has no claude-code target → no Agentic Context tree
     linux = [o for o in planner.plan_machine(rig, "example-linux")
@@ -821,7 +918,7 @@ def test_graph_tree_deploys_only_on_claude_code_env():
            if o.target == "agentic-graph"}
     assert any(p.endswith("MitosAgent/AGENTS.md") for p in win)
     # local graphs present → local project entries, not core example-project
-    assert any(p.endswith("MitosAgent/Projects/apdict/AGENTS.md") for p in win)
+    assert any(p.endswith("MitosAgent/Projects/sampledict/AGENTS.md") for p in win)
     assert not any(p.endswith("MitosAgent/Projects/example-project/AGENTS.md") for p in win)
     for o in win.values():
         # roster is generated; per-project files are prose(protect) + generated block
@@ -836,30 +933,30 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel
     # inject a document into a local (active) graph so the per-project index renders a table row;
-    # apdict is a local graph so it is always in active_graphs regardless of overlay state
+    # sampledict is a local graph so it is always in active_graphs regardless of overlay state
     reg2 = copy.deepcopy(reg)
-    if "apdict" not in reg2.projects:
-        reg2.projects["apdict"] = {
-            "name": "Ascenzio Predictions", "slug": "apdict", "_is_local": True,
-            "local_path": {"example-windows": "apdict"}, "context": {},
+    if "sampledict" not in reg2.projects:
+        reg2.projects["sampledict"] = {
+            "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+            "local_path": {"example-windows": "sampledict"}, "context": {},
         }
-    if "apdict" not in reg2.graphs:
-        reg2.graphs["apdict"] = graph.ProjectGraph(slug="apdict", name="Ascenzio Predictions", description="forecasts", efforts=[], path=None)
-    reg2.graphs["apdict"] = graph.upsert_document(
-        reg2.graphs["apdict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+    if "sampledict" not in reg2.graphs:
+        reg2.graphs["sampledict"] = graph.ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
+    reg2.graphs["sampledict"] = graph.upsert_document(
+        reg2.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-graph-"))
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    idx = root / safe_rel("C:/MitosAgent/Projects/apdict/AGENTS.md")
+    idx = root / safe_rel("C:/MitosAgent/Projects/sampledict/AGENTS.md")
     assert "Forecast UI Spec" in idx.read_text(encoding="utf-8")
     roster = root / safe_rel("C:/MitosAgent/AGENTS.md")
-    assert "Ascenzio Predictions" in roster.read_text(encoding="utf-8")
+    assert "Sample Predictions" in roster.read_text(encoding="utf-8")
 
     # edit the generated roster in place, then redeploy: it is silently regenerated
     # (non-adoptable) and nothing is captured to inbox/ (no partial to route back to)
     roster.write_text("hand edit\n", encoding="utf-8", newline="\n")
     before = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    assert "Ascenzio Predictions" in roster.read_text(encoding="utf-8")   # overwritten
+    assert "Sample Predictions" in roster.read_text(encoding="utf-8")   # overwritten
     after = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert before == after, "a generated file must not capture an inbox candidate"
 
@@ -906,9 +1003,9 @@ def test_effort_domain_line_renders_in_all_three_markdown_views():
         assert "`org-marketing`" in out
 
 def test_effort_domain_line_suppressed_when_org_routing_false():
-    """project_full_markdown's org_routing=False (the non-hermes claude-code workstation
+    """project_full_markdown's org_routing=False (the non-mitos-agent claude-code workstation
     path, planner._plan_claude_code) omits the org routing line entirely — org skills
-    target hermes only, so a claude-code-only checkout must never be told to load one
+    target mitos-agent only, so a claude-code-only checkout must never be told to load one
     that was never deployed there. The goal line and everything else still renders."""
     from agentic import graph
     pg = graph.ProjectGraph(slug="p", name="P", description="")
@@ -1044,3 +1141,203 @@ def test_graph_rejects_organization_nodes():
         assert "unsupported type" in str(e)
     finally:
         f.unlink()
+
+
+def test_order_coverage_canonical_order_dedup_and_unknown_last():
+    from agentic import graph
+    # vocabulary order regardless of input order, deduplicated
+    assert graph.order_coverage(["security", "performance", "security"]) == \
+        ("performance", "security")
+    # an unknown name sorts last (alphabetically), and ordering never raises — propose-time and
+    # candidate-parse paths both build a CreativeWork before validation runs
+    assert graph.order_coverage(["zebra", "scale", "apple"]) == ("scale", "apple", "zebra")
+    assert graph.order_coverage([]) == ()
+
+
+def test_graph_coverage_round_trip_and_ordering():
+    """A repeated peccia:requirementsCoverage predicate loads into a canonical-ordered tuple
+    regardless of the JSON array's order on disk, and canonical bytes survive a reload."""
+    import json, tempfile
+    from pathlib import Path
+    from agentic import graph
+    SC = '{"@vocab":"https://schema.org/"}'
+    raw_in = ('{"@context":%s,"@graph":['
+              '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
+              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+              '"name":"Effort One","description":"d",'
+              '"isPartOf":{"@id":"http://peccia.net/project/p"},'
+              '"http://peccia.net/requirementsCoverage":["security","performance"]}]}' % SC)
+    p = Path(tempfile.mktemp(suffix=".jsonld"))
+    p.write_text(raw_in, encoding="utf-8")
+    loaded = graph.load_project_graph(p)
+    assert loaded.efforts[0].requirements_coverage == ("performance", "security")
+
+    canon = graph.canonical_jsonld(loaded)
+    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
+    assert node[graph.REQ_COVERAGE_PRED] == ["performance", "security"]
+    p.write_text(canon, encoding="utf-8")
+    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
+    p.unlink()
+
+
+def test_graph_no_coverage_emits_no_key():
+    """An effort declaring no coverage emits NO key, so an existing graph round-trips
+    byte-identically — the same omit-when-absent contract deliverables/orgDomain hold."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
+    raw = graph.canonical_jsonld(pg)
+    assert graph.REQ_COVERAGE_PRED not in raw
+    assert "requirementsCoverage" not in raw
+
+
+def test_graph_coverage_line_renders_in_all_three_views_ungated():
+    """The interview-contract line renders in project_index/details/full — and is NOT suppressed
+    by org_routing=False, because (like deliverables) it names no skill to load."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
+                                is_part_of=proj_iri,
+                                requirements_coverage=("performance", "security"))
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
+        efforts=[effort])
+    line = "_Requirements coverage: performance, security._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)
+    full_no_org = graph.project_full_markdown(pg, org_routing=False)
+    assert line in full_no_org
+    assert "load the `org-" not in full_no_org
+
+
+def test_effort_heading_always_carries_its_id():
+    """An effort's group heading is `<name> (<id>)` in every view, tagged or not.
+
+    This is the key a downstream harness hangs a long-lived record on: the heading text is the
+    effort's NAME, which the owner renames freely, so the id must ride alongside it. Emitted
+    unconditionally — there is no 'untagged' escape, unlike every other per-effort line."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    bare = graph.CreativeWork(id="auth-rework", name="Auth rework", description="",
+                              is_part_of=proj_iri)
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=bare.iri)],
+        efforts=[bare])
+    for view in (graph.project_index_markdown(pg), graph.project_details_markdown(pg),
+                 graph.project_full_markdown(pg)):
+        assert "Auth rework (auth-rework)" in view
+    assert graph.effort_heading(bare) == "Auth rework (auth-rework)"
+
+
+def test_effort_heading_id_is_the_last_parenthesised_group():
+    """A name that itself ends in parentheses still yields an unambiguous id, because the id is
+    appended last — the rule a reader (and tree/parse.py in mitos-agent) relies on."""
+    from agentic import graph
+    e = graph.CreativeWork(id="auth-rework", name="Auth rework (v2)",
+                           description="", is_part_of=graph.PROJECT_NS + "p")
+    heading = graph.effort_heading(e)
+    assert heading == "Auth rework (v2) (auth-rework)"
+    assert heading[heading.rindex("(") + 1:-1] == "auth-rework"
+
+
+def test_propose_rejects_unknown_coverage_and_round_trips_valid_ones():
+    """Reject-at-propose-time for the interview contract: a clean error in the browser now, with
+    the accept-time loader check as the real gate. A valid set survives propose → accept."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+    seed = graph.ProjectGraph(slug="example-project", name="Example Project", description="d")
+    (gdir / "example-project.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
+    treg = loader.load(tmp)
+
+    bad = review.propose_graph_change(
+        treg, "example-project", [],
+        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
+                  "requirementsCoverage": ["security", "not-a-dimension"]}])
+    assert not bad["ok"]
+    assert "not-a-dimension" in bad["error"]
+    assert "performance" in bad["error"]          # the valid set is named
+
+    out = review.propose_graph_change(
+        treg, "example-project", [],
+        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
+                  "requirementsCoverage": ["security", "performance"]}])
+    assert out["ok"]
+    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
+    assert acc["ok"]
+    merged = graph.load_project_graph(gdir / "example-project.jsonld")
+    effort = next(e for e in merged.efforts if e.id == "sprint-a")
+    # canonical order, not the order it was proposed in
+    assert effort.requirements_coverage == ("performance", "security")
+
+
+def test_effort_keywords_roundtrips_and_renders():
+    """CreativeWork keywords round-trips byte-identically through canonical_jsonld and renders."""
+    from agentic import graph
+    proj_iri = graph.PROJECT_NS + "p"
+    with_kw = graph.CreativeWork(id="fnp", name="Financial narrative processing", description="d",
+                                 is_part_of=proj_iri,
+                                 keywords="sensual predictions, apdicts")
+    without_kw = graph.CreativeWork(id="other", name="Other Effort", description="d",
+                                    is_part_of=proj_iri)
+    pg = graph.ProjectGraph(
+        slug="p", name="P", description="",
+        documents=[],
+        efforts=[with_kw, without_kw])
+    jsonld = graph.canonical_jsonld(pg)
+    assert '"keywords": "sensual predictions, apdicts"' in jsonld
+    # without_kw omits keywords field entirely (omit-when-absent)
+    assert jsonld.count('"keywords":') == 1
+
+    p = _write_graph(jsonld)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == jsonld
+        e = next(eff for eff in reloaded.efforts if eff.id == "fnp")
+        assert e.keywords == "sensual predictions, apdicts"
+    finally:
+        p.unlink()
+
+    line = "_Also known as: sensual predictions, apdicts._"
+    assert line in graph.project_index_markdown(pg)
+    assert line in graph.project_details_markdown(pg)
+    assert line in graph.project_full_markdown(pg)
+
+
+def test_an_effort_with_no_documents_still_renders_its_contract():
+    """An effort's goal, expected deliverables and requirements coverage are DECLARED in the
+    graph, not derived from its documents — and the deliverables line is documented as ungated,
+    in every generated view. Two guards used to hide them until somebody mapped a file to the
+    effort: `_doc_block` returned early on `not pg.documents`, and `_grouped`'s `has_efforts`
+    asked whether any effort HELD one. A project could therefore declare its whole forward
+    contract and have no harness ever read it."""
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    effort = graph.CreativeWork(
+        id="fnp", name="Financial Narrative Processing", description="d",
+        is_part_of=proj_iri, goal="ship the pipeline",
+        deliverables=("documentation", "tests"),
+        requirements_coverage=("security",), keywords="apdicts")
+    pg = graph.ProjectGraph(slug="p", name="P", description="",
+                            documents=[], efforts=[effort])
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(pg)
+        assert "Financial Narrative Processing (fnp)" in out, render.__name__
+        assert "ship the pipeline" in out, render.__name__
+        assert "documentation" in out and "tests" in out, render.__name__
+        assert "security" in out, render.__name__
+        assert "_Also known as: apdicts._" in out, render.__name__
+        assert "_No documents in this effort._" in out, render.__name__
+
+
+def test_a_project_with_neither_documents_nor_efforts_still_says_so():
+    """The one case with genuinely nothing to report keeps its original line."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="", documents=[], efforts=[])
+    assert "_No documents mapped yet._" in graph.project_index_markdown(pg)

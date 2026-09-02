@@ -42,6 +42,27 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    collide with a reserved `##` prose section. A tagged effort's `###` heading carries the
    org-routing line that names the `org-<domain>` skill governing its work.
 
+   An effort's `###` heading is **`<name> (<id>)`** (`graph.effort_heading`) — the same
+   human-name-then-stable-id form a project roster line uses (`` - `Projects/Website/`
+   (website) — … ``). The id is emitted for every effort, tagged or not, and rides the heading
+   rather than a line of its own: a harness keying a long-lived record on an effort must key it
+   on something a rename cannot move, and the heading text is the NAME, which the owner edits
+   freely. Reusing the heading costs no always-on tokens. The id is always the **last**
+   parenthesised group, so a name that itself ends in parentheses stays unambiguous.
+
+   Under an effort's `###` heading the generated lines render in a fixed order: the
+   org-routing line, then the effort description, then the `**Goal:** …` intent line
+   (`graph._effort_goal_line`), then the `_Expected deliverables: …._` forward-contract line
+   (`graph._effort_deliverables_line`), then the `_Requirements coverage: …._` interview-contract
+   line (`graph._effort_coverage_line`), then the effort's documents. The deliverables line
+   names the artifacts every implementation of the effort must yield (`documentation`,
+   `tests`, `changelog`, `deploy-book`, in canonical vocabulary order); the coverage line names
+   the dimensions a requirements-gathering session must close before those requirements are
+   exportable (`graph.KNOWN_COVERAGE`, same canonical-order rule). Unlike the org-routing
+   line, **neither is ever suppressed** on the claude-code workstation surface
+   (`org_routing=False`): they instruct nobody to load a skill, and that surface is exactly the
+   harness that must produce the deliverables.
+
 ## Local vs. connection: the split that keeps context lean
 
 `## Navigation` is **local only** (files, repos, routing); store folder paths live in the

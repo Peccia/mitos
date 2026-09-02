@@ -756,6 +756,11 @@ function buildProjectPanel(container, g) {
   head.append(el("h1", "project-panel-title", g.name), el("code", "", g.slug));
   if (g.stage) head.append(el("span", "badge stage", g.stage));
   if (g.is_local) head.append(el("span", "badge overlay", "overlay"));
+  if (g.hidden) {
+    const badge = el("span", "badge", "hidden");
+    badge.title = "Kept out of every deployed tree — the manifest and graph still load and query fine.";
+    head.append(badge);
+  }
   head.append(el("span", "muted", `${docCount} mapped`));
   if (repoCount) head.append(el("span", "muted", `${repoCount} repo${repoCount === 1 ? "" : "s"}`));
 
@@ -767,7 +772,15 @@ function buildProjectPanel(container, g) {
   editBtn.onclick = () => {
     projectEditVals = {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
+      hidden: !!g.hidden,
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
+      // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
+      // inherits nothing". Two different answers, and the absent case must not collapse to [].
+      // The server sends the absent case as JSON `null` — there is no `undefined` on the wire —
+      // so a `=== undefined` test reads null as "an explicit empty set" and silently turns
+      // inherit into inherit-nothing on the next save. `== null` catches both.
+      defaultDeliverables: g.defaultDeliverablesOwn == null
+        ? undefined : g.defaultDeliverablesOwn.slice(),
     };
     projectEditOpen = true;
     renderGraph();
@@ -840,6 +853,47 @@ function projectEditorCard(g) {
   }
   stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
 
+  // Hidden — keeps a finished/parked project out of every deployed tree (no tree node, no
+  // roster entry, no clone, no per-project AGENTS.md/CLAUDE.md) without touching the
+  // manifest or graph, which still load and query fine. Deliberately separate from Stage:
+  // a `maintain` project still needs its context deployed.
+  const hiddenWrap = el("div", "graph-field");
+  const hiddenBox = el("input"); hiddenBox.type = "checkbox"; hiddenBox.checked = !!vals.hidden;
+  const hiddenLbl = el("label", "target-check");
+  hiddenLbl.append(hiddenBox, document.createTextNode(
+    " Hidden — keep out of every deployed tree"));
+  hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
+  inputs.hidden = hiddenBox;
+
+  // Default deliverables — what a NEW effort under this project starts checked with. Three
+  // states, not two: inherit (key absent), an explicit set, or an explicit EMPTY set meaning
+  // "inherit nothing". The checkbox toggles between inherit and explicit; the group under it
+  // authors the explicit case, and leaving every box unticked is the empty-set answer.
+  const ddWrap = el("div", "graph-field");
+  ddWrap.append(el("label", "", "Default deliverables for new work"));
+  const ddInherit = el("input"); ddInherit.type = "checkbox";
+  ddInherit.checked = vals.defaultDeliverables === undefined;
+  const inheritLbl = el("label", "target-check");
+  const regDefault = (STATE.registry_default_deliverables || []);
+  inheritLbl.append(ddInherit, document.createTextNode(
+    " inherit from registry/user.yaml" + (regDefault.length ? ` (${regDefault.join(", ")})` : " (none set)")));
+  ddWrap.append(inheritLbl);
+  const ddGroup = el("div", "target-checks");
+  const ddChecked = new Set(vals.defaultDeliverables || []);
+  const ddBoxes = {};
+  for (const name of (STATE.known_deliverables || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = ddChecked.has(name);
+    ddBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    ddGroup.append(lbl);
+  }
+  const syncDd = () => { ddGroup.hidden = ddInherit.checked; };
+  ddInherit.addEventListener("change", syncDd);
+  syncDd();
+  ddWrap.append(ddGroup); card.append(ddWrap);
+  inputs.ddInherit = ddInherit; inputs.ddBoxes = ddBoxes;
+
   // Repos — url + one-line description per row (repo_notes, keyed by checkout basename
   // server-side); add/remove rows freely, order doesn't matter to the manifest.
   const reposWrap = el("div", "graph-field");
@@ -887,8 +941,16 @@ function projectEditorCard(g) {
     for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
     const fields = {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      hidden: inputs.hidden.checked,
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
+    if (inputs.ddInherit && !inputs.ddInherit.checked) {
+      fields.default_deliverables = (STATE.known_deliverables || [])
+        .filter((n) => inputs.ddBoxes[n] && inputs.ddBoxes[n].checked);
+    } else if (inputs.ddInherit) {
+      // null asks the server to REMOVE the key, restoring inheritance — distinct from sending []
+      fields.default_deliverables = null;
+    }
     save.disabled = true;
     try {
       const res = await fetch("/api/project/edit", {
@@ -1584,8 +1646,13 @@ function buildRegistryPane(container, g) {
   const addEffortBtn = el("button", "ghost tiny", "+ Work");
   addEffortBtn.title = "Add a new effort grouping to this project";
   addEffortBtn.onclick = () => {
+    // A NEW effort starts with the project's resolved default deliverables. The server does
+    // the resolving (project manifest, else registry/user.yaml) and hands back the answer as
+    // g.defaultDeliverables, so the client never reimplements the chain and can never drift
+    // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "" } };
+                   vals: { id: "", name: "", description: "",
+                           deliverables: (g.defaultDeliverables || []).slice() } };
     renderRegistryRows(g);
   };
   head.append(addDocBtn, addEffortBtn);
@@ -1657,6 +1724,14 @@ function renderRegistryRows(g) {
     if (effort.orgDomain) {
       nameSpan.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
     }
+    if ((effort.deliverables || []).length) {
+      nameSpan.append(el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", ")));
+    }
+    // The COUNT, not the names: six dimensions would swamp the row. The names live in the editor.
+    if ((effort.requirementsCoverage || []).length) {
+      nameSpan.append(el("span", "effort-domain-tag",
+                         " · coverage: " + effort.requirementsCoverage.length));
+    }
     head.append(nameSpan);
     if (status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
@@ -1674,7 +1749,9 @@ function renderRegistryRows(g) {
         openEditor = { where: "registry", lockId: true, kind: "effort",
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
                                goal: effort.goal || "",
-                               orgDomain: effort.orgDomain || "" } };
+                               orgDomain: effort.orgDomain || "",
+                               deliverables: (effort.deliverables || []).slice(),
+                               requirementsCoverage: (effort.requirementsCoverage || []).slice() } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -1903,7 +1980,13 @@ function scrollCardIntoView(card) {
 // the inbox Reason field, which deliberately does NOT bind Enter to Accept).
 function bindEnterToApply(inputs, apply) {
   for (const inp of Object.values(inputs)) {
-    if (!inp || inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
+    // A field entry is not always a single element: a checkbox GROUP (deliverables,
+    // requirements coverage) records itself as a plain {name: checkbox} map, which has no
+    // addEventListener. Calling it threw, and because this runs at the END of building the
+    // editor card the throw took the whole card with it — "+ Work" and Edit silently did
+    // nothing. Bind only real elements.
+    if (!(inp instanceof HTMLElement)) continue;
+    if (inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); apply.click(); }
     });
@@ -1961,6 +2044,85 @@ function effortEditorCard(g) {
   domSel.value = vals.orgDomain || "";
   domWrap.append(domSel); card.append(domWrap); inputs.orgDomain = domSel;
 
+  // Expected deliverables — the forward contract: the artifacts every implementation of this
+  // effort must yield. A checkbox group over the registry's controlled vocabulary (a free-text
+  // field could only produce values the server would reject). Optional; untagged efforts render
+  // no deliverables line and the plan falls through to its honest-empty filler.
+  const delivWrap = el("div", "graph-field");
+  delivWrap.append(el("label", "", "Expected deliverables"));
+  const delivGroup = el("div", "target-checks");
+  const delivChecked = new Set(vals.deliverables || []);
+  const delivBoxes = {};
+  for (const name of (STATE.known_deliverables || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = delivChecked.has(name);
+    delivBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    // Does anything actually PRODUCE this? A declared deliverable no skill delivers is a contract
+    // nothing answers. Registry-wide on purpose: `deploy --dry-run` reports the exact per-machine
+    // gap, and a badge that changed with the machine selector would be read as that check without
+    // being it.
+    const producers = (STATE.deliverable_skills || {})[name] || [];
+    if (!producers.length) {
+      const warn = el("span", "muted", " (no skill)");
+      warn.title = "No skill declares `delivers: " + name + "` — nothing knows how to produce it.";
+      lbl.append(warn);
+    } else {
+      lbl.title = "Produced by: " + producers.join(", ");
+    }
+    delivGroup.append(lbl);
+  }
+  delivWrap.append(delivGroup); card.append(delivWrap); inputs.deliverables = delivBoxes;
+
+  // Requirements coverage — the INTERVIEW contract: the dimensions a requirements-gathering
+  // session must close before this effort's requirements are exportable. Same checkbox-group
+  // shape and same reasoning as deliverables above; optional, and an effort naming none renders
+  // no coverage line at all.
+  const coverWrap = el("div", "graph-field");
+  coverWrap.append(el("label", "", "Requirements coverage"));
+  const coverGroup = el("div", "target-checks");
+  const coverChecked = new Set(vals.requirementsCoverage || []);
+  const coverBoxes = {};
+  for (const name of (STATE.known_coverage || [])) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = coverChecked.has(name);
+    coverBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+    coverGroup.append(lbl);
+  }
+  coverWrap.append(coverGroup); card.append(coverWrap); inputs.requirementsCoverage = coverBoxes;
+
+  // The half-closed-loop warning. An effort that declares requirements coverage runs a
+  // requirements interview, and its results come back as a `requirements-receipt` — the record
+  // carrying per-requirement outcomes keyed by the ids an export minted. Declare the interview
+  // but not the receipt and the gathering half of the loop closes quietly: work happens, and
+  // nothing reports on which requirements it actually met.
+  //
+  // Mitos cannot see settled requirements (they live in the agent's dossier, across the
+  // boundary), so declared COVERAGE is the checkable proxy for "this effort gathers
+  // requirements". It is a warning, never a block: the owner may have a reason, and the
+  // registry-wide default deliberately omits the receipt.
+  // .accept-note carries the theme-aware --warn colour the console already uses for
+  // advisory copy; no new class, so light/dark stay correct for free.
+  const receiptWarn = el("div", "accept-note");
+  const syncReceiptWarn = () => {
+    const wantsInterview = Object.values(coverBoxes).some((b) => b.checked);
+    const hasReceipt = !!(delivBoxes["requirements-receipt"]
+                          && delivBoxes["requirements-receipt"].checked);
+    const show = wantsInterview && !hasReceipt;
+    receiptWarn.textContent = show
+      ? "This effort gathers requirements but declares no requirements-receipt — nothing will "
+        + "report which of them the implementation actually met."
+      : "";
+    receiptWarn.hidden = !show;
+  };
+  for (const b of Object.values(coverBoxes)) b.addEventListener("change", syncReceiptWarn);
+  if (delivBoxes["requirements-receipt"]) {
+    delivBoxes["requirements-receipt"].addEventListener("change", syncReceiptWarn);
+  }
+  syncReceiptWarn();
+  card.append(receiptWarn);
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -1970,7 +2132,12 @@ function effortEditorCard(g) {
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
                      goal: inputs.goal.value.trim(),
-                     orgDomain: inputs.orgDomain.value };
+                     orgDomain: inputs.orgDomain.value,
+                     deliverables: (STATE.known_deliverables || [])
+                       .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
+                     requirementsCoverage: (STATE.known_coverage || [])
+                       .filter((n) => inputs.requirementsCoverage[n]
+                                      && inputs.requirementsCoverage[n].checked) };
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
       toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
@@ -1990,9 +2157,31 @@ function effortEditorCard(g) {
   return card;
 }
 
-function openTweak(g, d) {
+async function openTweak(g, d) {
   openEditor = { where: "staged", lockId: true, kind: "doc", vals: stagedDoc(d) };
   renderStagedRows(g);
+  // Identity-fragment prefill (docs/implemented-document-identity.md): fetched AFTER the
+  // editor opens so the map-to-effort flow never blocks on a network round trip — a
+  // document with no fragment, or a slow/unreachable store, just leaves the field on
+  // "Project root" exactly as it did before this existed.
+  try {
+    const r = await fetch("/api/graph/peek-identity", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: g.slug, id: d.id,
+                             pool: stagedPool === "unassigned" ? "unassigned" : "" }),
+    });
+    const out = await r.json();
+    const effortId = out && out.ok ? (out.effort_id || "") : "";
+    // Only apply if this document's editor is still open and untouched — the operator may
+    // have cancelled, tweaked another row, or already picked a parent while this was in flight.
+    if (effortId && openEditor && openEditor.where === "staged"
+        && openEditor.vals && openEditor.vals.id === d.id && !openEditor.vals.parentId) {
+      openEditor.vals.parentId = effortId;
+      renderStagedRows(g);
+    }
+  } catch (e) {
+    // no suggestion — the operator maps by hand, exactly as before this existed
+  }
 }
 
 // ── persistent proposal dock ──────────────────────────────────────────────────
@@ -2043,7 +2232,9 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
   const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => ({
     id: x.id, name: x.name, description: x.description || "",
     goal: x.goal || "",
-    orgDomain: x.orgDomain || "" }));
+    orgDomain: x.orgDomain || "",
+    deliverables: x.deliverables || [],
+    requirementsCoverage: x.requirementsCoverage || [] }));
   const effortRemovals = Object.keys(d.effortRemove);
   if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {
     toast("No changes to propose."); return;
@@ -2699,11 +2890,13 @@ function buildContextualEditor(opts) {
 
   // The one deliberate, narrowly-scoped exception to this file's "textContent only,
   // never innerHTML" rule (see the header comment) — a sanitized markdown preview.
-  // window.snarkdown's output ALWAYS passes through window.DOMPurify.sanitize()
+  // window.marked's output ALWAYS passes through window.DOMPurify.sanitize()
   // before touching the DOM; never used for candidate/registry raw text elsewhere.
+  // breaks: true keeps the single-newline-is-a-line-break feel prompts were written
+  // against; marked itself does no sanitizing, which is DOMPurify's job below.
   function updatePreview() {
     if (preview.hidden) return;
-    const html = window.snarkdown ? window.snarkdown(ta.value) : "";
+    const html = window.marked ? window.marked.parse(ta.value, {gfm: true, breaks: true}) : "";
     preview.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html) : "";
   }
 

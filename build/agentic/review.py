@@ -701,7 +701,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
 
     `documents` is a list of {id, name, description, dateModified, parentId?} to
     upsert; `removals` is a list of document IDs to drop. `efforts` is a list of
-    {id, name, description, orgDomain?} to upsert; `effort_removals` is a list of
+    {id, name, description, orgDomain?, goal?, deliverables?, requirementsCoverage?} to
+    upsert; `effort_removals` is a list of
     effort IDs to remove. A candidate may carry only removals (no upserts).
     `parentId` in a document dict is the effort ID (or "" / omitted for project root).
 
@@ -770,6 +771,22 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
             # graph would fail loader validation and break every subsequent compile
             return {"ok": False, "error": f"unknown org domain {_dom!r}; valid: "
                                           f"{', '.join(sorted(_valid_domains))}"}
+        # Same reject-at-propose-time posture for deliverables: a clean error in the browser
+        # now, with M5's accept-time check (via loader._validate) as the real gate, since the
+        # candidate sits on disk as untrusted text in between.
+        _deliv = graphmod.order_deliverables(
+            str(x).strip() for x in (e_dict.get("deliverables") or []) if str(x).strip())
+        _bad = [d for d in _deliv if d not in graphmod.KNOWN_DELIVERABLES]
+        if _bad:
+            return {"ok": False, "error": f"unknown deliverable(s) {_bad}; valid: "
+                                          f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
+        # And the same posture again for the interview contract.
+        _cover = graphmod.order_coverage(
+            str(x).strip() for x in (e_dict.get("requirementsCoverage") or []) if str(x).strip())
+        _bad_cover = [c for c in _cover if c not in graphmod.KNOWN_COVERAGE]
+        if _bad_cover:
+            return {"ok": False, "error": f"unknown coverage dimension(s) {_bad_cover}; valid: "
+                                          f"{', '.join(graphmod.KNOWN_COVERAGE)}"}
         try:
             eid = str(e_dict["id"]).strip()
             effective_efforts[eid] = graphmod.CreativeWork(
@@ -777,7 +794,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 description=str(e_dict.get("description", "")).strip(),
                 is_part_of=proj_iri,
                 org_domain=str(e_dict.get("orgDomain", "")).strip(),
-                goal=str(e_dict.get("goal", "")).strip())
+                goal=str(e_dict.get("goal", "")).strip(),
+                deliverables=_deliv,
+                requirements_coverage=_cover)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -838,7 +857,8 @@ def _project_file(reg: Registry, slug: str) -> Path:
     return reg.root / "registry" / sub / f"{slug}.yaml"
 
 
-_PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes"}
+_PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
+                            "default_deliverables", "hidden"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -895,6 +915,32 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["repo"] = urls[0]
         else:
             updated["repo"] = urls
+    if "default_deliverables" in fields:
+        # An EMPTY list is a real answer — "this project inherits nothing" — and is deliberately
+        # distinct from omitting the key, which inherits the registry-wide set. `is None` rather
+        # than a falsy test is what keeps the two apart, here and in the resolver.
+        raw_dd = fields["default_deliverables"]
+        if raw_dd is None:
+            updated.pop("default_deliverables", None)
+        elif not isinstance(raw_dd, list):
+            return {"ok": False, "error": "default_deliverables must be a list"}
+        else:
+            from . import graph as graphmod
+            names = [str(n).strip() for n in raw_dd if str(n).strip()]
+            bad = [n for n in names if n not in graphmod.KNOWN_DELIVERABLES]
+            if bad:
+                return {"ok": False,
+                        "error": f"unknown default deliverable(s) {bad}; valid: "
+                                 f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
+            updated["default_deliverables"] = list(graphmod.order_deliverables(names))
+    if "hidden" in fields:
+        # docs/README's "no side effect once you already answered" convention (mirrors
+        # default_deliverables above): only a truthy value is stored, so an un-hidden
+        # project's manifest reads exactly as it did before this field existed.
+        if fields["hidden"]:
+            updated["hidden"] = True
+        else:
+            updated.pop("hidden", None)
     if "repo_notes" in fields:
         raw_notes = fields["repo_notes"] or {}
         if not isinstance(raw_notes, dict):
@@ -1000,11 +1046,12 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # ── structured metadata editing (Track A — no raw YAML ever reaches the operator) ──
 # Per-kind editable whitelist: `name` is deliberately never editable (it must stay in
 # sync with the skill's folder / the prompt's registered identity). Everything else in
-# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `hermes:`/`mitos_agent:` tag block)
+# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `mitos_agent:` tag block)
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role", "scope"}
+                         "targets", "category", "extends_skill", "extends_role", "scope",
+                         "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
 
@@ -1844,6 +1891,105 @@ def refresh_staging(reg: Registry, slug: str, pool: str = "", scope_key: str = "
     return {"ok": True, "log": log, "staged": load_staged(reg, slug, pool)}
 
 
+# ── the identity handshake (docs/implemented-document-identity.md) ───────────
+# When an operator opens the map-to-effort flow ("Tweak & map") for a Discovery document,
+# the console fetches its content and scans it for the JSON-LD block Mitos-Agent embeds in a
+# graduated Work item's Implemented Document. A hint, never an authority: the operator still
+# confirms or changes the suggestion before Propose, and every degraded case (unreachable,
+# unparseable, names an unknown effort) is a silent no-suggestion, not an error.
+_IDENTITY_FRAGMENT_RE = re.compile(r"```json\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+
+
+def _store_for_doc(staged: dict, doc_id: str) -> str:
+    """Which store produced one staged document, by looking up the `scope_keys`
+    `staging.merge_documents` already tagged it with against the listing summaries'
+    `scope.store` — the same provenance `_in_scope_flags` reads, for one id instead of all of
+    them. First matching listing wins; empty when the id isn't staged or names no store."""
+    doc = next((d for d in staged.get("documents") or [] if str(d.get("id")) == doc_id), None)
+    if not doc:
+        return ""
+    by_key = {l["scope_key"]: l for l in staged.get("listings") or []}
+    for key in doc.get("scope_keys") or []:
+        listing = by_key.get(key)
+        store = (listing or {}).get("scope", {}).get("store")
+        if store:
+            return str(store)
+    return ""
+
+
+# The closed set of identity-fragment kinds, per docs/implemented-document-identity.md. ONE
+# kind: the Implemented Document a graduation produces — the single evaluated document that
+# reports what a Work item actually became.
+#
+# `return-record` is deliberately NOT here. A run's return records are Mitos-Agent's raw input,
+# the several per-deliverable documents it reads to produce that one Implemented Document, and
+# they belong in the evaluation folder and in Mitos-Agent's own context — not in this graph. They
+# still carry an identity block, but it is read by `mitos-agent`'s store reader, not by Discovery.
+#
+# Mapping them here looked harmless and was not: a document mapped to an effort is rendered into
+# that project's generated AGENTS.md, so a finished run's claims ("npm audit reports 0
+# vulnerabilities") became always-on context that every later session read as current fact about
+# the code. Closed on purpose — an unrecognized value is ignored exactly like a malformed block,
+# because a type this cannot interpret must not become a suggestion.
+IDENTITY_TYPES = ("implemented-requirements",)
+
+
+def extract_identity_effort(text: str, pg) -> str:
+    """The effort id Mitos-Agent's identity fragment names, when the fragment parses AND that
+    id exists in `pg` (this project's CURRENT graph, possibly None). Untrusted candidate text:
+    a malformed block, an unknown `additionalType`, or an id this project has never heard of all
+    degrade to `""` — the console's existing manual flow — never a guess and never an error."""
+    from . import graph as graphmod
+    known = {e.id for e in (pg.efforts if pg else [])}
+    for m in _IDENTITY_FRAGMENT_RE.finditer(text or ""):
+        try:
+            frag = json.loads(m.group(1))
+        except ValueError:
+            continue
+        if not isinstance(frag, dict) or frag.get("additionalType") not in IDENTITY_TYPES:
+            continue
+        part_of = frag.get("isPartOf")
+        iri = part_of.get("@id") if isinstance(part_of, dict) else None
+        if not isinstance(iri, str) or not iri.startswith(graphmod.CREATIVE_WORK_NS):
+            continue
+        effort_id = iri[len(graphmod.CREATIVE_WORK_NS):]
+        if effort_id in known:
+            return effort_id
+    return ""
+
+
+def peek_identity_effort(reg: Registry, slug: str, doc_id: str, pool: str = "",
+                         timeout: int = 30) -> dict:
+    """The map-to-effort flow's prefill lookup: fetch one staged document's content and scan
+    it for an identity-fragment suggestion. Shells out to `build/mitos.py peek`, mirroring
+    `refresh_staging`'s invariant-#11 construction — `compile.py` still imports no connector
+    code; the reach lives in a child process, same trust model as the console already running
+    compile/deploy.
+
+    Always answers `{"ok": True, "effort_id": <id-or-"">}` — a store that can't be reached, a
+    document with no recorded store, or a subprocess failure are exactly as valid an outcome
+    as a document with no fragment at all: none of them are errors the console needs to show,
+    since the operator always still picks (or overrides) the effort by hand."""
+    if not slug or any(s in slug for s in ("/", "\\")) or slug in (".", ".."):
+        return {"ok": True, "effort_id": ""}
+    staged = load_staged(reg, slug, pool)
+    if not staged.get("ok"):
+        return {"ok": True, "effort_id": ""}
+    store = _store_for_doc(staged, doc_id)
+    if not store:
+        return {"ok": True, "effort_id": ""}
+    cmd = [sys.executable, str(Path(__file__).resolve().parents[1] / "mitos.py"),
+           "peek", "--store", store, "--id", doc_id]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              cwd=str(Path(__file__).resolve().parents[2]))
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ok": True, "effort_id": ""}
+    if proc.returncode != 0:
+        return {"ok": True, "effort_id": ""}
+    return {"ok": True, "effort_id": extract_identity_effort(proc.stdout, reg.graphs.get(slug))}
+
+
 def _open_staging(reg: Registry, slug: str, pool: str, scope_key: str) -> tuple:
     """Shared front half of the two pure-file watch edits (remove_watch/rename_watch):
     validate the slug + scope_key, resolve which staging file backs this pool, and parse it
@@ -1955,13 +2101,27 @@ def graph_index(reg: Registry) -> list[dict]:
             # everything else). is_local flags where an accepted edit will land.
             "description": proj.get("description") or "",
             "stage": proj.get("stage") or "",
+            "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),
+            # The deliverables a NEW effort under this project starts checked with —
+            # project manifest, else registry/user.yaml (loader.resolve_default_deliverables).
+            # Resolved server-side so the client never reimplements the chain.
+            "defaultDeliverables": list(
+                loader.resolve_default_deliverables(reg, slug)),
+            # The project's OWN key, separate from the resolved value above. `None` means the key
+            # is absent (inherit); a list — INCLUDING an empty one — means this project answered.
+            # Collapsing the two would make "inherits nothing" unauthorable.
+            "defaultDeliverablesOwn": (
+                None if proj.get("default_deliverables") is None
+                else list(graphmod.order_deliverables(proj["default_deliverables"]))),
             # org domains live on EFFORTS (orgDomain), never on the project — a project
             # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
-                         "orgDomain": e.org_domain, "goal": e.goal}
+                         "orgDomain": e.org_domain, "goal": e.goal,
+                         "deliverables": list(e.deliverables),
+                         "requirementsCoverage": list(e.requirements_coverage)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
@@ -2139,6 +2299,7 @@ def org_tree(reg: Registry, machine_name: str) -> dict:
 
 
 def state(reg: Registry) -> dict:
+    from . import graph as graphmod
     return {
         "root": str(reg.root),
         "generated_at": _now(),
@@ -2148,6 +2309,26 @@ def state(reg: Registry) -> dict:
         # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
         "known_targets": sorted(loader.KNOWN_TARGETS),
+        # The controlled deliverables vocabulary (graph.KNOWN_DELIVERABLES) — the effort
+        # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
+        # term to the registry constant surfaces in the UI with no client edit.
+        "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        # Which skill(s) declare `delivers: <term>` — the authoring-time answer to "does anything
+        # actually produce this?", so the effort editor can say so where the declaration is made.
+        # Registry-wide, deliberately NOT per machine: `deploy --dry-run` already reports the exact
+        # per-machine gap, and a badge that changed meaning with the status-bar machine selector
+        # would be read as the deploy check without being one.
+        "deliverable_skills": {
+            term: sorted(s.name for s in reg.skills.values() if s.delivers == term)
+            for term in graphmod.KNOWN_DELIVERABLES},
+        # The registry-wide default a project inherits when it names none. READ-ONLY here: it lives
+        # in registry/user.yaml, a file the owner edits directly, and inventing a candidate lane for
+        # one rarely-changed key would be more machinery than the edit is worth (invariant #10).
+        "registry_default_deliverables": list(
+            graphmod.order_deliverables(reg.user.get("default_deliverables") or [])),
+        # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
+        # checkbox group reads this the same way, for the same reason.
+        "known_coverage": list(graphmod.KNOWN_COVERAGE),
         # The Mitos-owned prompt placeholders, for the one-shot copy flow: `user_tokens`
         # are auto-substituted at copy time (the operator is never asked to type their own
         # name), `machine_tokens` are left literal (a copied prompt goes to a chat app, not
@@ -2327,6 +2508,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             if self.path not in ("/api/decide", "/api/propose", "/api/graph",
                                   "/api/graph/dismiss", "/api/graph/restore",
                                   "/api/graph/purge", "/api/graph/refresh",
+                                  "/api/graph/peek-identity",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
                                   "/api/project/edit",
                                   "/api/reload",
@@ -2476,6 +2658,17 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     str(body.get("pool", "") or ""),
                     str(body.get("scope_key", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/graph/peek-identity":
+                # "Tweak & map" opening on a staged document — fetch its content and scan
+                # for Mitos-Agent's identity fragment (docs/implemented-document-identity.md)
+                # via a mitos.py subprocess. Always 200: an unreachable store or a document
+                # with no fragment is exactly as valid an outcome as finding one, never an
+                # error the console needs to surface.
+                result = peek_identity_effort(
+                    holder["reg"], str(body.get("slug", "")),
+                    str(body.get("id", "")),
+                    str(body.get("pool", "") or ""))
+                return self._json(200, result)
             if self.path == "/api/graph/unwatch":
                 # "Remove watch" — drop one listing from the staging file. Pure file edit,
                 # no connector involved, console-only (no CLI counterpart).

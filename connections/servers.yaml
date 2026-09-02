@@ -16,6 +16,17 @@ servers:
     env_template: connections/env/gws.env.example
     env_local: .local/gws.env
     hosted_on: []
+    # The folder an implementation's return records are published into, and the ONLY folder the
+    # evaluation lane reads. A store holds many folders and a deliverable skill is told the store,
+    # not a destination — so without this the harness picks a folder, and the one it picks is a
+    # project's own watched folder, where the records are ingested as project context instead of
+    # evaluated. Set it per install in registry/local/connections/servers.yaml; empty here because
+    # a folder id is one person's data, never a default.
+    #
+    # It is the SAME id mitos-agent reads (`mitos-agent config get returns_container`). One id,
+    # named in one place, expanded into the skills that write and read it — so the writer and the
+    # reader cannot disagree.
+    returns_container: ""
     # How the backend-agnostic `mcp` connector enumerates this store's documents for
     # knowledge-graph init: the MCP tool to call, optional default scope/query, and how the
     # tool's returned fields map onto the lean graph shape. The connector calls `list_tool`

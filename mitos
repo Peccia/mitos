@@ -1,0 +1,34 @@
+#!/bin/sh
+# Mitos entrypoint. Routes a verb to the right script with the repo's venv
+# interpreter, so no activation and no remembering which entrypoint owns what:
+#   ./mitos compile | deploy | review | connect --project X | sync --machine Y
+set -e
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Verbs owned by build/mitos.py (interactive / network reach). Everything else
+# routes to build/compile.py, so a new deterministic verb needs no edit here.
+# Kept in sync with mitos.py's subparsers by test_cli_shim_verbs_match_mitos_py.
+MITOS_INTERACTIVE_VERBS="init project connect connectors peek sync"
+
+if [ -x "$ROOT/build/.venv/bin/python" ]; then
+  PY="$ROOT/build/.venv/bin/python"
+elif [ -x "$ROOT/build/.venv/Scripts/python.exe" ]; then
+  PY="$ROOT/build/.venv/Scripts/python.exe"
+else
+  PY=$(command -v python3 || command -v python || true)
+  if [ -z "$PY" ]; then
+    echo "mitos: no Python found; create build/.venv (see README)" >&2
+    exit 1
+  fi
+  echo "mitos: build/.venv not found, falling back to $PY" >&2
+fi
+
+SCRIPT="$ROOT/build/compile.py"
+for v in $MITOS_INTERACTIVE_VERBS; do
+  if [ "$1" = "$v" ]; then
+    SCRIPT="$ROOT/build/mitos.py"
+    break
+  fi
+done
+
+exec "$PY" "$SCRIPT" "$@"

@@ -21,9 +21,15 @@ class _FakeReg:
 
 # ── user.yaml: load, merge, validation ───────────────────────────────────────
 def test_user_defaults_when_no_user_yaml_overlay():
+    """user.yaml holds two groups now — IDENTITY (the placeholders render expands) and
+    DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
+    a change to one group cannot be waved through as a change to the other."""
     treg, tmp = _temp_registry()
-    assert treg.user == {"given_name": "User", "full_name": "Mitos User",
-                         "email": "user@example.com", "location": "Your City, State"}
+    identity = {k: v for k, v in treg.user.items() if k != "default_deliverables"}
+    assert identity == {"given_name": "User", "full_name": "Mitos User",
+                        "email": "user@example.com", "location": "Your City, State"}
+    # documentation + tests: the two every kind of work owes regardless of shape
+    assert treg.user["default_deliverables"] == ["documentation", "tests"]
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()
@@ -72,11 +78,11 @@ def test_machine_document_store_validated_like_project():
 # ── expand_placeholders ───────────────────────────────────────────────────────
 def test_expand_substitutes_all_five_tokens():
     user = {"given_name": "Paul", "full_name": "Paul Peccia",
-            "email": "example@domain.com", "location": "Buffalo, NY"}
+            "email": "example@domain.com", "location": "Your City, State"}
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
     out = render.expand_placeholders(_FakeReg(user), text)
-    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Buffalo, NY"
+    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Your City, State"
 
 def test_expand_possessive_trailing_s_uses_bare_apostrophe():
     user = {"given_name": "Chris", "full_name": "", "email": "", "location": ""}
@@ -112,7 +118,7 @@ def test_user_token_map_agrees_with_expand_placeholders():
     """The map must never drift from the real expansion: substituting it by hand has to
     produce exactly what a deploy would write."""
     user = {"given_name": "Chris", "full_name": "Chris Smith",
-            "email": "c@example.com", "location": "Buffalo, NY"}
+            "email": "c@example.com", "location": "Your City, State"}
     reg_ = _FakeReg(user)
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
@@ -126,16 +132,123 @@ def test_user_token_map_agrees_with_expand_placeholders():
 def test_machine_token_names_are_the_machine_scoped_tokens():
     """The console leaves these literal rather than prompting: a copied prompt goes to a
     chat app, not a machine deploy, so no machine's paths apply."""
-    assert set(render.machine_token_names()) == {"project_root", "skills_root"}
+    assert set(render.machine_token_names()) == {"project_root", "skills_root", "returns_root",
+                                                 "connection", "returns_container"}
 
 
 def test_state_exposes_both_token_sets():
     from agentic.review import state
     treg, _tmp = _temp_registry()
     st = state(treg)
-    assert set(st["machine_tokens"]) == {"project_root", "skills_root"}
+    assert set(st["machine_tokens"]) == {"project_root", "skills_root", "returns_root",
+                                         "connection", "returns_container"}
     # every advertised user token must carry a real value — the console substitutes blind
     assert all(v for v in st["user_tokens"].values())
+
+
+# ── {{returns_root}} (where a harness writes what it produced) ───────────────
+def test_returns_root_is_the_state_dir_a_harness_actually_reads():
+    """On a Mitos Agent machine this must be byte-for-byte the folder `mitos-agent returns`
+    reads — `<assistant_root>/.local-memory/returns` — or records land where nothing looks."""
+    from agentic import render
+    out = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
+                                     {"assistant_root": "~/MitosAgent"})
+    assert out == "write to ~/MitosAgent/.local-memory/returns/x.md"
+
+
+def test_returns_root_does_not_reuse_project_roots_fallback():
+    """A coding-only box has no Mitos Agent and no state dir. project_root would resolve to
+    projects_root there, putting records inside a path the harness's resolver never looks at
+    while LOOKING like it worked. A visibly separate directory beats a silently wrong one."""
+    from agentic import render
+    paths = {"projects_root": "C:/Projects"}
+    assert render.expand_placeholders(_FakeReg({}), "{{returns_root}}", paths) \
+        == "C:/Projects/.mitos-returns"
+    # ...and the two tokens genuinely differ on that machine
+    assert render.expand_placeholders(_FakeReg({}), "{{project_root}}", paths) == "C:/Projects"
+
+
+def test_returns_root_stays_literal_when_a_machine_defines_neither_path():
+    from agentic import render
+    assert render.expand_placeholders(_FakeReg({}), "{{returns_root}}", {}) == "{{returns_root}}"
+
+
+# ── {{connection}} (the store a return-lane skill publishes to) ──────────────
+_SERVERS = {"servers": {"gws": {"description": "Google Workspace suite — the source of truth."},
+                        "notion": {"description": "Notion"}}}
+
+
+class _ConnReg(_FakeReg):
+    """_FakeReg plus a servers map — only {{connection}} reads it."""
+    def __init__(self, user: dict, machines: dict | None = None, servers: dict | None = None):
+        super().__init__(user, machines)
+        self.servers = servers if servers is not None else _SERVERS
+
+
+def test_connection_expands_to_the_same_label_the_tree_heading_uses():
+    """The skill names the store and a tree node headings it. If those two strings could
+    differ, a harness told to look for one would miss the other — so both come from
+    `connection_label`, asserted here against each other rather than against a literal."""
+    machine = {"document_store": "gws"}
+    expected = render.connection_label(_SERVERS["servers"], "gws")[0]
+    out = render.expand_placeholders(_ConnReg({}), "store: {{connection}}", {}, machine)
+    assert out == f"store: {expected}"
+    assert out == "store: Google Workspace suite (`gws`)"
+
+
+def test_connection_reads_document_store_not_paths():
+    """The one machine token that is not a filesystem fact: a box with no `paths:` at all
+    still names its store, and a box with every path and no store does not."""
+    assert render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", None, {"document_store": "gws"}) \
+        == "Google Workspace suite (`gws`)"
+    assert render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", {"assistant_root": "~/MitosAgent"}, {}) == "{{connection}}"
+
+
+def test_connection_stays_literal_for_an_unwired_or_unknown_store():
+    """A publish step keys its 'say so, print it by hand' branch on this staying literal, so
+    an unset store, the literal 'none', and a name servers.yaml has never heard of must all
+    read the same. Naming a store the machine cannot reach is the one wrong answer."""
+    for ds in (None, "", "none", "nosuchserver"):
+        assert render.expand_placeholders(
+            _ConnReg({}), "{{connection}}", {}, {"document_store": ds}) == "{{connection}}"
+    # ...and with no machine profile threaded through at all (every pre-A1 caller)
+    assert render.expand_placeholders(_ConnReg({}), "{{connection}}", {}) == "{{connection}}"
+
+
+def test_connection_names_every_store_a_multi_store_machine_wires():
+    """One name would make the skill pick a store silently. Naming both makes the choice the
+    harness's, out loud."""
+    out = render.expand_placeholders(
+        _ConnReg({}), "{{connection}}", {}, {"document_store": ["gws", "notion"]})
+    assert out == "Google Workspace suite (`gws`), Notion (`notion`)"
+
+
+def test_connection_survives_a_registry_stand_in_with_no_servers():
+    """Only {{connection}} reads `.servers`; a caller without one must lose that token, not
+    every other placeholder in the document."""
+    out = render.expand_placeholders(
+        _FakeReg({"given_name": "Paul"}), "{{user_given_name}} {{connection}}", {},
+        {"document_store": "gws"})
+    assert out == "Paul {{connection}}"
+
+
+def test_every_delivers_skill_names_the_store_through_the_token():
+    """A1's point: the seven return-lane skills must not depend on a connection section that
+    only renders into `agents-md` tree roots — that is precisely why a coding-only box
+    published nothing. Each must carry the token exactly once (a second occurrence would be
+    expanded too, turning the 'no store wired' branch into nonsense on a wired machine)."""
+    import pathlib
+    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
+    delivers = [p for p in sorted(skills.glob("*/SKILL.md"))
+                if "\ndelivers:" in p.read_text(encoding="utf-8")]
+    assert len(delivers) >= 7, "expected the return-lane skills to be found"
+    for p in delivers:
+        body = p.read_text(encoding="utf-8")
+        assert body.count("{{connection}}") == 1, f"{p.parent.name}: token count"
+        assert "always-on context for a connection section" not in body, \
+            f"{p.parent.name}: still depends on a tree-root-only heading"
 
 
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
@@ -194,7 +307,7 @@ def test_reverse_expand_project_root_matches_any_machines_root():
         r, "No token here.", "Path ~/MitosAgent stays.") == "Path ~/MitosAgent stays."
 
 def test_soul_and_new_session_skill_expand_project_root():
-    # acceptance: on the rig machine (hermes + agents-md, assistant_root set) SOUL.md
+    # acceptance: on the rig machine (mitos-agent + agents-md, assistant_root set) SOUL.md
     # and the deployed new-session skill name the concrete root, no literal token left.
     treg, _tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
@@ -427,3 +540,58 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     written = initmod.scaffold_overlay(tmp, given_name="", backend="mock")
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
+
+
+# ── {{returns_container}} (the store folder those records are published INTO) ─
+_RET_SERVERS = {"servers": {
+    "gws": {"description": "Google Workspace suite — the source of truth.",
+            "returns_container": "FOLDER-1"},
+    "notion": {"description": "Notion", "returns_container": "FOLDER-2"},
+    "plain": {"description": "Plain store"},          # no folder configured
+}}
+
+
+def test_returns_container_expands_to_the_folder_the_connection_names():
+    """The regression this exists for: a deliverable skill was told the STORE and not a
+    destination, so the harness picked a folder — the project's own watched folder — and four
+    return records were ingested as project context instead of being evaluated."""
+    out = render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
+                                     "publish into {{returns_container}}", {},
+                                     {"document_store": "gws"})
+    assert out == "publish into FOLDER-1"
+
+
+def test_returns_container_is_read_off_the_connection_not_the_machine():
+    """The folder belongs to the STORE. Every machine wired to it publishes into the same one,
+    and duplicating the id per machine is how two of them drift."""
+    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/MitosAgent"}):
+        assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
+                                          "{{returns_container}}", paths,
+                                          {"document_store": "gws"}) == "FOLDER-1"
+
+
+def test_a_multi_store_machine_names_the_folder_per_store():
+    """Naming one folder without saying which store it belongs to is how a record goes to the
+    right id in the wrong place."""
+    out = render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                     {}, {"document_store": ["gws", "notion"]})
+    assert "FOLDER-1" in out and "FOLDER-2" in out
+    assert "gws" in out and "notion" in out
+
+
+def test_a_store_with_no_folder_leaves_the_token_literal():
+    """Read exactly as an unwired store is: the publish step's 'say so and print it for the
+    owner' branch, never a guessed folder."""
+    assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                      {}, {"document_store": "plain"}) == "{{returns_container}}"
+    assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS), "{{returns_container}}",
+                                      {}, {}) == "{{returns_container}}"
+
+
+def test_the_container_token_and_the_root_token_are_different_places():
+    """One is where the harness WRITES the record locally, the other is where the copy GOES.
+    Collapsing them is how the store lane read an empty folder while records piled up on disk."""
+    reg = _ConnReg({}, servers=_RET_SERVERS)
+    paths, machine = {"assistant_root": "~/MitosAgent"}, {"document_store": "gws"}
+    assert render.expand_placeholders(reg, "{{returns_root}}", paths, machine) \
+        != render.expand_placeholders(reg, "{{returns_container}}", paths, machine)

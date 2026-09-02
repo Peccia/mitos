@@ -217,10 +217,8 @@ def _overlay_readme(backend: str) -> str:
             "to the public repo. It overrides the core registry by last-layer-wins: a file "
             "here with the same logical path/name as a core file replaces it; new files are "
             "added; core-only files remain.\n\n"
-            "Your own skills live in `skills/<name>/SKILL.md` here — the skills that ship in "
-            "core target the agentic assistant (`mitos-agent`), so a coding-harness machine "
-            "installs none of them. Author one by hand or from the console's Skills & Orgs "
-            "tab (`python build/compile.py review`).\n\n"
+            "Your own skills live in `skills/<name>/SKILL.md` here — author them by hand or "
+            "from the console's Skills & Orgs tab (`python build/compile.py review`).\n\n"
             + store_note)
 
 

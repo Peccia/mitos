@@ -38,6 +38,71 @@ ORG_DOMAIN_PRED = PECCIA + "orgDomain"
 # for an effort, rendered as its own line under the effort heading so the agent reads
 # intent — not just a document list. Optional, omit-when-absent, no validation set.
 GOAL_PRED = PECCIA + "goal"
+# deliverable is likewise a peccia predicate, and the only repeated one: an effort declares
+# zero or more artifacts every implementation under it must yield (the forward contract). It
+# is repeated rather than a JSON list literal because RDF stores each value as its own triple;
+# the JSON array is only the JSON-LD surface form of those triples.
+DELIVERABLE_PRED = PECCIA + "deliverable"
+# requirementsCoverage is likewise a peccia predicate, and the second repeated one: an effort
+# declares zero or more dimensions a requirements-gathering session must close before its
+# requirements are exportable. Where `deliverable` is the FORWARD contract (what an implementation
+# must yield), this is the INTERVIEW contract (what the gathering must not leave unasked).
+REQ_COVERAGE_PRED = PECCIA + "requirementsCoverage"
+
+# The controlled vocabulary — scoped to what Mitos should capture from a target harness. Ordered,
+# and that order is canonical everywhere this value is written or rendered (JSON-LD serialization,
+# the compiled line, the agent's checklist): RDF does not preserve order, so ONE rule beats two.
+# Adding a term later is a one-line edit here; there is deliberately no overlay-extension lane.
+#
+# APPEND, NEVER INSERT. _ordered walks this tuple in order and filters, so a term added at the END
+# leaves every existing effort's serialized bytes untouched. Inserting mid-tuple would silently
+# reorder efforts that already declare later terms and produce a graph diff on projects nobody
+# edited — the one way this list can break a repo it was never pointed at.
+#
+# The three adjacent terms are easy to confuse, so the boundary is written down once, here, rather
+# than left to whoever authors the next effort:
+#   deploy-book      how do I SHIP THIS CHANGE?  steps, order, verification, rollback. One release.
+#   runbook          how do I OPERATE it once it runs?  alerts, failures, recovery. Outlives the release.
+#   migration-notes  what changed for EXISTING data and consumers, and what must they do?
+#
+# requirements-receipt is the return lane's spine: per-requirement outcomes keyed by the ids the
+# export minted. It is a deliverable — not a "summary" — precisely because it has a DEFINED SHAPE
+# a reader can parse and check. Unstructured prose about the work is not a deliverable and does not
+# belong in this vocabulary.
+KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book",
+                      "runbook", "migration-notes", "requirements-receipt")
+
+
+# The controlled coverage vocabulary — the dimensions a requirements interview can be told to
+# close. Ordered on the same rule as KNOWN_DELIVERABLES, and for the same reason: RDF preserves no
+# order, so ONE canonical ordering serves the JSON-LD bytes, the compiled line, and the agent's
+# checklist alike. Adding a term is a one-line edit with no migration — an effort that does not
+# name it is unaffected.
+KNOWN_COVERAGE = ("performance", "security", "failure-recovery", "data-retention",
+                  "access-control", "scale")
+
+
+def _ordered(names, vocab: tuple[str, ...]) -> tuple[str, ...]:
+    """The one canonical ordering rule, shared by every controlled vocabulary on an effort:
+    vocabulary index first, deduplicated, unknown names last and alphabetical. It ORDERS, it does
+    not validate (loader._validate does), and it must tolerate an unknown name rather than raise,
+    because review.propose_graph_change builds a CreativeWork before validation runs and
+    parse_fragment reads untrusted candidate text."""
+    seen = set(names)
+    known = tuple(n for n in vocab if n in seen)
+    return known + tuple(sorted(seen - set(vocab)))
+
+
+def order_deliverables(names) -> tuple[str, ...]:
+    """Canonical order for an effort's forward contract (KNOWN_DELIVERABLES)."""
+    return _ordered(names, KNOWN_DELIVERABLES)
+
+
+def order_coverage(names) -> tuple[str, ...]:
+    """Canonical order for an effort's interview contract (KNOWN_COVERAGE)."""
+    return _ordered(names, KNOWN_COVERAGE)
+
+
 # store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
 # which document_store (a connections/servers.yaml server key) enumerated this document.
 # Missing key = legacy = "the project's sole store" (only new enumerations write it), and
@@ -97,6 +162,15 @@ class CreativeWork:
     org_domain: str = ""  # peccia:orgDomain — the org domain governing this effort
                           # (e.g. "software"); "" → untagged, route by request nature
     goal: str = ""        # peccia:goal — free-text outcome statement for this effort
+    deliverables: tuple[str, ...] = ()  # peccia:deliverable — artifacts an implementation must
+                                        # yield (the forward contract); a tuple, not a list, so a
+                                        # frozen CreativeWork compares/hashes cleanly with no
+                                        # mutable-default hazard
+    requirements_coverage: tuple[str, ...] = ()  # peccia:requirementsCoverage — the dimensions a
+                                        # requirements-gathering session must close before this
+                                        # effort's requirements are exportable (the interview
+                                        # contract). A tuple for the same reason as above.
+    keywords: str = ""    # schema:keywords — optional comma-separated tags/aliases
 
     @property
     def iri(self) -> str:
@@ -192,8 +266,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str, str]] = []  # (iri, name, description,
-                                                             #  org_domain, goal)
+    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...], tuple[str, ...], str]] = []
+    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage, keywords)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -225,11 +299,18 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
             desc = g.value(subj, SDO("description"))
             domain_val = g.value(subj, URIRef(ORG_DOMAIN_PRED))
             goal_val = g.value(subj, URIRef(GOAL_PRED))
+            deliv_vals = order_deliverables(
+                str(o) for o in g.objects(subj, URIRef(DELIVERABLE_PRED)))
+            cover_vals = order_coverage(
+                str(o) for o in g.objects(subj, URIRef(REQ_COVERAGE_PRED)))
+            keywords_val = g.value(subj, SDO("keywords"))
+            keywords = str(keywords_val) if keywords_val is not None else ""
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
-                                str(goal_val) if goal_val is not None else ""))
+                                str(goal_val) if goal_val is not None else "",
+                                deliv_vals, cover_vals, keywords))
 
-    effort_iris = {iri for iri, _, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -282,13 +363,16 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal in raw_efforts:
+    for iri, name, desc, org_domain, goal, deliverables, coverage, keywords in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
                                     is_part_of=str(part_of) if part_of is not None else "",
                                     org_domain=org_domain,
-                                    goal=goal))
+                                    goal=goal,
+                                    deliverables=deliverables,
+                                    requirements_coverage=coverage,
+                                    keywords=keywords))
 
     return projects, docs, efforts
 
@@ -370,6 +454,15 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             effort_node[ORG_DOMAIN_PRED] = e.org_domain
         if e.goal:
             effort_node[GOAL_PRED] = e.goal
+        if e.deliverables:
+            # Already in canonical order (applied on read); the JSON array is the JSON-LD
+            # surface form of the repeated peccia:deliverable triples.
+            effort_node[DELIVERABLE_PRED] = list(e.deliverables)
+        if e.requirements_coverage:
+            # Same shape and same reasoning as deliverables above.
+            effort_node[REQ_COVERAGE_PRED] = list(e.requirements_coverage)
+        if e.keywords:
+            effort_node["keywords"] = e.keywords
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -545,6 +638,46 @@ def _effort_goal_line(e: CreativeWork) -> list[str]:
     return [f"**Goal:** {e.goal}", ""]
 
 
+def effort_heading(e: CreativeWork) -> str:
+    """An effort's group heading text: its human name followed by its stable id in parentheses —
+    `Auth rework (auth-rework)`. The SAME identity form a project roster line already uses
+    (`` - `Projects/Website/` (website) — … ``), so a reader (human or harness) learns one rule.
+
+    The id is emitted for every effort, tagged or not, and deliberately rides the heading rather
+    than a line of its own: a downstream harness keying a long-lived record on an effort must key
+    it on something a rename cannot move, and the heading is the NAME — human-facing and editable.
+    Reusing the heading costs no always-on tokens in a file that loads on every request."""
+    return f"{e.name} ({e.id})"
+
+
+def _effort_coverage_line(e: CreativeWork) -> list[str]:
+    """The interview contract under an effort's heading: the dimensions a requirements-gathering
+    session must close before this effort's requirements are exportable. Never gated, for the same
+    reason as the deliverables line — it names no skill to load, and it is descriptive metadata any
+    harness benefits from reading. Names arrive already in canonical order (applied on read)."""
+    if not e.requirements_coverage:
+        return []
+    return [f"_Requirements coverage: {', '.join(e.requirements_coverage)}._", ""]
+
+
+def _effort_deliverables_line(e: CreativeWork) -> list[str]:
+    """The forward contract under an effort's heading: the artifacts every implementation of
+    this effort must yield. Unlike the org routing line this is NEVER gated — it names no skill
+    to load, and the coding harness that must PRODUCE these is exactly the surface the org line
+    is suppressed on. The names arrive already in canonical vocabulary order (applied on read)."""
+    if not e.deliverables:
+        return []
+    return [f"_Expected deliverables: {', '.join(e.deliverables)}._", ""]
+
+
+def _effort_keywords_line(e: CreativeWork) -> list[str]:
+    """The alias line under an effort's heading (schema:keywords on CreativeWork):
+    names alternative phrases or aliases that route to this effort."""
+    if not e.keywords:
+        return []
+    return [f"_Also known as: {e.keywords}._", ""]
+
+
 def _conn_heading(pg: ProjectGraph, heading: str | None) -> str:
     """The connection-section title for a project's document block. `heading` is the bound
     store's stable label (`<Name> (`key`)`, from the planner); falls back to
@@ -560,7 +693,10 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
         groups[e.iri] = []
     for d in _by_recency(pg.documents):
         groups.setdefault(d.is_part_of or "", []).append(d)
-    has_efforts = any(len(v) > 0 for k, v in groups.items() if k)
+    # An effort is worth rendering for its own declared contract, not only for the documents it
+    # happens to hold — see `_doc_block`. Empty-but-declared still renders, with an explicit
+    # "no documents" note beneath it rather than silent absence.
+    has_efforts = bool(pg.efforts)
     return groups, has_efforts
 
 
@@ -581,7 +717,13 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
     if emit_heading:
         lines += [f"{h} {heading}", ""]
     lines += [intro, ""]
-    if not pg.documents:
+    # No documents AND no efforts is the only case with nothing to say. An effort with no
+    # documents mapped yet still carries its goal, its expected deliverables and its requirements
+    # coverage — the forward and interview contracts a coding harness reads — plus the stable id a
+    # downstream record keys on. Those are declared in the graph, not derived from documents, so
+    # gating them on a document existing hid a project's whole contract until somebody mapped a
+    # file to it, while the deliverables line is documented as ungated in EVERY generated view.
+    if not pg.documents and not pg.efforts:
         lines.append("_No documents mapped yet._")
         return "\n".join(lines).rstrip("\n") + "\n"
 
@@ -593,11 +735,14 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             lines += [f"{gh} Documents", ""] + entry_fn(groups[""])
         for e in sorted(pg.efforts, key=lambda e: (e.name.lower(), e.id)):
             docs_in_effort = groups.get(e.iri, [])
-            lines += [f"{gh} {e.name}", ""]
+            lines += [f"{gh} {effort_heading(e)}", ""]
             lines += _effort_domain_line(e, org_routing=org_routing)
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
+            lines += _effort_deliverables_line(e)
+            lines += _effort_coverage_line(e)
+            lines += _effort_keywords_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
             else:

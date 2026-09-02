@@ -22,14 +22,49 @@ VALID_SKILL_SCOPES = {"global", "project"}
 # harness always did before this feature existed. See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
-# The user-identity config (registry/user.yaml + registry/local/user.yaml overlay):
-# the single source of truth for the personalization placeholders render.py expands
-# ({{user_given_name}}, {{users_given_name}}, {{user_full_name}}, {{user_email}},
-# {{user_location}}). A fixed, closed schema — unknown keys are rejected loudly rather
-# than silently ignored, the same posture as every other registry file.
-KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
+
+def is_manual_skill_target(tspec: dict) -> bool:
+    """Whether this target's skill lane ends with a human, rather than with the compiler.
+
+    `mode: zip` is that set by construction: it exists precisely because claude.ai exposes no
+    filesystem to write and no upload API, so the compiler can only stage a file for someone to
+    upload (targets/claude-app.yaml). Nothing else emits skills that way.
+
+    A manual target stages a MENU. It takes no curation, and it deploys nothing that could leak
+    a `scope: project` skill globally — the human decides both, at upload time."""
+    return ((tspec or {}).get("skills") or {}).get("mode") == "zip"
+
+
+# The registry-wide user config (registry/user.yaml + registry/local/user.yaml overlay).
+# Two groups of settings, both resolved core-then-overlay with last-layer-wins:
+#
+#   IDENTITY — the personalization placeholders render.py expands ({{user_given_name}},
+#     {{users_given_name}}, {{user_full_name}}, {{user_email}}, {{user_location}}). These
+#     are the file's original and still primary contents.
+#   DEFAULTS — settings a project or an effort inherits when it names none of its own.
+#     `default_deliverables` is the first: the forward contract a new effort starts with.
+#     Widening this file beyond identity is deliberate and recorded here rather than left
+#     to be inferred; the alternative was a second registry-level config file for one key.
+#
+# Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
+# _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
+# placeholder expansion as {{user_default_deliverables}}.
+#
+# A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
+# the same posture as every other registry file.
+KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
+                   "default_deliverables"}
+# The subset of KNOWN_USER_KEYS whose value is a list, not a string.
+_USER_LIST_KEYS = {"default_deliverables"}
+# documentation + tests are the registry-wide default because they are the two every kind
+# of work owes regardless of shape, and a default inherited silently should fit everything
+# it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
+# inherits this set files no receipt, so the requirements half of the return lane would
+# close quietly — _validate does not fix that by overriding the owner's default, it is
+# surfaced as a warning where the declaration is made (see the console's effort editor).
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
-                 "email": "user@example.com", "location": "Your City, State"}
+                 "email": "user@example.com", "location": "Your City, State",
+                 "default_deliverables": ["documentation", "tests"]}
 
 # The structural anchor a skill extension splices under (render-time only — see
 # render.compose_skill_body). Fixed and order-independent: extensions land as new
@@ -153,6 +188,20 @@ class Skill:
         wired never receives instructions for tools it cannot call."""
         return self.frontmatter.get("requires_server") or None
 
+    @property
+    def delivers(self) -> str | None:
+        """The `KNOWN_DELIVERABLES` term this skill satisfies — the return lane's binding
+        between what an effort DECLARES it must produce and the procedure that produces it.
+
+        One skill per deliverable, never one skill for all of them: the set is meant to grow,
+        so adding a deliverable must be an ADDITION (a new file) and never a modification to a
+        file that keeps getting longer. This field is what makes the pairing checkable —
+        planner.skill_deploy_warnings can say an effort declares 'deploy-book' on a machine
+        where nothing delivers it, instead of leaving that a silent gap discovered months
+        later by the deploy book's absence. Optional; omit for a skill that produces no
+        declared deliverable."""
+        return self.frontmatter.get("delivers") or None
+
 
 @dataclass
 class Prompt:
@@ -225,6 +274,13 @@ def _load_user(dir_path: Path, label: str) -> dict:
         raise RegistryError(f"{label}: unknown key(s) {sorted(bad)} — known: "
                             f"{sorted(KNOWN_USER_KEYS)}")
     for k, v in data.items():
+        # Identity keys are strings; the DEFAULTS group is not. default_deliverables is a
+        # list, and its element types + vocabulary are checked in _validate (where the
+        # graph module is already imported) rather than duplicated here.
+        if k in _USER_LIST_KEYS:
+            if not isinstance(v, list):
+                raise RegistryError(f"{label}: {k!r} must be a list")
+            continue
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")
     return data
@@ -414,6 +470,45 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
         data["_is_local"] = is_local
         out[slug] = data
     return out
+
+
+def _validate_default_deliverables(names, label: str, graphmod) -> None:
+    """A `default_deliverables:` value, wherever it is authored. Absent is fine; a list of
+    known terms is fine; anything else fails loudly, naming the file and the valid set."""
+    if names is None:
+        return
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise RegistryError(
+            f"{label}: 'default_deliverables' must be a list of strings")
+    for n in names:
+        if n not in graphmod.KNOWN_DELIVERABLES:
+            raise RegistryError(
+                f"{label}: unknown default deliverable {n!r}; "
+                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
+
+
+def resolve_default_deliverables(reg: "Registry", slug: str) -> tuple[str, ...]:
+    """The deliverables a NEW effort under `slug` starts with, resolved down one chain:
+
+        the Work item's own deliverables   ->  wins, always (never reaches here)
+          otherwise: the project manifest      registry/projects/<slug>.yaml
+            otherwise: registry-wide           registry/user.yaml
+
+    Only the last two levels live here — an effort that declares its own deliverables never
+    consults a default at all. The chain is the same resolution order the skill-scope design
+    already uses (a project binding wins, the global default fills in), so there is one rule
+    to learn rather than two.
+
+    A project that sets `default_deliverables: []` inherits NOTHING, which is a real answer
+    and distinct from omitting the key; `is None` rather than a falsy test keeps them apart.
+    Ordering is canonical, so the console renders the same set the graph would serialize.
+    """
+    from . import graph as graphmod
+    proj = reg.projects.get(slug) or {}
+    names = proj.get("default_deliverables")
+    if names is None:
+        names = reg.user.get("default_deliverables") or []
+    return graphmod.order_deliverables(names)
 
 
 def _load_graphs(base: Path) -> dict:
@@ -614,12 +709,53 @@ def _validate(reg: Registry) -> None:
                 f"lane was retired (0.1.3 batch 1: skills already cover the reusable-"
                 f"behavior story, and Claude Code ships a built-in code-reviewer agent); "
                 f"remove 'agents:' from the manifest")
+        if "aliases" in proj:
+            aliases = proj["aliases"]
+            if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+                raise RegistryError(
+                    f"project {slug}: 'aliases' must be a list of strings")
+            for a in aliases:
+                if not a.strip():
+                    raise RegistryError(
+                        f"project {slug}: alias in 'aliases' cannot be empty")
+                if "]" in a or "_" in a:
+                    raise RegistryError(
+                        f"project {slug}: alias {a!r} contains invalid character (']' or '_')")
+    from . import graph as graphmod
     for slug, pg in reg.graphs.items():
         for e in pg.efforts:
             if e.org_domain and e.org_domain not in valid_orgs:
                 raise RegistryError(
                     f"graph {slug}: effort {e.id!r} has unknown org domain "
                     f"{e.org_domain!r}; valid: {', '.join(sorted(valid_orgs))}")
+            for d in e.deliverables:
+                if d not in graphmod.KNOWN_DELIVERABLES:
+                    raise RegistryError(
+                        f"graph {slug}: effort {e.id!r} declares unknown deliverable {d!r}; "
+                        f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
+            for c in e.requirements_coverage:
+                if c not in graphmod.KNOWN_COVERAGE:
+                    raise RegistryError(
+                        f"graph {slug}: effort {e.id!r} declares unknown coverage dimension "
+                        f"{c!r}; valid: {', '.join(graphmod.KNOWN_COVERAGE)}")
+    # Default deliverable sets are validated against the SAME closed vocabulary as a
+    # declared one. A default is copied onto real efforts, so a typo here would mint
+    # invalid efforts one at a time from a file nobody looks at twice — validate it where
+    # it is authored, not where it lands.
+    # `delivers:` names a term from the same closed vocabulary an effort declares. A typo
+    # here is worse than a missing skill: the skill deploys, looks correct, and satisfies
+    # nothing — so it fails at load like every other unknown vocabulary value.
+    for name, skill in reg.skills.items():
+        d = skill.delivers
+        if d is not None and d not in graphmod.KNOWN_DELIVERABLES:
+            raise RegistryError(
+                f"skill {name!r}: unknown 'delivers' value {d!r}; "
+                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
+    _validate_default_deliverables(
+        reg.user.get("default_deliverables"), "registry/user.yaml", graphmod)
+    for slug, proj in reg.projects.items():
+        _validate_default_deliverables(
+            proj.get("default_deliverables"), f"project {slug}", graphmod)
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")
@@ -629,6 +765,13 @@ def _validate(reg: Registry) -> None:
         # their own overlay projects). Optional, but must be a bool if set — same as machines.
         if "example" in proj and not isinstance(proj["example"], bool):
             raise RegistryError(f"project {slug}: 'example' must be true/false")
+        # `hidden: true` — a finished/parked project stays in the registry and graph
+        # (still loads, still queries) but plans no output on any machine (planner._visible_projects
+        # is the single choke point). Reusing `stage:` was considered and rejected: a `maintain`
+        # project still needs context, so stage cannot double as visibility. Optional, default
+        # absent/false, same bool-or-nothing shape as `example`.
+        if "hidden" in proj and not isinstance(proj["hidden"], bool):
+            raise RegistryError(f"project {slug}: 'hidden' must be true/false")
         # `description:` feeds the generated Project Roster on Projects/AGENTS.md.
         # Optional, but a set value must be a non-empty string.
         if "description" in proj:
@@ -710,6 +853,30 @@ def _validate(reg: Registry) -> None:
                 if not isinstance(val, str) or not val.strip():
                     raise RegistryError(
                         f"project {slug}: repo_branches[{key!r}] must be a non-empty string")
+        # `repo_ssh_keys:` (optional): the private key to authenticate a repo's clone/pull
+        # with, keyed by checkout basename — same identity/validation as `repo_notes:`/
+        # `repo_branches:`. Absent = the ambient default git/ssh identity. A bare filename
+        # resolves to `~/.ssh/<name>` on whichever machine runs the clone (agentic.sshkey),
+        # so the SAME manifest entry works across every machine that carries that key under
+        # that name — no per-machine config needed.
+        keys_raw = proj.get("repo_ssh_keys")
+        if keys_raw is not None and keys_raw != {}:
+            if not isinstance(keys_raw, dict):
+                raise RegistryError(f"project {slug}: 'repo_ssh_keys' must be a mapping "
+                                    f"of repo basename to a key name/path")
+            known_basenames = {
+                _repo_basename(u) for u in (
+                    repo_raw if isinstance(repo_raw, list)
+                    else ([repo_raw] if isinstance(repo_raw, str) and repo_raw.strip()
+                          else []))}
+            for key, val in keys_raw.items():
+                if key not in known_basenames:
+                    raise RegistryError(
+                        f"project {slug}: repo_ssh_keys key {key!r} does not match any "
+                        f"'repo' checkout basename; known: {sorted(known_basenames)}")
+                if not isinstance(val, str) or not val.strip():
+                    raise RegistryError(
+                        f"project {slug}: repo_ssh_keys[{key!r}] must be a non-empty string")
         for mname, raw in (proj.get("local_path") or {}).items():
             if mname not in reg.machines:
                 raise RegistryError(
@@ -889,12 +1056,11 @@ def _validate(reg: Registry) -> None:
             if "ssh_key" in git_cfg and not isinstance(git_cfg["ssh_key"], str):
                 raise RegistryError(
                     f"machine {name}: sync.git.ssh_key must be a string path to the private key")
-        # 5. (retired) The `hermes_settings` validation block went with the Hermes settings
-        #    lane — Mitos Agent owns its own config file whole (targets/mitos-agent.yaml), so
-        #    there is no third-party config.yaml to reach settings leaves into. A leftover
-        #    `hermes_settings:` in a profile is silently ignored (machine keys are not a
-        #    closed set), so the machine profiles drop it explicitly rather than relying on a
-        #    validation error to catch it.
+        # 5. (retired) The third-party settings-merge lane is gone — Mitos Agent owns its
+        #    own config file whole (targets/mitos-agent.yaml), so there is no third-party
+        #    config.yaml to reach settings leaves into. Unknown machine keys are silently
+        #    ignored (machine keys are not a closed set), so profiles drop retired settings
+        #    blocks explicitly rather than relying on a validation error to catch them.
         # 6. skills (optional): per-target curation of the compatible skill set —
         #    `{<target>: {include: [...] | exclude: [...]}}`. The overlayable home for
         #    what target-side skills.include/exclude used to do (rejected above); this
@@ -914,6 +1080,15 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"machine {name}: skills.{tname} must be a mapping "
                         f"({{include: [...]}} or {{exclude: [...]}})")
+                # A manual target stages a pile for a human to upload from; the choice already
+                # happens at upload time, so curating the pile only removes options. Rejected
+                # loudly for the reason the target-side rejection below gives — a list that
+                # quietly does nothing is worse than one that fails.
+                if is_manual_skill_target(reg.targets.get(tname) or {}):
+                    raise RegistryError(
+                        f"machine {name}: skills.{tname} cannot be curated — {tname} stages "
+                        f"skills for you to upload by hand, so every compatible skill is "
+                        f"offered and you choose at upload time. Remove the block.")
                 inc, exc = curation.get("include"), curation.get("exclude")
                 for label, lst in (("include", inc), ("exclude", exc)):
                     if lst is None:

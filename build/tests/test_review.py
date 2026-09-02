@@ -7,16 +7,27 @@ from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
 def _one_machine_rig(**machine):
-    """A registry whose fleet is exactly one machine — the fresh-install shape."""
+    """A registry whose fleet is exactly one machine — the fresh-install shape.
+
+    Its example effort declares the whole deliverable vocabulary, because a skill declaring
+    `delivers:` deploys only where some effort asks for that term (planner._selected_skills).
+    Without it this rig would stand for a fleet that never opted into the return lane, and
+    every test below would be asserting the connection gate against a roster the DELIVERABLE
+    gate had already emptied — passing or failing for the wrong reason."""
+    from dataclasses import replace as _replace
+    from agentic import graph as graphmod
     rig = copy.deepcopy(reg)
     rig.machines.clear()
     rig.machines["box"] = {"name": "box", "os": "windows", "paths": {}, **machine}
+    pg = rig.graphs["example-project"]
+    pg.efforts = ([_replace(pg.efforts[0], deliverables=graphmod.KNOWN_DELIVERABLES)]
+                  + list(pg.efforts[1:]))
     return rig
 
 
 def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     """The console shows every registry item but TAGS each with `deploys_here`, so a fresh
-    coding-harness install opens on its own content instead of the hermes-only core skills.
+    coding-harness install opens on its own content instead of the agent-only core skills.
 
     The tag is asked of `planner._selected_skills` — the same function deploy uses — so the
     connection gate counts too: `gws` targets claude-code but declares `requires_server:
@@ -25,20 +36,26 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     from agentic.review import prompt_index
 
     coding = _one_machine_rig(targets=["claude-code"])
-    shown = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
-    assert shown == set(), f"a coding box with no connection receives nothing: {shown}"
-
+    unwired = {s["name"] for s in prompt_index(coding)["skills"] if s["deploys_here"]}
     wired = _one_machine_rig(targets=["claude-code"], document_store="gws")
-    shown = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
-    assert shown == {"gws"}, f"wiring the store reveals exactly gws: {shown}"
+    connected = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
+
+    # The gate under test: gws targets claude-code but needs a store this machine lacks.
+    assert "gws" not in unwired, f"an unwired connection must hide its skill: {unwired}"
+    assert "gws" in connected, f"wiring the store reveals gws: {connected}"
+    # ...and it changes EXACTLY that one skill. Asserting the whole roster instead would break
+    # every time a skill ships and get rubber-stamped into a new set, which is how a real
+    # regression slips through; the gate is the behaviour, the roster is just today's content.
+    assert connected - {"gws"} == unwired
+    assert unwired, "skills needing no connection still deploy to a bare coding box"
 
     # nothing is dropped from the payload — the console's "All" chip still reveals them
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
 
 
-def test_deploys_here_is_a_no_op_on_a_hermes_machine():
+def test_deploys_here_is_a_no_op_on_a_mitos_agent_machine():
     """The guard for 'no impact on current functionality': an agentic machine's view is
-    unchanged, since every core skill targets hermes."""
+    unchanged, since every core skill targets mitos-agent."""
     from agentic.review import prompt_index
 
     rig = _one_machine_rig(targets=["mitos-agent", "agents-md"], document_store="gws")
@@ -76,7 +93,7 @@ def test_console_only_prompt_always_reads_as_available():
 def test_state_exposes_machine_targets_separately_from_known_targets():
     """Two lists, not interchangeable: `known_targets` is every adapter (the AUTHORING
     forms — a skill may target a machine you haven't built), `machine_targets` is only what
-    your machines declare (the FILTER chips). Mixing them is what offered a `hermes` filter
+    your machines declare (the FILTER chips). Mixing them is what offered a `mitos-agent` filter
     chip on a coding-harness box."""
     from agentic.review import state
 
@@ -704,6 +721,225 @@ def test_refresh_staging_with_multiple_listings_requires_scope_key(monkeypatch):
     assert out3["ok"] is False
 
 
+def _identity_fragment(effort_id: str, extra: str = "") -> str:
+    """A Mitos-Agent-shaped Implemented Document body carrying the identity fragment
+    (docs/implemented-document-identity.md) — mirrors mitos-agent's
+    `evaluation.identity_fragment` output exactly, so these tests exercise the real contract
+    rather than a stand-in shape."""
+    return (
+        "# Implemented: demo__launch-prep\n\n"
+        "_Run `r-1` · score 100/100._\n\n" + extra +
+        "## Identity\n\n```json\n"
+        '{\n  "@context": {"@vocab": "https://schema.org/"},\n'
+        '  "@type": "DigitalDocument",\n'
+        '  "additionalType": "implemented-requirements",\n'
+        f'  "isPartOf": {{"@id": "http://peccia.net/creativework/{effort_id}"}},\n'
+        '  "identifier": "r-1"\n}\n```\n')
+
+
+def test_extract_identity_effort_finds_a_known_effort():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]   # ships an effort with id "launch-prep"
+    assert review.extract_identity_effort(_identity_fragment("launch-prep"), pg) == \
+        "launch-prep"
+
+
+def test_extract_identity_effort_ignores_an_unknown_effort_id():
+    """The fragment parses fine but names an effort this project's graph has never heard
+    of — degrades to no suggestion, never a guess."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    assert review.extract_identity_effort(_identity_fragment("no-such-effort"), pg) == ""
+
+
+def test_extract_identity_effort_ignores_malformed_json():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    broken = "## Identity\n\n```json\n{ not: valid json\n```\n"
+    assert review.extract_identity_effort(broken, pg) == ""
+
+
+def _return_record_fragment(effort_id: str, delivers: str = "tests") -> str:
+    """A published return record's body — the `return-record` variant of the same contract,
+    the shape the seven `delivers:` skills tell a coding harness to append to the STORE copy."""
+    return (
+        f"# {delivers}\n\n## Added\n\n- a test\n\n"
+        "## Identity\n\n```json\n"
+        '{\n  "@context": {"@vocab": "https://schema.org/"},\n'
+        '  "@type": "DigitalDocument",\n'
+        '  "additionalType": "return-record",\n'
+        f'  "isPartOf": {{"@id": "http://peccia.net/creativework/{effort_id}"}},\n'
+        '  "identifier": "demo__launch-prep-20260828T212400Z",\n'
+        f'  "http://peccia.net/deliverable": "{delivers}"\n}}\n```\n')
+
+
+def test_a_return_record_is_not_offered_as_a_project_document():
+    """The regression this exists for. A run's return records are Mitos-Agent's raw input — the
+    several per-deliverable documents it reads to produce ONE Implemented Document — and they are
+    not project context. Recognizing them here mapped four of them to an effort, which rendered
+    them into that project's generated AGENTS.md, which made a finished run's claims ("npm audit
+    reports 0 vulnerabilities") always-on fact for every later session.
+
+    The block still parses and still names a real effort; Mitos simply does not claim it."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    assert review.extract_identity_effort(_return_record_fragment("launch-prep"), pg) == ""
+
+
+def test_the_implemented_document_is_still_recognized():
+    """The narrowing must not take the graduation document with it: ONE evaluated document per
+    Work item is exactly what this view exists to map."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    frag = _return_record_fragment("launch-prep").replace("return-record",
+                                                          "implemented-requirements")
+    assert review.extract_identity_effort(frag, pg) == "launch-prep"
+
+
+def test_identity_types_are_a_closed_set():
+    from agentic import review
+    assert review.IDENTITY_TYPES == ("implemented-requirements",)
+
+
+def test_every_delivers_skill_publishes_a_well_formed_identity_fragment():
+    """Each skill must name ITS OWN deliverable in the fragment, using a term Mitos's graph
+    already validates on the effort — one vocabulary in both directions. A copy-paste slip
+    here would file a `tests` record under `runbook` in the graph, which nothing downstream
+    could detect."""
+    import json as _json
+    import pathlib
+    import re as _re
+    from agentic import graph as graphmod
+    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
+    seen = 0
+    for p in sorted(skills.glob("*/SKILL.md")):
+        body = p.read_text(encoding="utf-8")
+        if "\ndelivers:" not in body:
+            continue
+        seen += 1
+        declared = _re.search(r"^delivers:\s*(\S+)", body, _re.M).group(1)
+        block = _re.search(r'```json\n(\{.*?"additionalType": "return-record".*?\})\n```',
+                           body, _re.S)
+        assert block, f"{p.parent.name}: no return-record fragment"
+        frag = _json.loads(block.group(1).replace("<effort-id>", "e").replace("<run>", "r"))
+        assert frag["additionalType"] == "return-record"
+        assert frag["@context"] == graphmod.JSONLD_CONTEXT, f"{p.parent.name}: context drift"
+        assert frag[graphmod.DELIVERABLE_PRED] == declared, f"{p.parent.name}: names another"
+        assert declared in graphmod.KNOWN_DELIVERABLES, f"{p.parent.name}: unknown deliverable"
+        assert frag["isPartOf"]["@id"].startswith(graphmod.CREATIVE_WORK_NS)
+    assert seen >= 7, f"expected the seven return-lane skills, found {seen}"
+
+
+def test_extract_identity_effort_ignores_the_wrong_additional_type():
+    """Only the two `IDENTITY_TYPES` count — any other JSON-LD block a document happens
+    to carry is not this contract and must not be read as one."""
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    pg = treg.graphs["example-project"]
+    other = ('```json\n{"@type": "DigitalDocument", "additionalType": "something-else", '
+             '"isPartOf": {"@id": "http://peccia.net/creativework/launch-prep"}}\n```\n')
+    assert review.extract_identity_effort(other, pg) == ""
+
+
+def test_extract_identity_effort_with_no_graph_yet_finds_nothing():
+    """A project with no knowledge graph at all — `pg` is None — must not crash; there is
+    nothing to confirm the suggestion against, so none is offered."""
+    from agentic import review
+    assert review.extract_identity_effort(_identity_fragment("launch-prep"), None) == ""
+
+
+def test_peek_identity_effort_prefills_from_a_staged_document(monkeypatch):
+    """End-to-end through the console function the API endpoint calls: a staged document
+    whose content carries the fragment yields the prefilled suggestion."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Implemented: demo"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Done:
+        returncode = 0
+        stdout = _identity_fragment("launch-prep")
+        stderr = ""
+
+    seen = {}
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.peek_identity_effort(treg, "example-project", "D1")
+    assert out == {"ok": True, "effort_id": "launch-prep"}
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("mitos.py") and "peek" in cmd
+    assert cmd[cmd.index("--store") + 1] == "gws"
+    assert cmd[cmd.index("--id") + 1] == "D1"
+
+
+def test_peek_identity_effort_degrades_silently_when_theres_no_fragment(monkeypatch):
+    """The overwhelmingly common case (an ordinary document with no fragment at all): no
+    error, just no suggestion — the operator maps by hand exactly as before this existed."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Some other doc"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Done:
+        returncode = 0
+        stdout = "# Some other doc\n\njust prose, no identity block.\n"
+        stderr = ""
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _Done())
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+
+
+def test_peek_identity_effort_degrades_silently_on_a_failed_fetch(monkeypatch):
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}],
+           scope={"folder_id": "F1", "query": None, "exclude_folders": [],
+                  "recursive": False, "store": "gws"})
+
+    class _Fail:
+        returncode = 1
+        stdout = ""
+        stderr = "connector error: token expired"
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _Fail())
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+
+
+def test_peek_identity_effort_with_no_recorded_store_skips_the_fetch(monkeypatch):
+    """A document with no `scope_keys`/store provenance (or simply not staged at all) can't
+    be fetched — never guess a store, just answer no suggestion without shelling out."""
+    import subprocess as _sp
+
+    from agentic import review
+    treg, tmp = _temp_registry()
+    _stage(tmp, [{"id": "D1", "name": "Doc"}])   # default scope carries store: ""
+
+    called = []
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: called.append(cmd))
+    assert review.peek_identity_effort(treg, "example-project", "D1") == \
+        {"ok": True, "effort_id": ""}
+    assert not called
+
+
 def test_remove_watch_drops_one_listing_leaves_the_other():
     from agentic import review
     treg, tmp = _temp_registry()
@@ -1076,10 +1312,50 @@ def test_state_exposes_known_targets():
     assert result["known_targets"] == sorted(loadermod.KNOWN_TARGETS)
 
 
+def test_state_exposes_known_deliverables():
+    from agentic import graph
+    from agentic.review import state
+
+    result = state(reg)
+    assert result["known_deliverables"] == list(graph.KNOWN_DELIVERABLES)
+
+
+def test_propose_graph_change_rejects_unknown_deliverable():
+    """Propose-time validation gives a clean browser error before the candidate is written."""
+    from agentic.review import propose_graph_change
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-a", "name": "Effort A",
+                  "deliverables": ["documentation", "not-real"]}])
+    assert not out["ok"]
+    assert "not-real" in out["error"]
+
+
+def test_propose_graph_change_valid_deliverables_reach_the_candidate():
+    from agentic.review import decide, load_candidates, propose_graph_change
+    from agentic import graph
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-b", "name": "Effort B",
+                  "deliverables": ["tests", "documentation"]}])
+    assert out["ok"], out
+    assert decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    merged = graph.load_project_graph(tmp / "registry" / "graph" / f"{slug}.jsonld")
+    eff = next(e for e in merged.efforts if e.id == "eff-b")
+    # stored in canonical vocabulary order, not the order proposed
+    assert eff.deliverables == ("documentation", "tests")
+
+
 def test_prompt_index_frontmatter_whitelist_shape():
     """Skills/prompts carry a `frontmatter` dict scoped to the per-kind editable
     whitelist — never the full raw frontmatter (which may carry e.g. a skill's
-    `hermes:` block that has no place in the console's metadata panel)."""
+    `mitos-agent:` block that has no place in the console's metadata panel)."""
     from agentic.review import _PROMPT_META_WHITELIST, _SKILL_META_WHITELIST, prompt_index
 
     result = prompt_index(reg)
@@ -1313,7 +1589,7 @@ def test_propose_meta_edit_rejects_invalid_scope_value():
 
 def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
     """Unlike the extends_skill/target-binding checks, scope: project has no per-target
-    incompatibility — hermes/claude-app targets simply ignore it (see loader.
+    incompatibility — mitos-agent/claude-app targets simply ignore it (see loader.
     validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
     from agentic.review import propose_meta_edit
 
@@ -1826,3 +2102,139 @@ def test_run_deploy_apply_writes_files_and_updates_ops_state():
     # unknown machine is rejected before any lock is taken
     assert review.run_deploy_apply(treg, "no-such-machine") == \
         {"ok": False, "error": "unknown machine 'no-such-machine'"}
+
+
+
+# ── default_deliverables through the project-edit valve (batch 5c) ──────────
+def test_project_edit_proposes_a_default_deliverable_set():
+    """Per-project defaults go through the SHIPPED valve — a `kind: project` candidate — rather
+    than a second write path into the registry."""
+    from agentic import review
+    rig, _tmp = _temp_registry()
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": ["tests", "documentation"]})
+    assert out["ok"], out
+    assert out["id"]                       # a real inbox candidate, reviewed like any other
+
+
+def test_project_edit_orders_defaults_canonically():
+    from agentic import loader, review
+    rig, _tmp = _temp_registry()
+    review.propose_project_edit(rig, "example-project",
+                                {"default_deliverables": ["requirements-receipt", "tests"]})
+    # the trial validation mutates a COPY, so assert through the resolver on a hand-built manifest
+    rig.projects["example-project"] = {
+        **rig.projects["example-project"],
+        "default_deliverables": ["requirements-receipt", "tests"]}
+    assert loader.resolve_default_deliverables(rig, "example-project") == \
+        ("tests", "requirements-receipt")
+
+
+def test_project_edit_rejects_an_unknown_default_deliverable():
+    """A default is copied onto real efforts, so a typo would mint invalid ones from a form."""
+    from agentic import review
+    rig, _tmp = _temp_registry()
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": ["deployment-book"]})
+    assert not out["ok"]
+    assert "deployment-book" in out["error"] and "deploy-book" in out["error"]
+
+
+def test_project_edit_hides_and_unhides_through_the_same_candidate_valve():
+    """The Project panel's Hidden toggle (Batch 3): a kind: project candidate exactly like
+    every other project edit — no second write path, and un-hiding restores the manifest to
+    having no `hidden:` key at all (the absent/false state), not a stored `false`."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, graph_index, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"hidden": True})
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"]["hidden"] is True
+    idx = next(g for g in graph_index(reloaded) if g["slug"] == "example-project")
+    assert idx["hidden"] is True
+
+    out2 = propose_project_edit(reloaded, "example-project", {"hidden": False})
+    assert out2["ok"], out2
+    result2 = decide(reloaded, out2["id"], "accept", "")
+    assert result2["ok"], result2
+    twice_reloaded = loadermod.load(tmp)
+    assert "hidden" not in twice_reloaded.projects["example-project"]
+
+
+def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
+    """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
+    Collapsing them would make "this project wants no defaults" unauthorable."""
+    from agentic import loader, review
+    rig, _tmp = _temp_registry()
+    assert review.propose_project_edit(rig, "example-project",
+                                       {"default_deliverables": []})["ok"]
+    rig.projects["example-project"] = {**rig.projects["example-project"],
+                                       "default_deliverables": []}
+    assert loader.resolve_default_deliverables(rig, "example-project") == ()
+
+
+def test_sending_null_restores_inheritance():
+    """The console's `inherit` checkbox sends null to REMOVE the key, which is not the same as
+    sending an empty list."""
+    from agentic import review
+    rig, _tmp = _temp_registry()
+    rig.projects["example-project"] = {**rig.projects["example-project"],
+                                       "default_deliverables": ["tests"]}
+    out = review.propose_project_edit(rig, "example-project",
+                                      {"default_deliverables": None})
+    assert out["ok"], out
+
+
+def test_state_names_which_skill_produces_each_deliverable():
+    """The authoring-time answer to "does anything actually produce this?", shown where the
+    declaration is made. Registry-wide on purpose — `deploy --dry-run` owns the per-machine gap."""
+    from agentic import graph, review
+    m = review.state(reg)["deliverable_skills"]
+    # every term is present, so a term with NO producer is a visible empty list rather than a
+    # missing key the UI would have to guess at
+    assert set(m) == set(graph.KNOWN_DELIVERABLES)
+    assert m["requirements-receipt"] == ["requirements-receipt"]
+    assert m["deploy-book"] == ["deploy-book"]
+
+
+def test_state_exposes_the_registry_wide_default_read_only():
+    """Shown so an author can see what a project inherits. It lives in registry/user.yaml and is
+    edited there — inventing a candidate lane for one rarely-changed key would be more machinery
+    than the edit is worth."""
+    from agentic import review
+    st = review.state(reg)
+    assert st["registry_default_deliverables"] == ["documentation", "tests"]
+
+
+def test_vendored_ui_libs_match_their_recorded_hashes():
+    """VENDOR.md is the provenance record for the two files the preview loads. A bumped or
+    hand-edited vendored build with a stale row would leave that record lying."""
+    import hashlib
+    import re
+
+    from agentic import review
+    vendor = (review.UI_DIR / "VENDOR.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^\| `([\w.]+)` \|.*\| `([0-9a-f]{64})` \|", vendor, re.M)
+    assert {name for name, _ in rows} == {"marked.min.js", "dompurify.min.js"}
+    for name, recorded in rows:
+        blob = (review.UI_DIR / name).read_bytes()
+        assert hashlib.sha256(blob).hexdigest() == recorded, f"{name} differs from VENDOR.md"
+
+
+def test_markdown_preview_loads_marked_and_still_sanitizes():
+    """snarkdown cannot render nested lists (its indented-block rule wins over its list
+    rule), so the preview renders with marked — which sanitizes nothing itself, making the
+    DOMPurify hop the one thing that must never be dropped alongside it."""
+    from agentic import review
+    html = (review.UI_DIR / "index.html").read_text(encoding="utf-8")
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert '<script src="marked.min.js"></script>' in html
+    assert "snarkdown" not in html and "snarkdown" not in app
+    assert not (review.UI_DIR / "snarkdown.js").exists()
+    assert "window.marked.parse(" in app
+    assert "window.DOMPurify.sanitize(html)" in app

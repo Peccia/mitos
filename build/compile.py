@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
 
-    parser = argparse.ArgumentParser(prog="compile.py", description=__doc__)
+    parser = argparse.ArgumentParser(prog="mitos", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_compile = sub.add_parser("compile", help="validate + render the registry into dist/")

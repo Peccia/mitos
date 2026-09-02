@@ -48,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Your `given_name`/`full_name`/`email`/`location` — a flat mapping, field-level merged over the core's neutral defaults | field key |
+| `user.yaml` | Two groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) and registry-wide defaults (`default_deliverables`) | field key |
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
@@ -73,19 +73,34 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping — no nesting, no lists:
+A flat mapping in **two groups** — identity, and registry-wide defaults:
 
 ```yaml
+# IDENTITY — the personalization placeholders
 given_name: Paul
 full_name: Paul Peccia
 email: example@domain.com
-location: Buffalo, NY
+location: Your City, State
+
+# DEFAULTS — what a new effort inherits when it names none of its own
+default_deliverables: [documentation, tests]
 ```
 
-All four keys are optional; an unset key falls back to the core `registry/user.yaml`
+Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`). Any key outside this exact set is a hard error at compile
-time — the schema is intentionally closed.
+`location: Your City, State`, `default_deliverables: [documentation, tests]`). Any key
+outside this exact set is a hard error at compile time — the schema is intentionally
+closed (`loader.KNOWN_USER_KEYS`).
+
+The four identity keys are **strings**. `default_deliverables` is a **list** — the one
+key here that is, validated against the closed deliverables vocabulary
+(`graph.KNOWN_DELIVERABLES`) exactly as a declared deliverable is, because a default is
+*copied* onto real efforts and a typo would otherwise mint invalid ones from a file
+nobody looks at twice. See [Default deliverables](#default-deliverables) below.
+
+**Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
+token list rather than this file's keys, so a defaults key can never leak into placeholder
+expansion as `{{user_default_deliverables}}`.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
 context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Paul's`,
@@ -96,8 +111,9 @@ fold back on `adopt`/review-accept (`render.reverse_expand_placeholders`) so an 
 you make to a deployed file routes back to the registry with placeholders intact, not your
 name baked in. An unrecognized `{{...}}` token is left as literal text, never silently eaten.
 
-Two additional tokens are machine-scoped rather than user-scoped, resolved from the
-deploying machine's `paths:` in `machines/<name>.yaml`:
+Four additional tokens are machine-scoped rather than user-scoped. Three resolve from the
+deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolves from its
+`document_store:` instead:
 
 - `{{project_root}}` — the agent tree root: `assistant_root`, else
   `agentic_context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
@@ -107,8 +123,27 @@ deploying machine's `paths:` in `machines/<name>.yaml`:
   explain the skill mechanism with a real path (a skill is an instruction file to read,
   not a callable tool — models otherwise look for a tool named after the skill and
   declare it unavailable).
+- `{{returns_root}}` — where a coding harness writes what it produced, for the return
+  lane. On a machine hosting Mitos Agent: `<assistant_root>/.local-memory/returns`, the
+  exact folder `mitos-agent returns` reads. On a coding-only box there is no such harness
+  and no state directory, so it falls back to `<projects_root>/.mitos-returns`, read with
+  `mitos-agent returns --from`. It deliberately does **not** reuse `{{project_root}}`,
+  which falls back to `projects_root` there and would put records inside a path the
+  harness's own resolver never looks at *while looking like it had worked* — a silently
+  wrong path is worse than an obviously separate one. The seven shipped deliverable skills
+  write to `{{returns_root}}/<run>/<deliverable>.md`.
+- `{{connection}}` — the machine's wired document store, named as the stable section label
+  `<Name> (`key`)` that `render.connection_label` mints, so a skill naming the store and a
+  tree node heading it can never drift apart. A multi-store machine expands to every label,
+  comma-joined. Resolved from `document_store:`, **not** from `paths:` — a connection is not
+  a filesystem fact. The same seven deliverable skills use it to publish a copy of each
+  record to the store: `connections_block` renders a connection heading into tree roots
+  only, so a coding-only box (no `agents-md` target) had a live `mcp.json` and nothing in
+  its context naming it, and every publish step correctly refused to guess.
 
-On a machine that defines no matching path a machine token stays literal. Reversal on
+On a machine that defines no matching path — or, for `{{connection}}`, no document store —
+a machine token stays literal. That literal is load-bearing for the deliverable skills:
+their "no store wired, print it for the owner by hand" branch keys on it. Reversal on
 `adopt`/review-accept matches any machine's value, scoped as above to partials that
 actually carry the token.
 
@@ -147,6 +182,7 @@ context:                      # label → registry-relative partial (must resolv
 | `name` | recommended | Human-readable label used in rosters and the console. |
 | `example` | no | Set `true` on shipped sample projects (e.g. `example-project.yaml`). Example projects step aside automatically once you add your own overlay projects. Must be a boolean if set. |
 | `stage` | **yes** | Lifecycle phase — must be exactly one of `ideation`, `speccing`, `build`, `maintain`. Anything else aborts compile. |
+| `hidden` | no | Set `true` to keep a finished or parked project out of every deployed tree — no tree node, no roster entry, no clone, no per-project `AGENTS.md`/`CLAUDE.md`, on any machine. Its manifest and `graph/<slug>.jsonld` still load and query fine (`mitos graph`, the console); only planning is blind to it. Deployed files a prior deploy left behind become ordinary orphans (invariant #9 — `deploy --prune` removes them). Must be a boolean if set. Deliberately separate from `stage`: a `maintain` project still needs its context deployed, so stage can't double as visibility. |
 | `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `agents-md`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **agentic machines** (`agents-md` also in targets), it clones into `<agentic_context_root>/Projects/<slug>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
@@ -154,10 +190,42 @@ context:                      # label → registry-relative partial (must resolv
 | `skills` | no | Skills bound to *this project's* checkout (deployed to `<checkout>/.claude/skills/` or `.agents/skills/`). Each must exist **and** list `claude-code` or `antigravity` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
 | `prompts` | no | Prompts bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/commands/<name>.md`). Each must exist **and** list `claude-code` in its own `targets:`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
+| `default_deliverables` | no | The deliverables a **new effort under this project** starts with when it declares none of its own — the forward contract, prefilled in the console's `+ Work` editor. A list of terms from the closed deliverables vocabulary (`graph.KNOWN_DELIVERABLES`); an unknown one aborts compile. Omit the key to inherit the registry-wide default in `user.yaml`; set it to `[]` to inherit **nothing**, which is a real answer and deliberately distinct from omitting it. See [Default deliverables](#default-deliverables). |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
 > it replaces the core manifest wholesale (last-layer-wins) — useful for pointing a public example
 > project at your own repo without editing tracked files.
+
+### Default deliverables
+
+An effort's **expected deliverables** are the forward contract: the artifacts every
+implementation under it must yield. A new effort does not start empty — it starts with a
+set resolved down one chain, and every level of that chain is a file that already existed:
+
+```
+the effort's own deliverables         ->  wins, always
+  otherwise: the project's default        registry/projects/<slug>.yaml
+    otherwise: the registry-wide default  registry/user.yaml  ->  [documentation, tests]
+```
+
+This is the same resolution order the [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project)
+design uses — one rule to learn rather than two. `loader.resolve_default_deliverables`
+owns it, and the console resolves the chain server-side so no UI reimplements it.
+
+**`default_deliverables: []` inherits nothing**, and that is deliberately distinct from
+omitting the key. The resolver tests `is None`; a falsy test would collapse two different
+answers into one.
+
+Both levels validate against the same closed vocabulary a *declared* deliverable does,
+because a default is copied onto real efforts and a typo would otherwise mint invalid ones
+from a file nobody looks at twice.
+
+The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
+regardless of shape. Note what is deliberately **absent**: `requirements-receipt`. An
+effort that inherits this set files no receipt, so an effort declaring requirements
+coverage but no receipt gathers requirements that nothing will report on. The console
+surfaces that as a **warning**, never a block — see
+[the operator console](../docs/operator-console.md).
 
 ### Machine profile — `machines/<name>.yaml`
 
@@ -241,7 +309,7 @@ The context partial's `audience` does **not** need to include `claude-code` — 
 
 ### MCP server definitions — `connections/servers.yaml`
 
-Servers are the moat's **tools**, not registry content, so they live in `connections/` on their own
+Servers are external **tools**, not registry content, so they live in `connections/` on their own
 deploy lane — but the overlay can still override or add servers via
 `registry/local/connections/servers.yaml` (per-server last-layer-wins), which is why this file
 appears in the overlay map above. The canonical contract for each server's env/credentials/transport

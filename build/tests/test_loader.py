@@ -62,23 +62,32 @@ def test_core_registry_integrity():
             f"move it to registry/local/machines/ to prevent overlay data leaking "
             f"to unauthorized repos")
 
-    # 4. Mitos builder context must exist and contain the write-guard Invariants.
-    #    Their absence would let an impostor AGENTS.md instruct agents without the
-    #    repo-write prohibition and inbox-only proposal rule.
-    builder_rel = (core_reg.projects.get("mitos") or {}).get("context", {}).get("builder", "")
-    assert builder_rel, "mitos project missing context.builder — builder AGENTS.md cannot be generated"
-    # Manifests store paths as "registry/<rel>"; partials are keyed without the prefix
-    partial_key = builder_rel.removeprefix("registry/")
-    assert partial_key in core_reg.partials, (
-        f"mitos context.builder partial {builder_rel!r} missing from registry — "
-        f"builder AGENTS.md cannot be compiled and write-guard Invariants are absent")
-    builder_body = core_reg.partials[partial_key].body
+    # 4. The partial that compiles into this repo's own AGENTS.md must carry the
+    #    write-guard Invariants. That artifact is what an agent working IN this repo
+    #    reads, so its absence would let an impostor AGENTS.md instruct agents without
+    #    the repo-write prohibition and inbox-only proposal rule.
+    #    Bound to selfdoc.SOURCE rather than a hardcoded path so the guard follows the
+    #    artifact's source wherever it moves (it was context.builder until the project
+    #    node and the repo artifact were split onto separate partials).
+    from agentic import selfdoc
+    repo_ctx_key = selfdoc.SOURCE.relative_to(selfdoc.REPO_ROOT / "registry").as_posix()
+    assert repo_ctx_key in core_reg.partials, (
+        f"selfdoc source partial {repo_ctx_key!r} missing from the core registry — "
+        f"this repo's AGENTS.md cannot be compiled and write-guard Invariants are absent")
+    builder_body = core_reg.partials[repo_ctx_key].body
     assert "Invariants" in builder_body, (
-        "mitos builder context is missing the Invariants section — possible tampering; "
+        "the repo's builder context is missing the Invariants section — possible tampering; "
         "agents would operate without structural guardrails")
     assert "Never write into" in builder_body, (
-        "mitos builder context is missing the registry write-guard rule — possible tampering; "
-        "agents and humans could bypass the inbox and modify the registry directly")
+        "the repo's builder context is missing the registry write-guard rule — possible "
+        "tampering; agents and humans could bypass the inbox and modify the registry directly")
+
+    # The mitos project node must still resolve its own prose partial — separate file,
+    # separate job (orientation + document map), but a missing one means no node at all.
+    builder_rel = (core_reg.projects.get("mitos") or {}).get("context", {}).get("builder", "")
+    assert builder_rel, "mitos project missing context.builder — project node cannot be generated"
+    assert builder_rel.removeprefix("registry/") in core_reg.partials, (
+        f"mitos context.builder partial {builder_rel!r} missing from registry")
 
 def test_inbox_dir_resolves_under_overlay_not_repo_root():
     # inbox_dir points into registry/local/ (syncs with mitos-local overlay), not at
@@ -195,7 +204,7 @@ def test_machine_role_exclusivity_assistant_vs_coding():
     rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md", "claude-code"]
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError due to hermes + coding target on one machine")
+        raise AssertionError("expected RegistryError due to mitos-agent + coding target on one machine")
     except RegistryError as e:
         assert "cannot share a machine with coding harness target(s)" in str(e)
         assert "claude-code" in str(e)
@@ -214,7 +223,7 @@ def test_mitos_agent_requires_agents_md():
         assert "requires 'agents-md'" in str(e)
 
 def test_machine_role_agents_md_alone_is_not_a_coding_harness():
-    """agents-md is the context format, not a harness — it may coexist with hermes
+    """agents-md is the context format, not a harness — it may coexist with mitos-agent
     (the agentic machine-mount combo) with no exclusivity violation."""
     import copy
     from agentic.loader import _validate
@@ -223,15 +232,15 @@ def test_machine_role_agents_md_alone_is_not_a_coding_harness():
     _validate(rig)  # must not raise
 
 def test_agents_md_without_assistant_target_never_leaks_org_routing():
-    """The actual bug this exists to prevent: `agents-md` alone (no `hermes` target) is a
+    """The actual bug this exists to prevent: `agents-md` alone (no `mitos-agent` target) is a
     valid, common shape — example-windows.yaml ships exactly this (claude-code +
     antigravity + claude-app + agents-md) — but org skills declare `targets: [mitos-agent]`
     only, so they never deploy there. Both org-rendering surfaces (the agentic-graph
     reference mount via agentic_context_root, and the org-domain table on the
     agents-md/assistant tree) must therefore omit orgs entirely on such a machine, even
     though example-project's 'Launch Prep' effort IS tagged orgDomain: marketing.
-    A real hermes machine (example-linux) must still carry both."""
-    rig = _full_windows_rig()  # agents-md, no hermes — mirrors example-windows.yaml exactly
+    A real mitos-agent machine (example-linux) must still carry both."""
+    rig = _full_windows_rig()  # agents-md, no mitos-agent — mirrors example-windows.yaml exactly
     outs = planner.plan_machine(rig, "example-windows")
     graph_tree = [o for o in outs if o.target == "agentic-graph"]
     assert graph_tree, "agentic_context_root must still materialize the reference mount"
@@ -239,13 +248,42 @@ def test_agents_md_without_assistant_target_never_leaks_org_routing():
         assert "org-marketing" not in o.content
         assert "runs under the `marketing` org" not in o.content
 
-    hermes_outs = planner.plan_machine(reg, "example-linux")
-    projects_agents = next(o for o in hermes_outs
+    agent_outs = planner.plan_machine(reg, "example-linux")
+    projects_agents = next(o for o in agent_outs
                            if o.deploy_path.endswith("Projects/AGENTS.md"))
     assert "org-marketing" in projects_agents.content        # org-domain table present
-    example_agents = next(o for o in hermes_outs
+    example_agents = next(o for o in agent_outs
                           if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
     assert "runs under the `marketing` org" in example_agents.content
+
+def test_coverage_line_renders_without_an_assistant_target():
+    """The never-gated decision, asserted at the PLANNER level rather than the renderer.
+
+    `_effort_coverage_line` takes no `org_routing` argument, so graph-level tests can only
+    show that the renderer never gates it. This asserts the property that actually matters:
+    on a real `claude-code + agents-md` machine with NO mitos-agent target — the shape
+    example-windows.yaml ships — the coverage line still reaches the deployed tree while the
+    org routing line beside it stays suppressed. The two lines sit under the same heading and
+    are one edit away from being gated together; that edit is what this test exists to catch.
+
+    Coverage names no skill to load, so it is descriptive metadata a coding harness benefits
+    from reading. Org routing issues an instruction ("load the `org-marketing` skill") that is
+    false on a machine where that skill was never deployed."""
+    from dataclasses import replace
+    rig = _full_windows_rig()          # agents-md + claude-code, no mitos-agent
+    pg = rig.graphs["example-project"]
+    pg.efforts = [replace(e, requirements_coverage=("performance", "security"))
+                  if e.id == "launch-prep" else e for e in pg.efforts]
+
+    outs = planner.plan_machine(rig, "example-windows")
+    # The RENDERED line, not the phrase: the builder context (registry/context/projects/mitos.md)
+    # documents this feature in prose and would otherwise match.
+    line = "_Requirements coverage: performance, security._"      # canonical order preserved
+    rendered = [o for o in outs if line in o.content]
+    assert rendered, "the coverage line must survive on a machine with no assistant target"
+    for o in rendered:
+        assert "runs under the `marketing` org" not in o.content   # ...while org routing stays gated
+
 
 def test_agentic_tree_valid():
     import copy
@@ -322,6 +360,135 @@ def test_repo_branches_threads_into_clonespec():
     rig.projects["mitos"].pop("repo_branches")
     spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
     assert spec.branch == ""
+
+def test_repo_ssh_keys_validates_against_checkout_basenames():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["repo"] = "git@github.com:example/thing.git"
+    # a key keyed by a basename that isn't one of the project's repos → loud error
+    rig.projects["example-project"]["repo_ssh_keys"] = {"nope": "id_github_thing"}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown repo_ssh_keys key")
+    except RegistryError as e:
+        assert "does not match any 'repo' checkout basename" in str(e)
+    # a valid basename + a non-empty key name validates cleanly
+    rig.projects["example-project"]["repo_ssh_keys"] = {"thing": "id_github_thing"}
+    _validate(rig)
+    # an empty key value is rejected
+    rig.projects["example-project"]["repo_ssh_keys"] = {"thing": ""}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty ssh key")
+    except RegistryError as e:
+        assert "must be a non-empty string" in str(e)
+
+def test_repo_ssh_keys_threads_into_clonespec():
+    import copy
+    from agentic.planner import plan_clones
+    rig = copy.deepcopy(reg)
+    rig.projects["mitos"]["repo_ssh_keys"] = {"mitos": "id_github_mitos"}
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.ssh_key == "id_github_mitos"
+    # a project without a repo_ssh_keys entry carries an empty key (ambient default identity)
+    rig.projects["mitos"].pop("repo_ssh_keys")
+    spec = next(c for c in plan_clones(rig, "example-linux") if c.slug == "mitos")
+    assert spec.ssh_key == ""
+
+def test_git_clone_pins_core_ssh_command_for_the_chosen_key():
+    """`_git_clone` passes `-c core.sshCommand=...` on the clone itself (so the network call
+    authenticates with the right key) and persists it on the checkout afterwards (so later
+    pulls, including a bare cron `git pull`, keep using it without mitos re-stating it)."""
+    import tempfile
+    from agentic import commands
+    git_clone = commands._real_git_clone
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        return 0, "", ""
+
+    tmp = Path(tempfile.mkdtemp(prefix="ae-sshkey-"))
+    dest = tmp / "y"
+    # a real file so the ssh-key-exists preflight check passes and the clone actually proceeds
+    key_file = tmp / "id_github_y"
+    key_file.write_text("fake key", encoding="utf-8")
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        rc, err = git_clone("git@github.com:x/y.git", dest, ssh_key=str(key_file))
+        assert rc == 0 and err == ""
+        clone_call = calls[0]
+        assert clone_call[0] == "-c" and "core.sshCommand=" in clone_call[1]
+        assert key_file.as_posix() in clone_call[1]
+        assert "clone" in clone_call
+        # persisted onto the checkout for future pulls
+        config_call = calls[-1]
+        assert config_call[:2] == ["config", "core.sshCommand"]
+    finally:
+        commands._git = orig
+
+def test_git_clone_reports_missing_key_file_without_touching_the_network():
+    """A `repo_ssh_keys:` entry naming a file this machine doesn't have fails fast with a
+    named path — never git's cryptic 'Permission denied (publickey)' / '...and the repository
+    exists.' after a real network round-trip."""
+    import tempfile
+    from agentic import commands
+    git_clone = commands._real_git_clone
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        return 0, "", ""
+
+    dest = Path(tempfile.mkdtemp(prefix="ae-sshkey-")) / "y"
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        rc, err = git_clone("git@github.com:x/y.git", dest,
+                            ssh_key="definitely-not-a-real-key-9d3f1a")
+        assert rc != 0
+        assert "ssh key not found" in err and ".ssh" in err
+        assert calls == []   # no git invocation at all — failed before touching the network
+    finally:
+        commands._git = orig
+
+def test_git_pull_reconciles_ssh_key_before_fetching():
+    """`_git_pull` reconciles the checkout's `core.sshCommand` with `repo_ssh_keys:` before any
+    fetch, so a key changed (or removed) in the manifest takes effect on the very next deploy."""
+    import tempfile
+    from agentic import commands
+    git_pull = commands._real_git_pull
+    calls: list[list[str]] = []
+
+    def fake_git(args, cwd=None, timeout=600):
+        calls.append(args)
+        if args[:1] == ["status"]:
+            return 0, "", ""
+        if args[:1] == ["symbolic-ref"]:
+            return 0, "main", ""
+        if args[:1] == ["rev-parse"]:
+            return 0, "origin/main", ""
+        return 0, "", ""
+
+    # a real file so the ssh-key-exists check passes and the pull actually proceeds
+    key_file = Path(tempfile.mkdtemp(prefix="ae-sshkey-")) / "id_github_mitos"
+    key_file.write_text("fake key", encoding="utf-8")
+    orig = commands._git
+    try:
+        commands._git = fake_git
+        outcome, detail = git_pull(Path("x"), "main", str(key_file))
+        assert outcome == "pulled"
+        assert calls[0][:2] == ["config", "core.sshCommand"]
+        assert key_file.as_posix() in calls[0][2]
+        # no key configured → the checkout's core.sshCommand is cleared, not left stale
+        commands._git = fake_git
+        calls.clear()
+        git_pull(Path("x"), "main", "")
+        assert calls[0] == ["config", "--unset", "core.sshCommand"]
+    finally:
+        commands._git = orig
 
 def test_git_pull_is_fast_forward_only_and_nondestructive():
     """_git_pull refuses to touch a dirty or diverged checkout — it only ever fast-forwards
@@ -462,7 +629,7 @@ def test_init_scaffolds_overlay_and_org_template_reaches_soul():
     assert "MitosAgent" in soul.content, "{{project_root}} must expand in a seeded SOUL"
     assert "{{project_root}}" not in soul.content
     assert "{{skills_root}}" not in soul.content
-    # domain org skills ship in core and are available on all hermes machines
+    # domain org skills ship in core and are available on all mitos-agent machines
     assert "org-software" in reg2.skills
     assert "org-design" in reg2.skills
     assert "org-marketing" in reg2.skills
@@ -484,8 +651,8 @@ def test_init_scaffolds_overlay_and_org_template_reaches_soul():
 
 def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
     """scaffold_machine writes a registry/local/machines/<name>.yaml whose `targets:` list
-    matches the chosen use case, and — since org skills target hermes only and the
-    org-domain table/routing lines render exclusively on the agents-md/hermes tree — only
+    matches the chosen use case, and — since org skills target mitos-agent only and the
+    org-domain table/routing lines render exclusively on the agents-md/mitos-agent tree — only
     the 'mitos-agent' use case's plan carries orgs or an agents-md tree. 'workstation' and
     'coding' must never deploy either, matching what a claude-code/antigravity-only user
     expects (the bug this wizard exists to prevent)."""
@@ -579,7 +746,7 @@ def test_scaffold_machine_rejects_illegal_target_sets():
             pass
         assert not (tmp / "registry/local/machines/box.yaml").exists(), \
             f"{kwargs}: refused, but still wrote a profile"
-    # hermes pulls agents-md in with it — the tree is the point of that target
+    # mitos-agent pulls agents-md in with it — the tree is the point of that target
     assert initmod.resolve_targets(targets=["mitos-agent"]) == ["mitos-agent", "agents-md"]
 
 def test_scaffold_machine_document_store_is_asked_not_assumed():
@@ -1099,6 +1266,130 @@ def test_effort_org_domain_not_declared_by_any_skill_is_rejected():
     except RegistryError as e:
         assert "not-a-real-domain" in str(e)
 
+def test_unknown_delivers_value_on_a_skill_is_rejected():
+    """A typo here is worse than a missing skill: the skill deploys, looks correct, and
+    satisfies nothing. It fails at load like every other unknown vocabulary value."""
+    import copy
+    from agentic.loader import RegistryError, Skill, _validate
+    rig = copy.deepcopy(reg)
+    rig.skills["bogus-deliverer"] = Skill(
+        name="bogus-deliverer", rel="skills/bogus-deliverer/SKILL.md",
+        frontmatter={"name": "bogus-deliverer", "targets": ["mitos-agent"],
+                     "delivers": "deployment-book"}, body="body")
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown delivers value")
+    except RegistryError as e:
+        assert "deployment-book" in str(e)
+        assert "deploy-book" in str(e)        # the valid set is named
+
+
+# ── default_deliverables: the chain a NEW effort inherits ────────────────────
+def _rig_with_defaults(user_val=..., project_val=...):
+    """A registry copy with default_deliverables set at either level. `...` means the key is
+    ABSENT, which is deliberately distinct from an empty list."""
+    import copy
+    rig = copy.deepcopy(reg)
+    if user_val is not ...:
+        rig.user = {**rig.user, "default_deliverables": user_val}
+    else:
+        rig.user = {k: v for k, v in rig.user.items() if k != "default_deliverables"}
+    if project_val is not ...:
+        rig.projects["example-project"] = {**rig.projects["example-project"],
+                                           "default_deliverables": project_val}
+    return rig
+
+
+def test_default_deliverables_project_wins_over_registry_wide():
+    """The chain's whole point: a project that names its own set does not inherit."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"],
+                             project_val=["changelog", "runbook"])
+    assert resolve_default_deliverables(rig, "example-project") == ("changelog", "runbook")
+
+
+def test_default_deliverables_falls_back_to_registry_wide():
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"])
+    assert resolve_default_deliverables(rig, "example-project") == ("documentation", "tests")
+
+
+def test_default_deliverables_empty_list_inherits_nothing():
+    """`default_deliverables: []` is a real answer — this project wants no defaults — and it
+    must NOT be confused with omitting the key, which inherits the registry-wide set. A falsy
+    test would collapse the two; the resolver checks `is None`."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["documentation", "tests"], project_val=[])
+    assert resolve_default_deliverables(rig, "example-project") == ()
+
+
+def test_default_deliverables_resolve_in_canonical_order():
+    """The console renders what it gets, so the resolver must hand back the same ordering the
+    graph would serialize — not the order someone happened to type in a YAML file."""
+    from agentic.loader import resolve_default_deliverables
+    rig = _rig_with_defaults(user_val=["requirements-receipt", "tests", "documentation"])
+    assert resolve_default_deliverables(rig, "example-project") == \
+        ("documentation", "tests", "requirements-receipt")
+
+
+def test_unknown_default_deliverable_is_rejected_at_both_levels():
+    """A default is COPIED onto real efforts, so a typo here mints invalid efforts one at a
+    time from a file nobody looks at twice. Validate where it is authored, not where it lands."""
+    from agentic.loader import RegistryError, _validate
+    for kwargs, where in ((dict(user_val=["not-a-deliverable"]), "registry/user.yaml"),
+                          (dict(project_val=["not-a-deliverable"]), "example-project")):
+        try:
+            _validate(_rig_with_defaults(**kwargs))
+            raise AssertionError(f"expected RegistryError for {where}")
+        except RegistryError as e:
+            assert "not-a-deliverable" in str(e)
+            assert where in str(e)             # the file that needs editing is named
+            assert "documentation" in str(e)   # ...and the valid set
+
+
+def test_default_deliverables_must_be_a_list_of_strings():
+    from agentic.loader import RegistryError, _validate
+    for bad in ("documentation", [1, 2]):
+        try:
+            _validate(_rig_with_defaults(user_val=bad))
+            raise AssertionError(f"expected RegistryError for {bad!r}")
+        except RegistryError as e:
+            assert "default_deliverables" in str(e)
+
+
+def test_effort_unknown_deliverable_is_rejected():
+    """A deliverable outside graph.KNOWN_DELIVERABLES fails _validate loudly, naming the value and
+    the valid set — the same loudness as the org-domain check directly above it."""
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import RegistryError, _validate
+    from agentic import graph
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("documentation", "not-a-deliverable"))] \
+        + list(pg.efforts[1:])
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown deliverable")
+    except RegistryError as e:
+        assert "not-a-deliverable" in str(e)
+        assert "documentation" in str(e)      # the valid set is named
+
+
+def test_effort_valid_deliverables_pass_validation():
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("documentation", "tests"))] \
+        + list(pg.efforts[1:])
+    _validate(rig)  # must not raise
+
+
 def test_manifest_org_field_is_rejected():
     """org: on a project manifest is a category error now — org domains live on graph
     efforts, so a leftover field fails validation with a pointer to the new home."""
@@ -1224,8 +1515,8 @@ def test_validate_skill_scope_accepts_global_and_project_on_capable_targets():
     assert validate_skill_scope(
         "x", {"targets": ["claude-code", "antigravity"], "scope": "project"}) is None
 
-def test_validate_skill_scope_project_scope_ignores_hermes_and_claude_app_pairing():
-    """A skill may target hermes/claude-app alongside a project-scope-capable target —
+def test_validate_skill_scope_project_scope_ignores_mitos_agent_and_claude_app_pairing():
+    """A skill may target mitos-agent/claude-app alongside a project-scope-capable target —
     neither has a project-scoped surface, so both just ignore `scope` (always ship
     globally) rather than being flagged incompatible."""
     from agentic.loader import validate_skill_scope
@@ -1264,10 +1555,10 @@ def test_project_cannot_bind_skill_with_no_project_scope_capable_target():
     import copy
     from agentic.loader import RegistryError, Skill, _validate
     rig = copy.deepcopy(reg)
-    rig.skills["hermes-only"] = Skill(
-        name="hermes-only", rel="local/skills/hermes-only/SKILL.md",
+    rig.skills["agent-only"] = Skill(
+        name="agent-only", rel="local/skills/agent-only/SKILL.md",
         frontmatter={"targets": ["mitos-agent"]}, body="body")
-    rig.projects["example-project"]["skills"] = ["hermes-only"]
+    rig.projects["example-project"]["skills"] = ["agent-only"]
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError")
@@ -1295,7 +1586,7 @@ def test_skill_resources_loaded_from_examples_and_scripts():
 
 def test_skill_resources_loaded_from_all_harness_convention_dirs():
     """_SKILL_RESOURCE_DIRS is the union of the harnesses' documented conventions:
-    examples/scripts (Claude Code, Antigravity), references/templates (Hermes),
+    examples/scripts (Claude Code, Antigravity), references/templates (Mitos Agent),
     resources (Antigravity). A file under any of them loads; anything else is ignored."""
     treg, tmp = _temp_registry()
     skill_dir = tmp / "registry" / "skills" / "conv-skill"
@@ -1385,3 +1676,92 @@ def test_project_description_must_be_a_nonempty_string():
         raise AssertionError("expected RegistryError for non-string description")
     except RegistryError as e:
         assert "'description' must be a non-empty string" in str(e)
+
+
+def test_effort_unknown_coverage_is_rejected():
+    """A coverage dimension outside graph.KNOWN_COVERAGE fails _validate loudly, naming the value
+    and the valid set — the same loudness as the deliverable check directly above it."""
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic.loader import RegistryError, _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0],
+                           requirements_coverage=("security", "not-a-dimension"))] \
+        + list(pg.efforts[1:])
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for unknown coverage dimension")
+    except RegistryError as e:
+        assert "not-a-dimension" in str(e)
+        assert "performance" in str(e)        # the valid set is named
+
+
+def test_effort_valid_coverage_passes_validation():
+    """The other half of the check above: every name in graph.KNOWN_COVERAGE passes. Without this
+    a validator that rejected EVERYTHING would still satisfy the rejection test."""
+    import copy
+    from dataclasses import replace as _replace
+
+    from agentic import graph
+    from agentic.loader import _validate
+    rig = copy.deepcopy(reg)
+    pg = rig.graphs["example-project"]
+    assert pg.efforts, "example graph must carry an effort for this test"
+    pg.efforts = [_replace(pg.efforts[0],
+                           requirements_coverage=tuple(graph.KNOWN_COVERAGE))]         + list(pg.efforts[1:])
+    _validate(rig)          # must not raise
+
+
+def test_project_aliases_validation():
+    """Project aliases must be a list of non-empty strings, free of ']' and '_'."""
+    import copy
+    from agentic.loader import RegistryError, _validate
+    rig = copy.deepcopy(reg)
+    slug = "example-project"
+
+    # Non-list fails
+    rig.projects[slug]["aliases"] = "not a list"
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for non-list aliases")
+    except RegistryError as e:
+        assert "'aliases' must be a list of strings" in str(e)
+
+    # Non-string item fails
+    rig.projects[slug]["aliases"] = [123]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for non-string alias")
+    except RegistryError as e:
+        assert "'aliases' must be a list of strings" in str(e)
+
+    # Empty string alias fails
+    rig.projects[slug]["aliases"] = [""]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for empty alias")
+    except RegistryError as e:
+        assert "alias in 'aliases' cannot be empty" in str(e)
+
+    # Alias containing ']' fails
+    rig.projects[slug]["aliases"] = ["bad]alias"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for alias with ']'")
+    except RegistryError as e:
+        assert "contains invalid character" in str(e)
+
+    # Alias containing '_' fails
+    rig.projects[slug]["aliases"] = ["bad_alias"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for alias with '_'")
+    except RegistryError as e:
+        assert "contains invalid character" in str(e)
+
+    # Valid aliases list passes
+    rig.projects[slug]["aliases"] = ["sensual predictions", "apdicts"]
+    _validate(rig)

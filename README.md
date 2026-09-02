@@ -2,13 +2,16 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-Mitos is a **registry and compiler** for your personal agent organization. You author your identity, skills, project context, and knowledge graph, in plain Markdown and YAML. Mitos compiles that single source of truth into the native format of every AI tool you use — Claude Code, a Mitos Agent, Antigravity, claude.ai, or anything that reads `AGENTS.md` — and deploys it across all your machines. When a tool edits its own copy, Mitos carries that change back to you as a reviewable proposal. Nothing is lost; nothing is committed without your say-so.
+### ⚡ Mitos in 60 Seconds
+* **Author Once:** Define your identity, custom skills, prompt playbooks, and project context in plain Markdown and YAML under `registry/`.
+* **Deploy Everywhere:** Mitos compiles that **single source of truth** into the native formats of Claude Code, Antigravity (IDE & CLI), Claude Desktop, and Mitos Agent across your machines.
+* **Two-Way Sync:** When you or an AI tool refine a deployed skill or rule in your editor, Mitos detects the change, captures it into an approval queue (`inbox/`), and folds it back into your registry without losing work.
 
-The registry is the **moat**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
+The registry is your **single source of truth**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
 ```mermaid
 flowchart TB
-    subgraph MOAT["🧵 Your knowledge — the moat (registry/)"]
+    subgraph MOAT["🧵 Your knowledge — single source of truth (registry/)"]
         direction LR
         SKILLS["Skills"]
         AGENTS["Subagents"]
@@ -63,7 +66,10 @@ Keep your private machine profiles, identity, and projects under `registry/local
 
 Get started in 5 steps. Mitos requires **Python 3.11+** and **Git**. 
 
-All commands below run the project's virtualenv interpreter directly to avoid system conflicts.
+Steps 1-2 run the project's virtualenv interpreter directly to avoid system conflicts. From
+step 3 on, the repo-root `mitos` shim does that for you: it finds `build/.venv`'s interpreter
+and routes the verb to the right script, so nothing needs activating and there is one command
+to remember.
 
 ### Linux / macOS
 
@@ -77,15 +83,15 @@ git clone https://github.com/Peccia/mitos.git && cd mitos
 python3 -m venv build/.venv
 build/.venv/bin/python -m pip install -r build/requirements.txt
 
-# Step 3: Initialize your private overlay (scaffold fresh or pull from a hub)
-build/.venv/bin/python build/mitos.py init
+# Step 3: Initialize your private overlay and machine profile (e.g. named 'my-machine')
+./mitos init
 
 # Step 4: Compile and preview your first dry-run deployment (writes nothing)
-build/.venv/bin/python build/compile.py compile
-build/.venv/bin/python build/compile.py deploy --machine example-linux --dry-run
+./mitos compile
+./mitos deploy --machine my-machine --dry-run
 
 # Step 5: Launch the Operator Console to review and manage your registry
-build/.venv/bin/python build/compile.py review
+./mitos review
 ```
 
 ### Windows (PowerShell)
@@ -100,21 +106,23 @@ git clone https://github.com/Peccia/mitos.git; cd mitos
 python -m venv build/.venv
 build/.venv/Scripts/python.exe -m pip install -r build/requirements.txt
 
-# Step 3: Initialize your private overlay (scaffold fresh or pull from a hub)
-build/.venv/Scripts/python.exe build/mitos.py init
+# Step 3: Initialize your private overlay and machine profile (e.g. named 'my-machine')
+.\mitos init
 
 # Step 4: Compile and preview your first dry-run deployment (writes nothing)
-build/.venv/Scripts/python.exe build/compile.py compile
-build/.venv/Scripts/python.exe build/compile.py deploy --machine example-windows --dry-run
+.\mitos compile
+.\mitos deploy --machine my-machine --dry-run
 
 # Step 5: Launch the Operator Console to review and manage your registry
-build/.venv/Scripts/python.exe build/compile.py review
+.\mitos review
 ```
 
 > [!NOTE]
 > The compiler validates machine profiles against your host OS before writing files. Rehearse any cross-machine deployments safely using the `--root <dir>` flag to write into a sandbox directory.
 >
-> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. In later commands, `python build/...` is used as shorthand for the virtual environment interpreter (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`). Ensure you use the venv path when running them.
+> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. The repo-root shims — `mitos` (Linux/macOS) and `mitos.cmd` (Windows) — are the supported way to call it: they pick the venv interpreter and route the verb to `build/mitos.py` (`init`, `project`, `connect`, `connectors`, `sync`) or `build/compile.py` (everything else). Later commands written as `python build/compile.py <verb>` are the same thing as `./mitos <verb>`; if you invoke the scripts directly, use the venv path (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`).
+>
+> To type a bare `mitos` from anywhere, add the repo root to your `PATH`, or on Windows add `Set-Alias mitos <repo>\mitos.cmd` to your PowerShell `$PROFILE`.
 
 > [!TIP]
 > **Staying up to date.** When you run `mitos.py init` or `mitos.py sync`, Mitos checks whether
@@ -166,9 +174,13 @@ names what it withheld and why. Set up the server first
 profile; both the wiring and the skill appear on the next deploy. See
 [connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
 
-**Your first deploy to a coding machine installs no skills, and that's expected.** Every
-skill that ships in core targets the agentic assistant, except `gws` — which stays off
-until you declare its connection. The skills lane is for *your* content: author one at
+**Your first deploy to a coding machine installs the seven deliverable skills.** Each one
+answers a term in the closed deliverables vocabulary an effort declares — `documentation`,
+`tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt` —
+and each targets every harness, so a workstation gets all seven. The remaining core skills
+are narrower: the three org skills need `mitos-agent` literally in `targets:` (above), and
+`gws` stays off until you declare its connection. Beyond those, the skills lane is for
+*your* content: author one at
 `registry/local/skills/<name>/SKILL.md` in your gitignored overlay, or from the console's
 **Skills & Orgs** tab (`python build/compile.py review` → **+ New skill**), which lands it
 in the same place through the inbox. Set its `targets:` to the harnesses you picked, and
@@ -179,36 +191,32 @@ it). See [How skills reach a tool](#how-skills-reach-a-tool) and
 
 ## Make it yours
 
-`mitos init` scaffolds your overlay's identity and org, but your **machine profiles are yours to
-add** — the shipped `machines/example-*.yaml` are templates (`example: true`), not your fleet. To
-go live, copy a template into your overlay, rename it, and customize it:
+`mitos.py init` automatically creates your overlay identity and your personal machine profile at
+`registry/local/machines/<name>.yaml`.
 
-1. Copy a matching template into `registry/local/machines/` and give it a real name, e.g.
-   `registry/local/machines/my-pc.yaml`.
-2. Edit it: set `name: my-pc`, **remove the `example: true` line**, point `paths:` at your real
-   directories, and add a `sync:` block if you sync across machines (see
-   [`docs/lan-sync.md`](docs/lan-sync.md)). For what every field and path key means — machine
-   profiles, project manifests, and server definitions, field by field — see the
-   **[overlay configuration reference](registry/README.md)**.
-3. Compile and deploy **your** machine (interpreter path per the Quick start blocks above):
+To customize your machine paths or add new machines to your fleet:
+
+1. Open `registry/local/machines/<name>.yaml` and point `paths:` at your real workspace directories.
+2. If you sync across multiple machines, add a `sync:` block (see [`docs/lan-sync.md`](docs/lan-sync.md)). For field-by-field explanations of machine profiles, project manifests, and server definitions, see the **[overlay configuration reference](registry/README.md)**.
+3. Compile and deploy your machine:
 
    ```bash
-   build/.venv/bin/python build/compile.py compile
-   build/.venv/bin/python build/compile.py deploy --machine my-pc
+   ./mitos compile
+   ./mitos deploy --machine <name>
    ```
 
-Once your overlay defines a real machine, `compile` automatically **skips the `example-*`
-templates** (and a real `deploy` of a template is refused) — so you only ever build and deploy
-your own machines, never the shipped examples.
+Once your overlay defines a real machine profile, `compile` automatically **skips the `example-*`
+templates** (and a real `deploy` of an example template is refused) — so you only ever build and deploy
+your own configured machines.
 
-Similarly, the shipped `example-project` is a sample project manifest (`example: true`). It renders on a fresh clone for the Quick Start, but automatically **steps aside** as soon as you define your own local overlay projects under `registry/local/projects/`. This prevents the sample project from polluting your configured fleet's rosters, graphs, and assistant context trees.
+Similarly, the shipped `example-project` is a sample project manifest (`example: true`). It renders on a fresh clone for the Quick Start, but automatically **steps aside** as soon as you define your own local overlay projects under `registry/local/projects/`. This prevents sample projects from polluting your fleet's rosters, graphs, and assistant context trees.
 
 
 ## Core concepts
 
 | Term | What it is |
 |---|---|
-| **registry/** | The moat. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
+| **registry/** | Your single source of truth. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
 | **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
 | **Skill resources** | A skill's supporting files — `registry/skills/<name>/examples/` (expected-output samples) and `.../scripts/` (executables Claude can run) — auto-discovered, deployed alongside `SKILL.md`, and bundled into claude.ai zips. Each file adopts/harvests back to its own path, never `SKILL.md`. |
 | **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. The Skills & Orgs tab's `+ Extend department` button scaffolds one. |
@@ -216,9 +224,9 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **connections/** | MCP server definitions + env templates. Wiring, not content — it deploys on its own `--lane connections`. |
 | **target** | An adapter (`targets/<tool>.yaml`): how one tool consumes the registry — what to emit and where. |
 | **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. Roles are exclusive: `mitos-agent` (the agentic harness) cannot share a machine with a coding harness (`antigravity`/`claude-app`/`claude-code`) — an agentic machine is dedicated to that purpose. Rejected at compile time. `agents-md` itself is not a harness (it's the context format below), so it's never part of this exclusion. |
-| **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy refuses), `harvest` (captured as a proposal), or `generated` (regenerated each deploy). Full mechanics: [managing-state.md](docs/managing-state.md). |
-| **inbox/** | The intake queue. Everything a tool proposes lands here as a candidate; **only you** merge it — usually via the operator console. |
-| **Operating mount vs. reference mount** | Two agents-md/agentic-graph lanes with opposite edit semantics, easy to conflate because both render a `Projects/<name>/` doc tree. An **operating mount** (`assistant_root`, or a project's `agentic_tree:` below) is the full prose tree — Navigation/Workflows/Skills, roster, dynamic branches — `drift_policy: protect`: edit it, and the edit becomes drift that reconciles back into the registry via `adopt`. A **reference mount** (`agentic_context_root` below) is a roster + per-project doc index generated purely from `registry/graph/`, `drift_policy: generated`: edits are silently overwritten on the next deploy — never an editing surface. Rule of thumb: never hand-edit a reference mount. |
+| **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy blocks to prevent overwriting), `harvest` (captured into `inbox/` as a review proposal), or `generated` (regenerated each deploy from the graph). Full mechanics: [managing-state.md](docs/managing-state.md). |
+| **inbox/** | The human review queue. Proposals from self-improving tools land here as candidates; **only you** approve and merge them via the operator console. |
+| **Operating mount vs. reference mount** | Two context mounting options with distinct edit rules. An **operating tree** (`assistant_root`, or a project's `agentic_tree:` below) is the full interactive workspace (rules, skills, routing) with `drift_policy: protect` where local edits reconcile back via `adopt`. A **reference index** (`agentic_context_root` below) is a lightweight, read-only project and document index generated purely from `registry/graph/` (`drift_policy: generated`) where edits are overwritten on deploy. |
 | **assistant_root** | *(operating mount, machine-wide)* The folder (default `~/MitosAgent`) where your assistant's compiled context lives — the proven agentic combo. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. Only valid on an agentic (`mitos-agent`) machine. |
 | **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts the SAME operating tree `assistant_root` renders (identical shape: Navigation/Workflows/Skills, full roster, dynamic branches), but rooted at `<local_path>/<subdir>/` inside that one project's own checkout instead of a whole machine. The workstation-side counterpart to `assistant_root`: lets a coding harness like Antigravity operate against a single project the way Mitos Agent operates against a dedicated machine. Workstation-only — a no-op on an agentic machine, which already has the tree at its machine root. |
 | **Dynamic branch** | A custom folder under an operating mount's root (e.g. `family/`) that you extend without forking `targets/agents-md.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. Applies identically to a machine mount or a project's `agentic_tree` mount. |
@@ -250,9 +258,46 @@ surface you want) in its own `targets:`. The manifest decides *which projects*; 
 lives globally on Mitos Agent and never appears in a project manifest — binding it there is a category
 error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
+**claude.ai is a menu, not a deploy target.** `deploy` stages one zip per compatible skill and a
+human uploads the ones they want, so it takes no `include:`/`exclude:` curation (a curation block
+for it on a machine profile is refused) and never reports a `scope: project` skill as leaking —
+a staged zip is inert until someone chooses it. Its `requires_server:` gate still applies.
+
 Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
 `skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
 [overlay configuration reference](registry/README.md).
+
+## The forward contract, and what comes back
+
+A tool that knows your context can still hand back a pile nobody can check. So an **effort** in the
+knowledge graph declares two contracts, both from closed vocabularies, both compiled into every
+harness's context:
+
+- **Expected deliverables** — the *forward* contract, what an implementation must produce:
+  `documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`,
+  `requirements-receipt`.
+- **Requirements coverage** — the *interview* contract, what a requirements-gathering session must
+  not leave unasked: `performance`, `security`, `failure-recovery`, `data-retention`,
+  `access-control`, `scale`.
+
+Mitos ships **one skill per deliverable**, seven in all, each declaring `delivers: <term>` and each
+deployed to every harness. That pairing is what makes the contract checkable: `deploy --dry-run`
+warns when an effort declares a deliverable no skill on that machine knows how to produce. A new
+effort starts with the deliverables its project declares, falling back to `default_deliverables` in
+`registry/user.yaml` — see [the overlay configuration reference](registry/README.md#default-deliverables).
+
+**This is the half most setups are missing, and it works by instruction, not extraction.** The
+usual approach scrapes a coding harness's transcript afterward and reconstructs what happened with
+a model, so the same run reads differently every time. Mitos already deploys skills *into* those
+harnesses, so the output is specified before the work starts. Each skill writes its record to
+`{{returns_root}}/<run>/` — a real directory resolved per machine — and
+[Mitos Agent](https://github.com/Peccia/mitos-agent) reads that folder back with `mitos-agent
+returns`, joined against the requirements it handed over.
+
+Two readers of one folder, neither writing the other's store: nothing in Mitos Agent goes near
+`registry/`, and nothing here writes its requirements record. Details in
+[authoring capabilities](docs/authoring-capabilities.md#deliverable-producing-skills-delivers) and
+[the operator console](docs/operator-console.md).
 
 ## Your first loop
 
@@ -264,11 +309,12 @@ with the `claude-code` target (see [Make it yours](#make-it-yours)).
 frontmatter names the tools it's for:
 
 ```yaml
-# registry/local/skills/changelog/SKILL.md
+# registry/local/skills/release-notes/SKILL.md
 ---
-name: changelog
-description: "Draft a release changelog from the git log"
+name: release-notes
+description: "Draft release notes from the git log"
 targets: [claude-code, mitos-agent]
+scope: project               # only the projects that bind it (global is the default)
 ---
 # ...your instructions...
 ```
@@ -279,7 +325,7 @@ checkout receives it (compatibility + binding — see
 
 ```yaml
 # registry/local/projects/acme.yaml
-skills: [changelog]
+skills: [release-notes]
 ```
 
 **3. Compile and preview.** Schema validation is the first test; `--dry-run` prints the plan
@@ -290,7 +336,7 @@ python build/compile.py compile
 python build/compile.py deploy --machine my-pc --dry-run
 ```
 
-**4. Deploy for real.** The skill lands at `<acme-checkout>/.claude/skills/changelog/SKILL.md`,
+**4. Deploy for real.** The skill lands at `<acme-checkout>/.claude/skills/release-notes/SKILL.md`,
 and Claude Code can use it:
 
 ```bash
@@ -307,7 +353,7 @@ python build/compile.py diff --machine my-pc
 Because the skill's drift policy is `harvest`, the next `deploy` **captures** that edit into
 `inbox/` as a proposal instead of overwriting it.
 
-**6. Fold it back into the moat.** Accept the proposal in the console (or pull one file straight
+**6. Fold it back into your single source of truth.** Accept the proposal in the console (or pull one file straight
 back with `adopt`):
 
 ```bash
@@ -315,10 +361,10 @@ python build/compile.py review     # accept the candidate in the Inbox tab
 # or: python build/compile.py adopt <path-to-the-edited-file>
 ```
 
-The edit flows back into `registry/local/skills/changelog/SKILL.md` — your authored source now
+The edit flows back into `registry/local/skills/release-notes/SKILL.md` — your authored source now
 reflects what the tool learned, and the next deploy carries it to **every** machine. Nothing was
 committed without you; the registry stayed the single source of truth. Every drift, conflict, and
-orphan case is mapped in [Managing your moat's state](docs/managing-state.md).
+orphan case is mapped in [Managing state & drift](docs/managing-state.md).
 
 ## The knowledge graph + connectors
 
@@ -431,7 +477,7 @@ shows everything, so the quick-start browse still works.
 ## Commands
 
 Deploy, drift detection, and how you reconcile every state are the heart of Mitos — the full,
-scenario-by-scenario guide is **[Managing your moat's state](docs/managing-state.md)**. The quick
+scenario-by-scenario guide is **[Managing State & Drift](docs/managing-state.md)**. The quick
 reference:
 
 | Command | What it does |
@@ -459,7 +505,7 @@ Explore our comprehensive guides to mastering Mitos:
 ## Project layout
 
 ```
-registry/        # the moat — your authored content (+ local/ overlay, gitignored)
+registry/        # single source of truth — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
 targets/         # one adapter per tool (claude-code, mitos-agent, antigravity, agents-md, claude-app)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)

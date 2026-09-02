@@ -58,6 +58,12 @@ The key is resolved to an **absolute path**: a bare name like `id_github` is loo
 `-i` would otherwise point at the wrong place.) If the file isn't there, `init`/`clone` stop with a
 clear "ssh key not found at …" instead of a cryptic `Permission denied (publickey)`.
 
+This key resolution (`agentic.sshkey`) is shared with, but distinct from, a *project's* `repo_ssh_keys:`
+(see [`../docs/targets/mitos-agent.md`](targets/mitos-agent.md)): `sync.git.ssh_key` here authenticates
+the **overlay repo** (`registry/local/`) against its hub; `repo_ssh_keys:` authenticates a **project's
+own cloned repos** against their own remotes. A box can need both at once — one key for the overlay
+hub, a different key per project repo.
+
 ## Setup — `mitos sync` does it for you
 
 **On your first machine** (`init` makes the overlay a repo, commits it, installs the auto-deploy

@@ -1,4 +1,4 @@
-"""Claude-code, Antigravity, Hermes, skill, prompt, and git-sync tests."""
+"""Claude-code, Antigravity, Mitos Agent, skill, prompt, and git-sync tests."""
 from __future__ import annotations
 
 import sys
@@ -19,10 +19,10 @@ def _lint(path, content):
 
 
 def test_lint_node_markdown_accepts_conformant_node():
-    body = ("# Ascenzio Predictions\n\nA project.\n\n"
+    body = ("# Sample Analytics\n\nA project.\n\n"
             "## Navigation\n- repos\n\n## Tools\n- gws\n\n## Skills\n- a skill\n\n"
             "## Google Workspace suite (`gws`)\n\n- paths\n\n### Launch\n- Doc\n")
-    assert _lint("x/Projects/Ascenzio/AGENTS.md", body) == []
+    assert _lint("x/Projects/SampleAnalytics/AGENTS.md", body) == []
 
 
 def test_lint_node_markdown_flags_double_h1():
@@ -82,7 +82,7 @@ def test_mitos_agent_mcp_config_shape():
 def test_non_assistant_machine_coproduces_agents_md():
     """Claude-code machines without agents-md emit a co-located AGENTS.md (full graph
     context + prose) and a stub CLAUDE.md at each graph project's local_path.
-    Hermes machines (with agents-md) are unaffected — the existing path applies."""
+    Mitos Agent machines (with agents-md) are unaffected — the existing path applies."""
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
@@ -90,7 +90,7 @@ def test_non_assistant_machine_coproduces_agents_md():
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove agents-md and the
-    # agentic_context_root (that's the separate Hermes tree, not needed here)
+    # agentic_context_root (that's the separate Mitos Agent tree, not needed here)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     # give apoc a local_path on example-windows so _local() resolves it
@@ -114,18 +114,18 @@ def test_non_assistant_machine_coproduces_agents_md():
     assert claude_out.content.strip() == "@AGENTS.md"
     assert not claude_out.section_bodies
 
-    # Hermes machine: co-located AGENTS.md must NOT be emitted via claude-code target
-    rig_hermes = copy.deepcopy(reg)
-    if "apoc" not in rig_hermes.projects:
-        rig_hermes.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
+    # Mitos Agent machine: co-located AGENTS.md must NOT be emitted via claude-code target
+    rig_agent = copy.deepcopy(reg)
+    if "apoc" not in rig_agent.projects:
+        rig_agent.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
-    rig_hermes.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
-    rig_hermes.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
-    rig_hermes.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
-    hermes_paths = [o.deploy_path for o in planner.plan_machine(rig_hermes, "example-windows")
+    rig_agent.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
+    rig_agent.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig_agent.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
+    agent_paths = [o.deploy_path for o in planner.plan_machine(rig_agent, "example-windows")
                     if o.target == "claude-code"]
-    assert not any("apocalyptic_adventure/AGENTS.md" in p for p in hermes_paths), \
-        "Hermes machine must not emit co-located AGENTS.md via claude-code target"
+    assert not any("apocalyptic_adventure/AGENTS.md" in p for p in agent_paths), \
+        "Mitos Agent machine must not emit co-located AGENTS.md via claude-code target"
 
 def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     """A stub_import project (mitos) on a claude-code-only machine must never emit a
@@ -148,7 +148,7 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     out = by_path[claude_path]
     assert out.content.strip() != "@AGENTS.md", \
         "must not dangle a stub @AGENTS.md when no AGENTS.md is generated"
-    assert "Builder Context" in out.content, "self-contained CLAUDE.md inlines the builder prose"
+    assert "agentic SDLC loop" in out.content, "self-contained CLAUDE.md inlines the builder prose"
     assert out.section_bodies, "an inlined multi-source CLAUDE.md records its per-section base"
 
     # Counterpart — with agents-md present, the AGENTS.md co-deploys, so the stub is valid.
@@ -161,10 +161,39 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     assert "C:/Projects/Mitos/AGENTS.md" in by_path2, \
         "agents-md must co-deploy the AGENTS.md that the stub imports"
 
+
+def test_project_node_does_not_repeat_repo_builder_context():
+    """The mitos project node and this repo's own AGENTS.md are two documents with two
+    jobs, and must not carry the same prose.
+
+    They were one partial until the node — deployed to the project FOLDER that holds the
+    checkout — repeated all 57KB of builder prose the repo artifact already carries, so a
+    session started inside the repo loaded both. The node answers "which checkout, and what
+    is this project for"; selfdoc.SOURCE answers "how do I change code in here". Pinning
+    the negative: the node must never regrow the deep sections."""
+    from agentic import selfdoc
+    node_key = "context/projects/mitos.md"
+    repo_key = selfdoc.SOURCE.relative_to(selfdoc.REPO_ROOT / "registry").as_posix()
+    assert node_key in reg.partials and repo_key in reg.partials
+    assert node_key != repo_key, "the node and the repo artifact must not share a partial"
+
+    node_body = reg.partials[node_key].body
+    repo_body = reg.partials[repo_key].body
+    # The deep builder sections belong to the repo artifact alone.
+    for section in ("## Invariants", "## To change X, edit Y", "## Verifying changes"):
+        assert section in repo_body, f"{repo_key} lost its {section!r} section"
+        assert section not in node_body, (
+            f"{node_key} regrew {section!r} — the project node must not repeat the repo's "
+            f"builder context; both load when a session starts inside the checkout")
+    assert len(node_body) < len(repo_body) / 4, (
+        "the project node has grown toward repo-artifact size again — it is orientation "
+        "plus the generated document map, not a builder manual")
+
+
 def test_builder_context_project_agents_md_includes_graph_docs():
     """A `context.builder` project (e.g. Mitos self-hosting) with a knowledge graph must
     get the same lightweight titles-index + companion AGENTS_DETAILS.md that every other
-    project in the Hermes tree gets (the context.assistant / ctx_key branch) — the
+    project in the Mitos Agent tree gets (the context.assistant / ctx_key branch) — the
     connection/document-store heading and document titles in AGENTS.md, full per-document
     detail (raw IDs) in AGENTS_DETAILS.md — not just persona/prose."""
     import copy
@@ -190,7 +219,7 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert det.drift_policy == "generated"
 
     # persona/builder prose survives, plus the connection heading + doc title (index only)
-    assert "Builder Context" in out.content
+    assert "agentic SDLC loop" in out.content
     assert "Google Workspace suite" in out.content
     assert "Design Review" in out.content
     assert "`MITOS_DOC_1`" not in out.content, "raw ID belongs in details, not the index"
@@ -259,9 +288,9 @@ def test_multi_store_machine_connections_block_emits_one_section_per_store():
     assert block.count("## Fake Store") == 1
 
 def test_project_agents_md_drops_identity_on_assistant_machines():
-    """On a machine that also deploys hermes, SOUL.md already carries the identity
+    """On a machine that also deploys mitos-agent, SOUL.md already carries the identity
     partials on every request — the project-root AGENTS.md (project_agents) must not
-    repeat them. An agents-md machine WITHOUT hermes has no SOUL.md, so it keeps the
+    repeat them. An agents-md machine WITHOUT mitos-agent has no SOUL.md, so it keeps the
     full persona header (the persona has to live somewhere)."""
     import copy
 
@@ -277,15 +306,15 @@ def test_project_agents_md_drops_identity_on_assistant_machines():
 
     agents_path = "C:/Projects/Mitos/AGENTS.md"
 
-    # hermes co-deployed → identity dropped, builder prose kept
+    # mitos-agent co-deployed → identity dropped, builder prose kept
     outs = planner.plan_machine(_rig(["claude-code", "agents-md", "mitos-agent"]),
                                 "example-windows")
     out = next(o for o in outs if o.deploy_path == agents_path and o.target == "agents-md")
     assert "About Me" not in out.content, "identity must not duplicate SOUL.md"
     assert not any(s.startswith("identity/") for s in out.sources)
-    assert "Builder Context" in out.content
+    assert "agentic SDLC loop" in out.content
 
-    # no hermes → full persona header stays
+    # no mitos-agent → full persona header stays
     outs2 = planner.plan_machine(_rig(["claude-code", "agents-md"]), "example-windows")
     out2 = next(o for o in outs2 if o.deploy_path == agents_path and o.target == "agents-md")
     assert "About Me" in out2.content
@@ -293,7 +322,7 @@ def test_project_agents_md_drops_identity_on_assistant_machines():
 
 def test_agentic_tree_project_mount_emits_full_tree():
     """A workstation project with agentic_tree: gets the full operating tree (the same
-    Navigation/Workflows/Skills/roster shape a Hermes machine gets at its assistant_root)
+    Navigation/Workflows/Skills/roster shape a Mitos Agent machine gets at its assistant_root)
     at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
     import copy
     rig = copy.deepcopy(reg)
@@ -346,7 +375,7 @@ def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
     assert "MitosAgent/AGENTS.md" in out.content
 
 def test_agentic_tree_cross_reference_note_on_project_agents_lane():
-    """The Hermes-style project_agents lane (context.builder projects) gets the same
+    """The Mitos Agent-style project_agents lane (context.builder projects) gets the same
     cross-reference note when agentic_tree: is set — consistent with the claude-code
     graph lane above."""
     import copy
@@ -368,7 +397,7 @@ def test_agentic_tree_cross_reference_note_on_project_agents_lane():
     assert "MitosAgent/AGENTS.md" in out.content
 
 def test_agentic_tree_no_effect_on_agentic_machine():
-    """agentic_tree is a workstation-only concept — an agentic (hermes) machine already
+    """agentic_tree is a workstation-only concept — an agentic (mitos-agent) machine already
     hosts the tree at its assistant_root, so a project's agentic_tree must not produce a
     second, redundant mount there."""
     import copy
@@ -414,6 +443,58 @@ def test_workstation_produces_no_clones_and_context_root_produces_clones():
     assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must fire"
     assert not any("apocalyptic_adventure" in d for d in dests), "local_path lane must not fire"
 
+def test_hidden_project_disappears_from_every_planned_output():
+    """`hidden: true` (registry/projects/<slug>.yaml): no tree node, no roster entry, no
+    clone, no per-project AGENTS.md/CLAUDE.md — on EVERY machine, not just one lane. Its
+    graph still loads and queries (untouched — only planning is blind to it), and un-hiding
+    restores byte-identical outputs, proving the filter adds no side effect of its own."""
+    import copy
+    rig = _full_windows_rig()
+    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
+    proj = rig.projects["example-project"]
+    proj.pop("example", None)                    # don't let the shipped-sample guard hide it
+    proj["local_path"]["example-windows"] = "example-project"
+    proj["repo"] = "git@github.com:Peccia/example.git"   # so the clone lane has something to suppress
+    assert "example-project" in rig.graphs, "fixture must ship a graph to prove it survives"
+
+    def _plan():
+        outs = planner.plan_machine(rig, "example-windows")
+        clones = planner.plan_clones(rig, "example-windows")
+        return outs, clones
+
+    before, clones_before = _plan()
+    paths_before = {o.deploy_path for o in before}
+    assert any("example-project" in p or "Example Project" in p for p in paths_before), \
+        "sanity: the project must actually plan something before it's hidden"
+    assert any(c.slug == "example-project" for c in clones_before), \
+        "sanity: the project must actually clone something before it's hidden"
+
+    proj["hidden"] = True
+    after, clones_after = _plan()
+    paths_after = {o.deploy_path for o in after}
+    assert not any("example-project" in p or "Example Project" in p for p in paths_after), \
+        f"hidden project still planned: {[p for p in paths_after if 'example' in p.lower()]}"
+    assert not any(c.slug == "example-project" for c in clones_after), \
+        "hidden project must not clone"
+    # the graph itself is untouched — still loadable/queryable outside planning
+    assert "example-project" in rig.graphs
+    assert rig.graphs["example-project"].efforts, "graph content must survive being hidden"
+
+    proj["hidden"] = False
+    restored, clones_restored = _plan()
+    assert {o.deploy_path for o in restored} == paths_before, "un-hiding must restore identical outputs"
+    assert {(c.slug, c.dest) for c in clones_restored} == {(c.slug, c.dest) for c in clones_before}
+
+def test_hidden_field_must_be_a_bool():
+    import copy
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["hidden"] = "yes"
+    try:
+        loader._validate(rig)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as e:
+        assert "hidden" in str(e)
+
 def test_claude_app_target_stages_uploadable_zip():
     import copy
     import json as _json
@@ -422,16 +503,16 @@ def test_claude_app_target_stages_uploadable_zip():
 
     from agentic.commands import classify_output, cmd_deploy
     from agentic.io import safe_rel
-    # gws opts into claude-app via its frontmatter; it's the only CORE skill that does
-    # (registry/local/ skills are excluded here — ignore_local=True), so no machine-side
-    # curation is needed to get exactly one output.
-    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so the only
-    # claude-app output is the skill zip (the Desktop-MCP half is opt-in by path key).
+    # This test is about the ZIP FORMAT, not about how many skills opt into claude-app —
+    # selecting gws by name rather than asserting a count keeps it from breaking (and being
+    # rubber-stamped into a new number) every time a skill is added.
+    # example-windows sets claude_skills_staging but NOT claude_desktop_config, so every
+    # claude-app output here is a skill zip (the Desktop-MCP half is opt-in by path key).
     reg2 = copy.deepcopy(reg)
     outs = [o for o in planner.plan_machine(reg2, "example-windows")
             if o.target == "claude-app"]
-    assert len(outs) == 1
-    o = outs[0]
+    assert all(o.kind == "zip" for o in outs), [o.kind for o in outs]
+    o = next(o for o in outs if o.deploy_path.endswith("gws.zip"))
     assert (o.kind, o.lane, o.drift_policy) == ("zip", "content", "protect")
     assert o.deploy_path.endswith("ClaudeSkills/gws.zip")
 
@@ -459,12 +540,12 @@ def test_skill_selection_layers():
     # `gws` declares requires_server: gws, so every layer below is exercised on a machine
     # that actually has the connection wired (see test_requires_server_gates_skill).
     wired = {"document_store": "gws"}
-    all_hermes = {s.name for s in _selected_skills(reg, base, wired)}
-    assert "gws" in all_hermes and "idea-revision" not in all_hermes  # push layer
+    all_agent = {s.name for s in _selected_skills(reg, base, wired)}
+    assert "gws" in all_agent and "idea-revision" not in all_agent  # push layer
     only = _selected_skills(reg, base, {**wired, "skills": {"mitos-agent": {"include": ["new-session", "gws"]}}})
     assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
     rest = _selected_skills(reg, base, {**wired, "skills": {"mitos-agent": {"exclude": ["gws"]}}})
-    assert {s.name for s in rest} == all_hermes - {"gws"}             # pull: exclude
+    assert {s.name for s in rest} == all_agent - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
     assert not _selected_skills(
         reg, {"include_target": "claude-code"},
@@ -493,7 +574,7 @@ def test_requires_server_gates_skill():
 def test_fresh_coding_machine_deploys_no_workspace_content():
     """End-to-end guard for the fresh-user path: a machine built from init's
     coding-harness use cases must not receive a workspace skill or MCP wiring for a
-    connection it never declared, and its CLAUDE.md must not name a hermes-only skill."""
+    connection it never declared, and its CLAUDE.md must not name a agent-only skill."""
     import copy
 
     from agentic.init import MACHINE_USE_CASES
@@ -508,13 +589,13 @@ def test_fresh_coding_machine_deploys_no_workspace_content():
         assert not [o for o in outs if o.lane == "connections"], \
             f"{use_case}: MCP wiring planned without a declared connection"
         # the identity header must not carry the agentic tree's operating rules — they
-        # name `new-session` (a hermes-only skill) and an AGENTS.md tree that a
+        # name `new-session` (a agent-only skill) and an AGENTS.md tree that a
         # coding-harness box does not have. A builder-context MENTION of the skill name
         # is fine; the imperative bullet is what must be gone.
         for o in outs:
             if o.deploy_path.endswith("CLAUDE.md"):
                 assert "execution of the skill: `new-session`" not in o.content, \
-                    f"{use_case}: CLAUDE.md instructs a skill only hermes deploys"
+                    f"{use_case}: CLAUDE.md instructs a skill only mitos-agent deploys"
                 assert "Always read `AGENTS.md` within" not in o.content, \
                     f"{use_case}: CLAUDE.md routes through an agentic tree that isn't here"
 
@@ -558,8 +639,8 @@ def test_coding_harness_context_carries_no_assistant_persona():
 
 def test_deployed_workspace_skill_names_no_assistant_machinery():
     """The `gws` skill is the one core skill a coding-harness box can receive. Its BODY
-    must not reference machinery only the agentic harness has — `SOUL.md`, Hermes, or
-    Hermes's `config.yaml` — since those name files that box does not have. (The gate in
+    must not reference machinery only the agentic harness has — `SOUL.md`, Mitos Agent, or
+    Mitos Agent's `config.yaml` — since those name files that box does not have. (The gate in
     test_requires_server_gates_skill stops it deploying UNWIRED; this covers the wired
     case.)"""
     import copy
@@ -571,9 +652,9 @@ def test_deployed_workspace_skill_names_no_assistant_machinery():
     assert outs, "expected the gws skill on a wired coding-harness machine"
     for o in outs:
         body = "\n".join(o.zip_members.values()) if o.zip_members else o.content
-        for term in ("SOUL", "Hermes", "config.yaml"):
+        for term in ("SOUL", "Mitos Agent", "config.yaml"):
             assert term not in body, \
-                f"{o.deploy_path}: names hermes-only machinery '{term}'"
+                f"{o.deploy_path}: names agent-only machinery '{term}'"
 
 def test_target_side_skill_curation_rejected():
     """include:/exclude: under a targets/*.yaml skills: block is core, shared by every
@@ -611,6 +692,22 @@ def test_machine_side_skill_curation_validation():
     reg2 = copy.deepcopy(reg)
     reg2.machines["example-linux"]["skills"] = {"mitos-agent": {"include": ["gws"]}}
     _validate(reg2)
+
+def test_machine_side_curation_of_a_manual_target_rejected():
+    """A manual target stages a menu the operator picks from at upload time, so the planner
+    ignores curation there. Rejected loudly rather than silently ignored — the same posture
+    the target-side rejection takes, and for the same reason: a list that quietly does nothing
+    is worse than one that fails."""
+    import copy
+
+    from agentic.loader import RegistryError, _validate
+    reg2 = copy.deepcopy(reg)
+    reg2.machines["example-windows"]["skills"] = {"claude-app": {"exclude": ["gws"]}}
+    try:
+        _validate(reg2)
+        raise AssertionError("expected RegistryError for curation on a manual target")
+    except RegistryError as e:
+        assert "cannot be curated" in str(e) and "upload" in str(e)
 
 def test_deselect_then_prune():
     from agentic.commands import cmd_deploy
@@ -836,7 +933,7 @@ def test_clone_is_idempotent_and_nondestructive():
     from agentic.planner import plan_clones
     calls: list = []
 
-    def fake_clone(repo, dest, branch=""):
+    def fake_clone(repo, dest, branch="", ssh_key=""):
         calls.append(repo)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / ".git").write_text("fake", encoding="utf-8")
@@ -867,7 +964,7 @@ def test_clone_failure_is_reported_not_fatal():
     from agentic.io import safe_rel
     from agentic.planner import plan_clones
 
-    def failing_clone(repo, dest, branch=""):
+    def failing_clone(repo, dest, branch="", ssh_key=""):
         return 1, "fatal: could not read Username (auth)"
 
     dest_rel = safe_rel(plan_clones(reg, "example-windows")[0].dest)
@@ -911,11 +1008,11 @@ def test_project_agents_md_includes_graph_index_and_emits_details():
     assert det.drift_policy == "generated"
 
 def test_domain_org_skills_deploy_and_effort_domain_line_in_project_agents_md():
-    """Three core org skills target hermes; per-project AGENTS.md carries the org line of
+    """Three core org skills target mitos-agent; per-project AGENTS.md carries the org line of
     a tagged EFFORT (the example graph's launch-prep effort is tagged marketing) — never a
     project-level Domain line; a leftover manifest org: field is rejected loudly."""
     from agentic import loader as loadermod
-    # 1. Core skills exist and target hermes
+    # 1. Core skills exist and target mitos-agent
     for skill_name in ("org-software", "org-design", "org-marketing"):
         assert skill_name in reg.skills, f"{skill_name} must be a core registry skill"
         assert "mitos-agent" in reg.skills[skill_name].targets
@@ -972,7 +1069,7 @@ def test_assistant_replaces_collaboration_in_agents_md():
         assert skill in proj_index.content
 
 def test_assistant_root_agents_md_is_the_routing_entry_point():
-    """assistant_root/AGENTS.md is Hermes's entry point (new-session Step 4 reads it). It must
+    """assistant_root/AGENTS.md is Mitos Agent's entry point (new-session Step 4 reads it). It must
     be a root-level file (not under Assistant/ or Projects/), carry routing not org detail, and
     the Projects branch root must carry the dynamically generated org-domain organizations table."""
     treg, tmp = _temp_registry()
@@ -1096,10 +1193,9 @@ def test_machine_sync_git_needs_hub():
                                             "git": {"hub": "ssh://h/overlay.git"}}
     _validate(ok)   # well-formed → no raise
 
-# (removed) test_machine_hermes_settings_validation — the hermes_settings validation lane
-# retired with Hermes (mitos-agent owns its config file whole; no settings-leaf merge). A
-# leftover hermes_settings: in a profile is now silently ignored, not an error (see
-# loader._validate note 5).
+# (removed) the third-party settings-merge validation lane retired with Mitos Agent, which
+# owns its config file whole (no settings-leaf merge). A leftover settings block in a profile
+# is now silently ignored, not an error (see loader._validate note 5).
 
 def test_git_sync_init_creates_bare_hub_and_pushes():
     if not _git_available():
@@ -1886,16 +1982,16 @@ def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
     assert "Mitos" not in matches[0].deploy_path
 
 def test_mitos_agent_ignores_scope_and_still_deploys_project_scoped_skill_globally():
-    """Hermes deliberately does not participate in scoping — a scope: project skill
-    that also targets hermes still ships to the global hermes skills dir."""
+    """Mitos Agent deliberately does not participate in scoping — a scope: project skill
+    that also targets mitos-agent still ships to the global mitos-agent skills dir."""
     treg, tmp = _temp_registry()
-    treg.skills["proj-and-hermes"] = loader.Skill(
-        name="proj-and-hermes", rel="local/skills/proj-and-hermes/SKILL.md",
-        frontmatter={"name": "proj-and-hermes", "targets": ["mitos-agent", "antigravity"],
+    treg.skills["proj-and-mitos-agent"] = loader.Skill(
+        name="proj-and-mitos-agent", rel="local/skills/proj-and-mitos-agent/SKILL.md",
+        frontmatter={"name": "proj-and-mitos-agent", "targets": ["mitos-agent", "antigravity"],
                     "scope": "project"}, body="body")
     outputs = planner.plan_machine(treg, "rig")
-    matches = [o for o in outputs if o.target == "mitos-agent" and "proj-and-hermes" in o.deploy_path]
-    assert len(matches) == 1, "hermes must still deploy a scope:project skill globally"
+    matches = [o for o in outputs if o.target == "mitos-agent" and "proj-and-mitos-agent" in o.deploy_path]
+    assert len(matches) == 1, "mitos-agent must still deploy a scope:project skill globally"
 
 def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
     """Default scope (global): a claude-code-targeted skill deploys once to the personal
@@ -1964,19 +2060,167 @@ def test_skill_deploy_warnings_name_the_missing_connection():
                and "document_store" in w for w in warnings)
     assert not any("curation" in w for w in warnings)
 
-def test_skill_deploy_warnings_flags_project_scope_leak_on_claude_app():
-    """A scope: project skill that also targets claude-app (a scope-ignoring target)
-    still deploys globally there — warn-only, so the leaked confinement is visible."""
+def test_skill_deploy_warnings_flags_project_scope_leak_on_mitos_agent():
+    """A scope: project skill that also targets mitos-agent still deploys globally there —
+    warn-only, so the leaked confinement is visible. mitos-agent is the only such target: it
+    WRITES the file, automatically, machine-wide."""
+    r = _connected_rig("example-linux")
+    r.machines["example-linux"]["skills"] = {}
+    r.skills["proj-and-agent"] = loader.Skill(
+        name="proj-and-agent", rel="local/skills/proj-and-agent/SKILL.md",
+        frontmatter={"name": "proj-and-agent", "targets": ["mitos-agent"],
+                     "scope": "project"}, body="body")
+    warnings = planner.skill_deploy_warnings(r, "example-linux")
+    assert any("'proj-and-agent'" in w and "'mitos-agent'" in w
+               and "ignores scope" in w for w in warnings)
+
+
+# ── manual targets stage a menu: no curation, no leak ─────────────────────────
+def test_a_manual_target_stages_every_compatible_skill_ignoring_curation():
+    """claude-app STAGES a zip; a human uploads it. The choice already happens at upload time,
+    so curating the pile only removes options the operator can no longer reach without a
+    registry edit and a redeploy."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.skills["stage-me"] = loader.Skill(
+        name="stage-me", rel="local/skills/stage-me/SKILL.md",
+        frontmatter={"name": "stage-me", "targets": ["claude-app"]}, body="body")
+    # a curation list the loader would now reject, forced in to prove the planner ignores it
+    r.machines["example-windows"]["skills"] = {"claude-app": {"exclude": ["stage-me"]}}
+    sk_spec = r.targets["claude-app"]["skills"]
+    selected = {s.name for s in planner._selected_skills(r, sk_spec,
+                                                         r.machines["example-windows"])}
+    assert "stage-me" in selected
+
+
+def test_a_manual_target_never_reports_a_scope_leak_or_a_curation_exclusion():
+    """Every diagnostic has to leave a configuration that is correct AND quiet. On claude-app
+    both lines used to fire whatever the operator did — exclude the skill and it warned that it
+    was excluded, keep it and it warned that it leaked — so the only silent configuration was to
+    drop the target from the skill's frontmatter, i.e. to give the capability up."""
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["skills"] = {}
     r.skills["proj-and-claude-app"] = loader.Skill(
         name="proj-and-claude-app", rel="local/skills/proj-and-claude-app/SKILL.md",
         frontmatter={"name": "proj-and-claude-app", "targets": ["claude-app"],
-                    "scope": "project"}, body="body")
+                     "scope": "project"}, body="body")
     warnings = planner.skill_deploy_warnings(r, "example-windows")
-    assert any("'proj-and-claude-app'" in w and "'claude-app'" in w
-              and "ignores scope" in w for w in warnings)
+    assert not any("proj-and-claude-app" in w for w in warnings)
+
+
+def test_a_manual_target_still_honours_requires_server():
+    """Which MCP connections a box has is a fact about the box, not a preference. A skill that
+    is nothing but instructions for a server this machine never wired is a dangling instruction
+    whether a human uploaded it or the compiler wrote it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.skills["needs-gws"] = loader.Skill(
+        name="needs-gws", rel="local/skills/needs-gws/SKILL.md",
+        frontmatter={"name": "needs-gws", "targets": ["claude-app"],
+                     "requires_server": "gws"}, body="body")
+    r.machines["example-windows"].pop("document_store", None)
+    sk_spec = r.targets["claude-app"]["skills"]
+    selected = {s.name for s in planner._selected_skills(r, sk_spec,
+                                                         r.machines["example-windows"])}
+    assert "needs-gws" not in selected
+    assert any("needs-gws" in w and "requires the 'gws' connection" in w
+               for w in planner.skill_deploy_warnings(r, "example-windows"))
+
+
+def test_is_manual_skill_target_is_the_zip_mode_set():
+    assert loader.is_manual_skill_target(reg.targets["claude-app"])
+    assert not loader.is_manual_skill_target(reg.targets["claude-code"])
+    assert not loader.is_manual_skill_target(reg.targets["mitos-agent"])
+    assert not loader.is_manual_skill_target({})
+
+# ── delivers: pairing an effort's forward contract with the skill that answers it ──
+def test_delivers_skill_deploys_only_where_the_deliverable_is_declared():
+    """The regression: seven return-lane skills landed on a laptop running one coding harness
+    and nothing that reads a return record, because their `targets:` list claude-code. A
+    procedure for an artifact nothing asks for is not inert — every session pays for it in the
+    skill roster. Demand is read off the registry graph, the inverse of the undelivered
+    warning below."""
+    from dataclasses import replace as _replace
+    spec = {"include_target": "claude-code"}
+    wired = {"document_store": "gws"}
+    # core registry: the shipped example project declares no deliverables
+    assert not planner._declared_deliverables(reg)
+    shipped = {n for n, sk in reg.skills.items() if sk.delivers and "claude-code" in sk.targets}
+    assert shipped, "guard: the registry ships deliverable skills for claude-code"
+    assert not shipped & {s.name for s in planner._selected_skills(reg, spec, wired)}
+
+    r = _connected_rig("example-linux")
+    pg = r.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("changelog",))] + list(pg.efforts[1:])
+    selected = {s.name for s in planner._selected_skills(r, spec, wired)}
+    # per term, not all-or-nothing: only the declared one comes back
+    assert "changelog" in selected and "runbook" not in selected
+    # curation cannot smuggle it back in — like requires_server, this is not a preference
+    assert "runbook" not in {s.name for s in planner._selected_skills(
+        r, spec, {**wired, "skills": {"claude-code": {"include": ["runbook"]}}})}
+
+
+def test_an_undeclared_deliverable_is_dropped_without_a_warning():
+    """Unlike curation and requires_server, this gate is the DEFAULT state — a fresh clone
+    declares no deliverables anywhere — so a line here would fire on every deploy of a correct
+    configuration, and the only way to silence it would be to declare work you do not do. It
+    must not be misreported as a curation exclusion either."""
+    warnings = planner.skill_deploy_warnings(reg, "example-windows")
+    assert not any(sk.delivers and sk.name in w
+                   for w in warnings for sk in reg.skills.values())
+
+
+def _rig_wanting(term: str, *, delivered_by: str | None = None):
+    """A connected rig whose example-project effort declares `term`, optionally with a
+    mitos-agent skill that declares `delivers: term`."""
+    from dataclasses import replace as _replace
+    r = _connected_rig("example-linux")
+    pg = r.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=(term,))] + list(pg.efforts[1:])
+    # Drop whatever ships for this term. Otherwise the test asserts "no skill delivers X" while
+    # depending on X having no skill in the real registry — which stopped being true the moment
+    # the deliverable skills landed, and would keep breaking as more do.
+    for name in [n for n, s in r.skills.items() if s.delivers == term]:
+        del r.skills[name]
+    if delivered_by:
+        r.skills[delivered_by] = loader.Skill(
+            name=delivered_by, rel=f"skills/{delivered_by}/SKILL.md",
+            frontmatter={"name": delivered_by, "targets": ["mitos-agent"],
+                         "delivers": term}, body="body")
+    return r
+
+
+def test_declared_deliverable_with_no_delivering_skill_warns():
+    """The forward contract only means something if a procedure answers it. Without this an
+    effort declares 'deploy-book', every harness reads the compiled line asking for one, and
+    no skill anywhere says how to write one — a gap found months later by its absence."""
+    warnings = planner.skill_deploy_warnings(_rig_wanting("deploy-book"), "example-linux")
+    assert any("deploy-book" in w and "delivers: deploy-book" in w
+               and "example-linux" in w for w in warnings)
+    # the effort that wants it is named, so the warning is actionable
+    assert any("example-project/" in w for w in warnings if "deploy-book" in w)
+
+
+def test_a_delivering_skill_retires_the_warning():
+    r = _rig_wanting("deploy-book", delivered_by="write-deploy-book")
+    assert not any("delivers: deploy-book" in w
+                   for w in planner.skill_deploy_warnings(r, "example-linux"))
+
+
+def test_undelivered_warning_groups_by_term_not_by_effort():
+    """One line per missing term, listing every effort that wants it — so adding one skill
+    retires exactly one warning instead of N."""
+    from dataclasses import replace as _replace
+    r = _rig_wanting("runbook")
+    pg = r.graphs["example-project"]
+    second = _replace(pg.efforts[0], id="second-effort", deliverables=("runbook",))
+    pg.efforts = list(pg.efforts) + [second]
+    lines = [w for w in planner.skill_deploy_warnings(r, "example-linux")
+             if "delivers: runbook" in w]
+    assert len(lines) == 1
+    assert "second-effort" in lines[0] and lines[0].count("runbook") >= 2
+
 
 def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
     warnings = planner.skill_deploy_warnings(_connected_rig("example-linux"), "example-linux")
@@ -2046,7 +2290,10 @@ def test_plan_claude_app_zip_bundles_resources_deterministically():
         "examples/sample.md": SkillResource(text="ex\n", rel="skills/gws/examples/sample.md"),
     }
     outs = planner.plan_machine(rig, "example-windows")
-    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip")
+    # by NAME: `next(...)` used to work only because gws was the sole claude-app skill, so
+    # this started picking whichever one sorts first the moment another shipped.
+    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip"
+                   and o.deploy_path.endswith("gws.zip"))
     assert zip_out.zip_members
     assert zip_out.zip_members["gws/SKILL.md"] == zip_out.content
     assert zip_out.zip_members["gws/examples/sample.md"] == "ex\n"
@@ -2062,6 +2309,22 @@ def test_plan_claude_app_zip_without_resources_uses_plain_zip_member():
     # zip_members stays empty so _payload falls back to zip_member+content.
     rig = _full_windows_rig()
     outs = planner.plan_machine(rig, "example-windows")
-    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip")
+    # by NAME: `next(...)` used to work only because gws was the sole claude-app skill, so
+    # this started picking whichever one sorts first the moment another shipped.
+    zip_out = next(o for o in outs if o.target == "claude-app" and o.kind == "zip"
+                   and o.deploy_path.endswith("gws.zip"))
     assert zip_out.zip_members == {}
     assert zip_out.zip_member == "gws/SKILL.md"
+
+
+def test_project_roster_block_aliases():
+    """project_roster_block emits [aliases: ...] between the slug and description."""
+    from agentic import render
+    projects = [
+        {"name": "Apdict", "slug": "apdict", "aliases": ["sensual predictions", "apdicts"],
+         "description": "Financial narrative processing"},
+        {"name": "Mitos", "slug": "mitos", "description": "Human-agentic harness"},
+    ]
+    roster = render.project_roster_block(projects)
+    assert "- `Projects/Apdict/` (apdict) [aliases: sensual predictions, apdicts] — Financial narrative processing" in roster
+    assert "- `Projects/Mitos/` (mitos) — Human-agentic harness" in roster

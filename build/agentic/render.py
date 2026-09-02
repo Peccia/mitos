@@ -129,10 +129,20 @@ def rejoin_regions(carved: list[tuple[str, str]], src: str) -> str:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-_MACHINE_TOKENS = ("project_root", "skills_root")
+_MACHINE_TOKENS = ("project_root", "skills_root", "returns_root", "connection",
+                   "returns_container")
 
 
-def _machine_value(paths: dict | None, key: str) -> str | None:
+def _servers(reg) -> dict:
+    """The `servers.yaml` server map off a Registry, tolerating a stand-in that has none.
+    Matches `reverse_expand_placeholders`'s existing `getattr(reg, "machines", {})` posture:
+    only `{{connection}}` reads this, so a caller passing a reg without it gets that one
+    token left literal rather than an AttributeError on every placeholder in the document."""
+    return (getattr(reg, "servers", None) or {}).get("servers") or {}
+
+
+def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
+                   servers: dict | None = None) -> str | None:
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
     - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
@@ -142,7 +152,75 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
     - `skills_root`: where deployed skills live — `<assistant_root>/skills` (matches the
       mitos-agent target's `skills.subdir` prefix; SOUL/skills/mcp share the install root
       with the tree).
+    - `returns_root`: where a coding harness writes what it produced, for the return lane.
+      On a machine hosting Mitos Agent this is its state directory's `returns/` — the exact
+      folder `mitos-agent returns` reads. On a coding-only box there is no such harness and
+      therefore no state directory, so it falls back to a machine-wide `.mitos-returns/`
+      beside the checkouts.
+
+      That fallback is a real seam and is documented as one: records written there are
+      correct and complete, but nothing on that box reads them, so the owner points
+      `mitos-agent returns --from` at the folder (or syncs it). Deliberately NOT reusing
+      `project_root`: it resolves to `projects_root` on a coding box, which would put the
+      records inside a path the harness's own resolver never looks at while LOOKING like it
+      had worked — a silently wrong path is worse than an obviously separate one.
+    - `returns_container`: the store folder an implementation's return records are published
+      into — the store-side twin of `returns_root`, and the same id `mitos-agent` reads back.
+      Read off the CONNECTION (`servers.yaml`), not the machine: the folder belongs to the
+      store, so every machine wired to it publishes into the same one and no two machines can
+      drift. `None` (token stays literal) when the store has no folder configured, which the
+      publish step reads exactly as it reads an unwired store — say so, print it for the owner,
+      and never guess a folder.
+    - `connection`: the wired document store, named as the STABLE section label
+      `<Name> (`key`)` that `connection_label` mints — the same string `connections_block`
+      renders as a heading, so a skill naming the store and a tree node heading it can
+      never drift apart.
+
+      This exists because a store being WIRED and a store being NAMED are different facts,
+      and only the second reaches a skill. `connections_block` renders into tree/branch
+      roots only, so a coding-only machine (no `agents-md` target) has a live `mcp.json`
+      and nothing in its always-on context that says so — and every return-lane skill's
+      publish step, which looks for that heading, correctly refuses to guess and writes
+      nothing. Expanding the label into the skill itself carries the name to exactly the
+      machines that were missing it, without inventing a tree they never asked for.
+
+      Multi-store machines expand to every label, comma-joined, in `document_stores` order:
+      the skill then names each store it could publish to rather than silently picking one.
+      `None` (token stays literal) when the machine wires no store — which is the honest
+      signal a publish step keys its "say so, print it for the owner" branch on.
     """
+    if key == "connection":
+        # Reads `machine`/`servers`, never `paths` — deliberately the only token that does,
+        # since a connection is not a filesystem fact.
+        labels = []
+        for ds in document_stores((machine or {}).get("document_store")):
+            label = connection_label(servers or {}, ds)
+            if label:
+                labels.append(label[0])
+        return ", ".join(labels) if labels else None
+    if key == "returns_container":
+        # The store-side twin of `returns_root`: where the return records GO, as opposed to
+        # where they are written locally first. Read off the connection rather than the machine,
+        # because the folder belongs to the store — every machine wired to that store publishes
+        # into the same one, and duplicating the id per machine is how two of them drift.
+        #
+        # Multi-store machines expand to `<label>: <id>` per store that HAS one, in
+        # `document_stores` order, so a skill names the folder for the store it is publishing
+        # to instead of silently taking the first. A store with no folder configured contributes
+        # nothing: the token stays literal, and the publish step's "say so, print it for the
+        # owner" branch is the honest outcome — exactly as it is for an unwired store.
+        stores = document_stores((machine or {}).get("document_store"))
+        parts = []
+        for ds in stores:
+            container = ((servers or {}).get(ds) or {}).get("returns_container")
+            container = str(container or "").strip()
+            if not container:
+                continue
+            if len(stores) == 1:
+                return container
+            label = connection_label(servers or {}, ds)
+            parts.append(f"{label[0] if label else ds}: {container}")
+        return ", ".join(parts) if parts else None
     if not paths:
         return None
     if key == "project_root":
@@ -154,6 +232,13 @@ def _machine_value(paths: dict | None, key: str) -> str | None:
     if key == "skills_root":
         home = paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
+    if key == "returns_root":
+        home = paths.get("assistant_root")
+        if home:
+            # Must match mitos_agent.state.state_dir: <root>/.local-memory/, then returns/.
+            return f"{str(home).rstrip('/')}/.local-memory/returns"
+        projects = paths.get("projects_root")
+        return f"{str(projects).rstrip('/')}/.mitos-returns" if projects else None
     return None
 
 
@@ -200,15 +285,21 @@ def machine_token_names() -> list[str]:
     return list(_MACHINE_TOKENS)
 
 
-def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None) -> str:
+def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None,
+                        machine: dict | None = None) -> str:
     """Substitute the fixed personalization tokens with `reg.user` values, plus the
     machine-scoped tokens (`_MACHINE_TOKENS`) resolved from the deploying machine's
     paths (`_machine_value`). Without `machine_paths` (or on a machine that defines
-    no matching path) a machine token stays literal, like any other unconfigured one."""
+    no matching path) a machine token stays literal, like any other unconfigured one.
+
+    `machine` is the whole machine profile, needed by `{{connection}}` alone — it resolves
+    from `document_store:` and `connections/servers.yaml`, not from `paths:`. Omitting it
+    leaves that one token literal and changes nothing else, so every existing caller keeps
+    its exact behaviour."""
     def _sub(m: re.Match) -> str:
         key = m.group(1)
-        val = (_machine_value(machine_paths, key) if key in _MACHINE_TOKENS
-               else _user_value(reg.user, key))
+        val = (_machine_value(machine_paths, key, machine, _servers(reg))
+               if key in _MACHINE_TOKENS else _user_value(reg.user, key))
         return val if val is not None else m.group(0)
     return _PLACEHOLDER_RE.sub(_sub, text)
 
@@ -232,7 +323,8 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     pairs = []
     for tok in tokens:
         if tok in _MACHINE_TOKENS:
-            vals = {_machine_value((m or {}).get("paths"), tok)
+            servers = _servers(reg)
+            vals = {_machine_value((m or {}).get("paths"), tok, m, servers)
                     for m in getattr(reg, "machines", {}).values()}
             pairs += [(v, f"{{{{{tok}}}}}") for v in vals if v]
             continue
@@ -467,15 +559,20 @@ def skills_block(skills: list) -> str:
 def project_roster_block(projects: list) -> str:
     """The `<generated>` "## Project Roster" section for Projects/AGENTS.md: one bullet
     per project folder deployed in this tree, sourced from each manifest's `name`,
-    `slug`, and optional `description` — the single place that text lives (mirrors
-    skills_block, which does the same for skill descriptions)."""
+    `slug`, optional `aliases`, and optional `description` — the single place that text
+    lives (mirrors skills_block, which does the same for skill descriptions)."""
     if not projects:
         return ""
     lines = ["## Project Roster", ""]
     for proj in projects:
         name = proj.get("name") or proj.get("slug")
         desc = (proj.get("description") or "").strip()
-        entry = f"- `Projects/{name}/` ({proj.get('slug')})"
+        aliases = proj.get("aliases")
+        alias_part = ""
+        if aliases:
+            alias_str = ", ".join(aliases) if isinstance(aliases, list) else str(aliases)
+            alias_part = f" [aliases: {alias_str}]"
+        entry = f"- `Projects/{name}/` ({proj.get('slug')}){alias_part}"
         lines.append(entry + (f" — {desc}" if desc else ""))
     return "\n".join(lines) + "\n"
 
@@ -509,12 +606,9 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
-        # The per-skill tag block is still authored under the legacy `hermes:` key in
-        # registry SKILL.md frontmatter — inert metadata (tags), not a target reference —
-        # so the rename deliberately left those files alone (decision 4). Emitted under the
-        # current name; rename the authored key when Mitos Agent defines its own skill
-        # frontmatter (B-Stage 5b).
-        tag_meta = fm.get("mitos_agent") or fm.get("hermes")
+        # The per-skill tag block is authored under `mitos_agent:` in registry SKILL.md
+        # frontmatter — inert metadata (tags), not a target reference.
+        tag_meta = fm.get("mitos_agent")
         if tag_meta:
             meta["metadata"] = {"mitos_agent": tag_meta}
         return _frontmatter_doc(meta, b)
@@ -568,8 +662,8 @@ def flat_tools(server: dict) -> list[str]:
 def mitos_agent_mcp_config(servers: dict) -> dict:
     """The whole mcp.json Mitos Agent reads: one entry per wired store (keyed by server
     name), each carrying its transport, the URL as seen from this machine, and the flat
-    tool list. A one-store machine yields a single entry — the same shape Hermes had, minus
-    the surgical merge. See planner._agent_servers for the server map this consumes."""
+    tool list. A one-store machine yields a single entry. See planner._agent_servers for
+    the server map this consumes."""
     return {"mcpServers": {alias: {
         "url": server["url"],
         "transport": server.get("transport", "streamable-http"),

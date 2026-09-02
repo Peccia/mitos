@@ -1,5 +1,5 @@
 # Target: Mitos Agent — the first-party agentic planning harness.
-# Replaces the retired `hermes` target. Consumes SOUL.md, a skills tree, mcp.json, and the
+# Consumes SOUL.md, a skills tree, mcp.json, and the
 # assistant AGENTS.md tree (produced by the agents-md target — REQUIRED on the same machine,
 # loader._validate; see machines/example-linux.yaml).
 #

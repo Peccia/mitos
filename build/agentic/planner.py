@@ -15,8 +15,8 @@ import yaml
 
 from . import render
 from .io import safe_rel
-from .loader import (Registry, RegistryError, resolve_local_path, _repo_basename,
-                     document_stores)
+from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_local_path,
+                     _repo_basename, document_stores)
 
 # A dynamically discovered agentic branch: any partial whose logical key matches
 # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch (see
@@ -82,7 +82,28 @@ class Output:
                                     # so adopt can route edits back without in-file markers
 
 
+def _visible_projects(reg: Registry) -> Registry:
+    """A shallow copy of `reg` with `hidden: true` projects dropped from BOTH `.projects` and
+    `.graphs` — the single choke point `plan_machine` and `plan_clones` route every
+    project-planning loop through, so a hidden project contributes NO planned output on any
+    machine: no tree node, no roster entry, no clone, no per-project AGENTS.md/CLAUDE.md.
+    Both collections have to be filtered: most lanes iterate `reg.projects`, but
+    `_plan_graph_tree` (the agentic-graph reference tree) drives its roster and per-project
+    doc index straight from `reg.graphs`, independently of `reg.projects` — missing either
+    one leaves the project half-hidden. `loader.load()` itself never filters, so the
+    manifest and graph still load and query fine outside planning (`mitos graph`, the
+    console) — this copy exists only for the duration of one plan call. A no-op copy when
+    nothing is hidden, so the common case costs nothing."""
+    if not any(p.get("hidden") for p in reg.projects.values()):
+        return reg
+    hidden = {s for s, p in reg.projects.items() if p.get("hidden")}
+    return replace(reg,
+                   projects={s: p for s, p in reg.projects.items() if s not in hidden},
+                   graphs={s: g for s, g in reg.graphs.items() if s not in hidden})
+
+
 def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
+    reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name)
     if machine is None:
         raise KeyError(f"unknown machine: {machine_name}")
@@ -150,7 +171,7 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             f"machine {machine_name}: markdown-structure contract violated "
             f"({len(md_problems)} problem(s)):\n" + "\n".join(md_problems))
 
-    return [_expand_output(reg, o, paths) for o in outputs]
+    return [_expand_output(reg, o, paths, machine) for o in outputs]
 
 
 # The reserved H2 sections, in the canonical order every tree-node file follows. SOUL and
@@ -207,15 +228,19 @@ def lint_node_markdown(o: "Output") -> list[str]:
     return problems
 
 
-def _expand_output(reg: Registry, o: Output, machine_paths: dict | None = None) -> Output:
+def _expand_output(reg: Registry, o: Output, machine_paths: dict | None = None,
+                   machine: dict | None = None) -> Output:
     """Personalization pass (the dynamic-context-enhancements design): substitute the
     fixed `{{user_*}}` placeholders — plus the machine-scoped `{{project_root}}` —
     in every markdown/text output and skill-zip member.
     Tool-owned merge configs (yaml_merge/json_merge) and env templates are excluded —
     they are machine wiring, not prose the model reads, and the .local/ env overlay
-    must never flow through this pass (see io/secrets invariant)."""
+    must never flow through this pass (see io/secrets invariant).
+
+    `machine` is threaded through for `{{connection}}`, which resolves from the profile's
+    `document_store:` rather than its `paths:`."""
     def _x(text: str) -> str:
-        return render.expand_placeholders(reg, text, machine_paths)
+        return render.expand_placeholders(reg, text, machine_paths, machine)
     if o.kind == "text":
         return replace(
             o, content=_x(o.content),
@@ -323,6 +348,7 @@ class CloneSpec:
     repo: str          # git URL from the manifest
     dest: str          # POSIX checkout dir — under agentic_context_root or local_path
     branch: str = ""   # branch to check out / fast-forward (repo_branches:); "" = default
+    ssh_key: str = ""  # private key to auth with (repo_ssh_keys:); "" = ambient default identity
 
 
 def _project_repos(proj: dict) -> list[str]:
@@ -353,6 +379,12 @@ def _repo_branch(proj: dict, basename: str) -> str:
     return str((proj.get("repo_branches") or {}).get(basename, "")).strip()
 
 
+def _repo_ssh_key(proj: dict, basename: str) -> str:
+    """The private key to authenticate with for a repo, keyed by checkout basename
+    (`repo_ssh_keys:`). Empty string means the ambient default git/ssh identity."""
+    return str((proj.get("repo_ssh_keys") or {}).get(basename, "")).strip()
+
+
 def _reg_root_norm(reg: Registry) -> str:
     """Normalised, slash-terminated registry root for guard comparisons."""
     return str(reg.root).replace("\\", "/").rstrip("/")
@@ -375,6 +407,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     existing checkout (never resetting or deleting one — design rule #8). Machines that host
     no project tree (no mitos-agent and no claude-code + agents-md reference tree) get nothing.
     """
+    reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name) or {}
     targets = machine.get("targets", [])
     paths = machine.get("paths") or {}
@@ -385,7 +418,8 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
         for repo in _project_repos(proj):
             bn = _repo_basename(repo)
             specs.append(CloneSpec(slug=slug, repo=repo, dest=f"{parent}/{bn}",
-                                   branch=_repo_branch(proj, bn)))
+                                   branch=_repo_branch(proj, bn),
+                                   ssh_key=_repo_ssh_key(proj, bn)))
         return specs
 
     out: list[CloneSpec] = []
@@ -673,10 +707,28 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
     return None, ""
 
 
-# mitos-agent and claude-app have no project-scoped surface (loader.PROJECT_SCOPE_CAPABLE_
-# TARGETS is the other two) — they IGNORE `scope: project` and always deploy globally.
-# Kept in sync with loader.KNOWN_TARGETS - loader.PROJECT_SCOPE_CAPABLE_TARGETS.
-SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent", "claude-app"}
+# Targets that deploy a `scope: project` skill GLOBALLY, defeating the confinement its scope
+# promises. `mitos-agent` is the only one: it writes real files, automatically, machine-wide.
+#
+# `claude-app` ignores scope too, but it is NOT here, because it deploys nothing — `deploy`
+# stages a zip and the last mile is a human uploading it (targets/claude-app.yaml). A staged
+# zip is inert, so there is no leak to warn about, and warning anyway left the operator no
+# quiet correct state: excluding the skill warned that it was excluded, keeping it warned that
+# it leaked, and the only silent configuration was to drop the target from the skill's
+# frontmatter — i.e. to give the capability up. See is_manual_skill_target.
+SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent"}
+
+
+def _declared_deliverables(reg: Registry) -> set[str]:
+    """Demand for the return lane: every deliverable term some effort actually asks for.
+
+    Example graphs step aside once real projects exist — the same rule the graph roster
+    applies (_suppressed_examples), and for the same reason: a shipped sample must not
+    switch the return lane on for a fleet that never opted into it.
+    """
+    suppressed = _suppressed_examples(reg)
+    return {d for slug, pg in (reg.graphs or {}).items() if slug not in suppressed
+            for e in pg.efforts for d in e.deliverables}
 
 
 def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
@@ -697,16 +749,41 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     tools is noise — or worse, a dangling instruction — on a box where that server was
     never wired, and a brand-new coding-harness user should not have to hand-write an
     `exclude:` list to keep the maintainer's workspace skills off their machine.
+
+    A fourth gate, non-curatable for the same reason: a skill declaring `delivers:` is
+    dropped unless some effort in the registry declares that deliverable
+    (_declared_deliverables). It is the exact inverse of _undelivered_warnings — that
+    reports demand with no supply, this stops shipping supply with no demand. A procedure
+    for an artifact nothing asks for is not inert: every harness pays for it in the skill
+    roster of every session, which is what put seven return-lane skills on a laptop that
+    runs one coding harness and nothing that reads a return record.
+
+    It keys off the REGISTRY, not this machine, and that distinction is load-bearing: a
+    coding-only box whose records a Mitos Agent elsewhere harvests still receives them
+    (render._machine_value's `returns_root` fallback exists for exactly that box). A gate
+    on `mitos-agent` being a target HERE would have deleted that configuration.
+
+    **A MANUAL target takes no curation** (`is_manual_skill_target`): staging a zip is not
+    deploying it, so the pile is a menu and the operator picks from it at upload time. Curating
+    the menu buys nothing and costs the choice — a skill filtered out here is one they cannot
+    upload later without a registry edit and a redeploy. The `requires_server:` gate still
+    applies: which MCP connections a box has is a fact about the box, not a preference, and a
+    skill that is nothing but instructions for a server this machine never wired is a dangling
+    instruction whether a human uploaded it or the compiler wrote it. Rejected at load time
+    (loader) so a curation list here cannot quietly do nothing.
     """
     tgt = sk_spec["include_target"]
-    curation = ((machine or {}).get("skills") or {}).get(tgt) or {}
+    manual = is_manual_skill_target({"skills": sk_spec})
+    curation = {} if manual else (((machine or {}).get("skills") or {}).get(tgt) or {})
     include = curation.get("include")
     exclude = set(curation.get("exclude") or [])
     stores = set(document_stores((machine or {}).get("document_store")))
+    declared = _declared_deliverables(reg)
     return [s for s in reg.skills.values()
             if tgt in s.targets
             and not s.frontmatter.get("extends_skill")
             and (s.requires_server is None or s.requires_server in stores)
+            and (s.delivers is None or s.delivers in declared)
             and (include is None or s.name in include)
             and s.name not in exclude]
 
@@ -717,11 +794,26 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     filtered out by this machine's curation, dropped because their `requires_server:`
     connection isn't wired here, or landing on a scope-ignoring target while marked
     `scope: project` (its confinement guarantee doesn't hold there). Warn-only: nothing
-    here changes what deploys, it only surfaces filters that were previously silent."""
+    here changes what deploys, it only surfaces filters that were previously silent.
+
+    The `delivers:` gate (_declared_deliverables) is deliberately NOT reported: unlike the
+    three above it is the DEFAULT state — a fresh clone declares no deliverables — so a line
+    here would fire on every deploy of a correct configuration, and the only way to silence
+    it would be to declare work you do not do. The reverse direction stays loud in
+    _undelivered_warnings, where the gap is real.
+
+    A MANUAL target (`is_manual_skill_target`) reaches only the `requires_server:` line: it
+    takes no curation, and it deploys nothing to leak. Every diagnostic here has to leave the
+    operator a configuration that is both correct and quiet — one that fires whatever they do
+    is not a diagnostic, it is a standing alarm, and it trains them to stop reading the rest."""
     machine = reg.machines.get(machine_name) or {}
     machine_targets = set(machine.get("targets", []))
     stores = set(document_stores(machine.get("document_store")))
+    declared = _declared_deliverables(reg)
     warnings: list[str] = []
+    # Every deliverable term this machine can actually satisfy, accumulated across targets:
+    # a term is covered if ANY target here deploys a skill declaring it.
+    delivered: set[str] = set()
     for tname, tspec in reg.targets.items():
         if tname not in machine_targets:
             continue
@@ -732,13 +824,17 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                       if tname in s.targets and not s.frontmatter.get("extends_skill")}
         selected = _selected_skills(reg, sk_spec, machine)
         selected_names = {s.name for s in selected}
+        delivered.update(s.delivers for s in selected if s.delivers)
         for name in sorted(candidates - selected_names):
-            req = reg.skills[name].requires_server
+            sk = reg.skills[name]
+            req = sk.requires_server
             if req and req not in stores:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but requires the '{req}' "
                     f"connection, which machines/{machine_name}.yaml does not declare "
                     f"(document_store:) — not deployed")
+            elif sk.delivers and sk.delivers not in declared:
+                continue        # the default state, not a filter — see the docstring
             else:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but is excluded by this machine's "
@@ -750,7 +846,32 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                         f"skill '{skill.name}' is scope: project but targets "
                         f"'{tname}', which ignores scope and deploys it globally "
                         f"(account-wide/machine-wide, not confined to bound projects)")
+    warnings.extend(_undelivered_warnings(reg, machine_name, delivered))
     return warnings
+
+
+def _undelivered_warnings(reg: Registry, machine_name: str,
+                          delivered: set[str]) -> list[str]:
+    """An effort declares a deliverable that nothing on this machine knows how to produce.
+
+    The forward contract only means something if a procedure answers it. Without this, an
+    effort can declare `deploy-book`, every harness can read the compiled line asking for one,
+    and no skill anywhere describes how to write one — a gap discovered months later by the
+    deploy book's absence. Warn-only: an effort may legitimately be ahead of its skills, and a
+    machine that deploys no skills at all (an agents-md-only box) is not misconfigured.
+
+    Reported once per term with the efforts that want it, not once per effort, so adding one
+    missing skill retires exactly one line."""
+    wanted: dict[str, list[str]] = {}
+    for slug, pg in (reg.graphs or {}).items():
+        for e in pg.efforts:
+            for d in e.deliverables:
+                if d not in delivered:
+                    wanted.setdefault(d, []).append(f"{slug}/{e.id}")
+    return [f"deliverable '{term}' is declared by {', '.join(sorted(efforts))} but no skill "
+            f"deployed to {machine_name} declares 'delivers: {term}' — nothing here knows how "
+            f"to produce it"
+            for term, efforts in sorted(wanted.items())]
 
 
 def _skill_resource_outputs(skill, resources: dict, target: str, base_dir: str,
@@ -801,7 +922,7 @@ def _agent_servers(reg: Registry, machine_name: str) -> dict:
     whole `mcp.json` Mitos Agent reads (design §3.1). Generalizes _gws from one hard-coded
     server to the machine's full `document_store:` list, resolving each server's per-machine
     URL the same way. `none`/unset yields {} (no mcp.json). A one-store machine yields
-    {"gws": <server>} — identical in effect to what _gws did for Hermes."""
+    {"gws": <server>} — identical in effect to what the single-server _gws did."""
     machine = reg.machines[machine_name]
     servers: dict = {}
     for name in document_stores(machine.get("document_store")):

@@ -1,0 +1,9 @@
+# The POSIX shim is executed by /bin/sh — CRLF makes it unrunnable on Linux/macOS.
+mitos text eol=lf
+mitos.cmd text eol=crlf
+
+# Vendored libraries are byte-pinned in review_ui/VENDOR.md and hash-checked by
+# test_vendored_ui_libs_match_their_recorded_hashes. Any eol conversion changes
+# those bytes and fails the test on a clone whose platform differs from the one
+# that recorded them.
+build/review_ui/*.min.js -text
