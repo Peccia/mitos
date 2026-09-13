@@ -1643,9 +1643,95 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .project-repo-row input:first-child { flex: 1.2; font-family: var(--mono); font-size: .82rem; }
 .project-repo-row input:nth-child(2) { flex: 1; }
 
+/* ── New project form (Knowledge Graph tab) ────────────────────────────────── */
+.new-project-wrap {
+  max-width: 44rem;
+  padding-bottom: var(--sp-6);
+}
 .new-project-panel {
-  max-width: 42rem;
-  margin-bottom: 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .2);
+  overflow: hidden;
+}
+.new-project-head {
+  padding: 1.1rem var(--sp-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.new-project-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.new-project-desc {
+  margin: .35rem 0 0;
+  font-size: var(--fs-base);
+  color: var(--muted);
+  line-height: 1.45;
+}
+.new-project-body {
+  padding: 1.25rem var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+.new-project-field {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.new-project-label {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.new-project-input,
+.new-project-select {
+  width: 100%;
+  height: var(--ctrl-md);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-md);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.new-project-input {
+  padding: 0 .65rem;
+}
+.new-project-input.mono {
+  font-family: var(--mono);
+}
+.new-project-select {
+  padding: 0 2rem 0 .65rem;
+}
+.new-project-input:focus,
+.new-project-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(68, 147, 248, .2);
+}
+.new-project-hint {
+  font-size: .75rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.new-project-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .6rem;
+  padding: .9rem var(--sp-5);
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, .12);
+}
+.new-project-footer button {
+  min-height: var(--ctrl-md);
+  padding: 0 1rem;
 }
 
 /* F6 of the console usability audit: a 50/50 split for panes that are never 50/50 —

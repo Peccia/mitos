@@ -723,7 +723,7 @@ function renderProjRows() {
   list.replaceChildren();
   if (!matches.length) { list.append(el("div", "muted graph-proj-empty", "No projects match.")); return; }
   for (const g of matches) {
-    const row = el("div", "graph-proj-row" + (g.slug === graphSlug ? " active" : ""));
+    const row = el("div", "graph-proj-row" + (!newProjectOpen && g.slug === graphSlug ? " active" : ""));
     const dot = el("span", "graph-proj-dot " + (g.has_graph ? "mapped" : "empty"));
     dot.title = g.has_graph ? "Has document mappings" : "No graph yet";
     const col = el("div", "graph-proj-col");
@@ -999,42 +999,48 @@ function projectEditorCard(g) {
 
 function buildNewProjectWorkspace() {
   const ws = el("section"); ws.id = "graph-workspace";
-  const card = el("div", "card new-project-panel");
+  const wrap = el("div", "new-project-wrap");
+  const panel = el("div", "new-project-panel");
 
-  const head = el("div", "card-head");
-  head.append(el("h1", "project-panel-title", "New project"));
-  card.append(head);
-
-  card.append(el("p", "card-note muted",
+  const head = el("div", "new-project-head");
+  head.append(el("h1", "new-project-title", "New project"));
+  head.append(el("p", "new-project-desc",
     "Scaffold a new project manifest in your private overlay (registry/local/projects/<slug>.yaml) "
     + "via the CLI (Stage 1 of the Knowledge Graph pipeline)."));
+  panel.append(head);
+
+  const body = el("div", "new-project-body");
 
   // Slug
-  const slugWrap = el("div", "graph-field");
-  slugWrap.append(el("label", "", "Slug (identifier) *"));
-  const slugInput = el("input");
+  const slugField = el("div", "new-project-field");
+  slugField.append(el("label", "new-project-label", "Slug (identifier) *"));
+  const slugInput = el("input", "new-project-input mono");
   slugInput.type = "text";
   slugInput.placeholder = "e.g. acme-web";
   slugInput.value = newProjectDraft.slug || "";
   slugInput.addEventListener("input", () => { newProjectDraft.slug = slugInput.value; });
-  slugWrap.append(slugInput);
-  card.append(slugWrap);
+  slugField.append(slugInput);
+  slugField.append(el("span", "new-project-hint",
+    "Unique identifier used in filesystem paths and CLI arguments."));
+  body.append(slugField);
 
   // Name
-  const nameWrap = el("div", "graph-field");
-  nameWrap.append(el("label", "", "Display name"));
-  const nameInput = el("input");
+  const nameField = el("div", "new-project-field");
+  nameField.append(el("label", "new-project-label", "Display name"));
+  const nameInput = el("input", "new-project-input");
   nameInput.type = "text";
   nameInput.placeholder = "e.g. Acme Web (defaults to slug)";
   nameInput.value = newProjectDraft.name || "";
   nameInput.addEventListener("input", () => { newProjectDraft.name = nameInput.value; });
-  nameWrap.append(nameInput);
-  card.append(nameWrap);
+  nameField.append(nameInput);
+  nameField.append(el("span", "new-project-hint",
+    "Human-readable label shown in navigation and reports."));
+  body.append(nameField);
 
   // Document store
-  const storeWrap = el("div", "graph-field");
-  storeWrap.append(el("label", "", "Document store"));
-  const storeSel = el("select", "graph-select");
+  const storeField = el("div", "new-project-field");
+  storeField.append(el("label", "new-project-label", "Document store"));
+  const storeSel = el("select", "new-project-select");
   const noneOpt = el("option", "", "none (unmapped / local-file fallback)");
   noneOpt.value = "none";
   storeSel.append(noneOpt);
@@ -1050,19 +1056,24 @@ function buildNewProjectWorkspace() {
     noneOpt.selected = true;
   }
   storeSel.addEventListener("change", () => { newProjectDraft.document_store = storeSel.value; });
-  storeWrap.append(storeSel);
-  storeWrap.append(el("p", "card-note muted",
+  storeField.append(storeSel);
+  storeField.append(el("span", "new-project-hint",
     "The MCP server backing graph init (mitos connect), or 'none' if unmapped."));
-  card.append(storeWrap);
+  body.append(storeField);
 
-  // Enter in slug moves to name
+  panel.append(body);
+
+  const footer = el("div", "new-project-footer");
+  const cancelBtn = el("button", "ghost", "Cancel");
+  const submitBtn = el("button", "accept", "Create project");
+
+  // Enter in slug moves to name; Enter in name triggers submit
   slugInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); nameInput.focus(); }
   });
-
-  const actions = el("div", "inline-actions");
-  const submitBtn = el("button", "accept tiny", "Create project");
-  const cancelBtn = el("button", "ghost tiny", "Cancel");
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitBtn.click(); }
+  });
 
   submitBtn.onclick = async () => {
     const rawSlug = slugInput.value.trim();
@@ -1109,9 +1120,10 @@ function buildNewProjectWorkspace() {
     renderGraph();
   };
 
-  actions.append(submitBtn, cancelBtn);
-  card.append(actions);
-  ws.append(card);
+  footer.append(cancelBtn, submitBtn);
+  panel.append(footer);
+  wrap.append(panel);
+  ws.append(wrap);
 
   setTimeout(() => slugInput.focus(), 0);
   return ws;
