@@ -3573,7 +3573,7 @@ function renderSkillDrawer(s, domain) {
   body.append(metaLine);
 
   const actBar = el("div", "skill-actions-bar");
-  const editBtn = el("button", "", "Edit prompt →");
+  const editBtn = el("button", "ghost tiny", "Edit prompt →");
   editBtn.title = "Open in Prompt Library to edit body and metadata";
   editBtn.onclick = () =>
     openContextualEditor({ kind: "skill", ident: s.name, returnTab: "skills" });
@@ -3610,7 +3610,7 @@ function renderSkillFilesSection(s) {
     "Deployed alongside SKILL.md and bundled into claude.ai zips."));
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save files to inbox");
@@ -3640,7 +3640,9 @@ function renderSkillFilesSection(s) {
     saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
   };
   revert.onclick = () => { delete resourceDrafts[key]; renderSkills(); };
-  actions.append(reason, save, revert);
+  const btns = el("div", "action-group");
+  btns.append(save, revert);
+  actions.append(reason, btns);
   section.append(actions);
   return section;
 }
@@ -3694,7 +3696,7 @@ function renderSkillScopeSection(s) {
 
   const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
   const scopeRow = el("div", "meta-grid");
-  const scopeSelect = el("select");
+  const scopeSelect = el("select", "graph-select");
   for (const [val, label] of [
     ["global", "Global"],
     ["project", hasProjects ? "Project" : "Project (configure in a project manifest first)"],
@@ -3711,7 +3713,7 @@ function renderSkillScopeSection(s) {
     refreshActionState();
     renderSkills();
   };
-  scopeRow.append(fieldWrap("Scope", scopeSelect));
+  scopeRow.append(scopeSelect);
   section.append(scopeRow);
 
   if ((current.scope || "global") === "project") {
@@ -3730,7 +3732,7 @@ function renderSkillScopeSection(s) {
   }
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save scope to inbox");
@@ -3748,7 +3750,9 @@ function renderSkillScopeSection(s) {
     }
     renderSkills();
   };
-  actions.append(reason, save, revert);
+  const btns = el("div", "action-group");
+  btns.append(save, revert);
+  actions.append(reason, btns);
   section.append(actions);
   refreshActionState();
   return section;
@@ -3883,7 +3887,7 @@ function newSkillForm() {
   wrap.append(resWrap);
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const create = el("button", "accept", "Create skill");
@@ -3913,7 +3917,9 @@ function newSkillForm() {
   };
   const cancel = el("button", "ghost", "Cancel");
   cancel.onclick = () => { newSkillOpen = false; resetNewSkillDraft(); renderSkills(); };
-  actions.append(reason, create, cancel);
+  const btns = el("div", "action-group");
+  btns.append(create, cancel);
+  actions.append(reason, btns);
   wrap.append(actions);
   return wrap;
 }

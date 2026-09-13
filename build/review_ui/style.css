@@ -435,23 +435,63 @@ button.ghost { background: none; }
 button.tiny {
   display: inline-flex;
   align-items: center;
-  min-height: var(--ctrl-sm);
-  padding: .2rem .55rem;
+  justify-content: center;
+  min-height: 26px;
+  padding: .2rem .6rem;
   font-size: .8rem;
   line-height: 1.2;
+  box-sizing: border-box;
 }
 button.tiny.danger { color: var(--bad); }
 button.tiny.danger:hover:not(:disabled) { border-color: var(--bad); }
 
 /* ── Global input / select / textarea styling ────────────────────────────── */
 input[type="text"], input[type="search"], input[type="date"], select, textarea {
-  transition: border-color .15s ease, box-shadow .15s ease;
+  font: inherit;
+  font-size: var(--fs-base, .8125rem);
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-sizing: border-box;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+input[type="text"], input[type="search"], input[type="date"] {
+  padding: .32rem .6rem;
+  line-height: 1.4;
+}
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding: .32rem 2rem .32rem .65rem;
+  line-height: 1.4;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'><path d='M2.5 4.5L6 8L9.5 4.5' stroke='%235f6874' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right .65rem center;
+}
+@media (prefers-color-scheme: dark) {
+  select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'><path d='M2.5 4.5L6 8L9.5 4.5' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  }
+}
+select option {
+  background-color: var(--panel);
+  color: var(--ink);
+}
+select:hover:not(:disabled), input[type="text"]:hover:not(:disabled), input[type="search"]:hover:not(:disabled) {
+  border-color: var(--accent);
 }
 input[type="text"]:focus, input[type="search"]:focus, input[type="date"]:focus,
 select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15);
+  box-shadow: 0 0 0 3px rgba(68, 147, 248, .18);
+}
+select:disabled, input:disabled, textarea:disabled {
+  opacity: .5;
+  cursor: not-allowed;
 }
 
 /* ── Inbox: master-detail ────────────────────────────────────────────────── */
@@ -1204,17 +1244,19 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   flex-wrap: wrap;
   margin-top: .75rem;
 }
-.action-group { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.action-group { display: flex; gap: .45rem; align-items: center; flex-wrap: wrap; }
 .save-group { flex-wrap: wrap; }
 .row-actions { display: inline-flex; gap: .35rem; align-items: center; }
 .detail-reason {
   font: inherit;
+  font-size: var(--fs-base, .8125rem);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: .28rem .6rem;
   background: var(--bg);
   color: var(--ink);
-  min-width: 12rem;
+  min-width: 11rem;
+  flex: 1;
 }
 
 @media (max-width: 640px) {
@@ -1304,7 +1346,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
-#ops-machine { font-size: .82rem; padding: .2rem .5rem; margin-left: auto; }
+#ops-machine { font-size: .82rem; padding: .25rem 1.8rem .25rem .55rem; margin-left: auto; }
 
 /* ── Ops drawer (compile/deploy log) ─────────────────────────────────────── */
 #ops-drawer {
@@ -1971,7 +2013,32 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   font-weight: 600;
   word-break: break-word;
 }
-#skill-edit-drawer-close { margin-left: auto; flex: none; }
+#skill-edit-drawer-close {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+#skill-edit-drawer-close:hover {
+  color: var(--ink);
+  background: var(--sidebar-hover);
+}
+#skill-edit-drawer-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 #skill-edit-drawer-body {
   flex: 1;
   overflow: auto;
@@ -1982,9 +2049,11 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 /* Version/author/license/platforms: provenance, rarely consulted — one muted line, not
    the grid of cards that used to out-weigh the content it describes. */
 .skill-drawer-meta {
-  font-size: .78rem;
-  font-family: var(--mono);
+  font-size: .8rem;
+  font-family: var(--font-sans);
+  color: var(--muted);
   word-break: break-word;
+  line-height: 1.4;
 }
 @media (prefers-reduced-motion: reduce) {
   #skill-edit-drawer { transition: none; }
@@ -2027,13 +2096,20 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 
 .skill-actions-bar { display: flex; gap: .5rem; margin-bottom: .9rem; }
 
-.skill-files-section { margin-bottom: .9rem; }
-.skill-extension-section { margin-bottom: .9rem; }
+.skill-files-section, .skill-extension-section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: .85rem 1rem;
+  margin-bottom: .9rem;
+}
 
 .skill-org-section {
-  border-top: 1px solid var(--line);
-  padding-top: .8rem;
-  margin-top: .4rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: .85rem 1rem;
+  margin-bottom: .9rem;
 }
 .skill-org-heading {
   margin: 0 0 .6rem;
