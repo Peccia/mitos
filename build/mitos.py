@@ -538,14 +538,15 @@ def _cmd_project(args) -> int:
         print(f"error: invalid slug {slug!r} — use letters, digits, '-' or '_'",
               file=sys.stderr)
         return 2
-    overlay = REPO_ROOT / "registry" / loader.LOCAL_OVERLAY
+    root = args.root.resolve() if getattr(args, "root", None) else REPO_ROOT
+    overlay = root / "registry" / loader.LOCAL_OVERLAY
     manifest = overlay / "projects" / f"{slug}.yaml"
     if manifest.exists():
         print(f"error: project {slug!r} already exists at "
               f"registry/{loader.LOCAL_OVERLAY}/projects/{slug}.yaml", file=sys.stderr)
         return 2
     try:
-        reg = loader.load(REPO_ROOT)
+        reg = loader.load(root)
         stores = sorted(reg.servers.get("servers") or {})
         if slug in reg.projects:
             print(f"error: a project named {slug!r} already exists in the registry",
@@ -773,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--name", default=None, help="display name (defaults to the slug)")
     pp.add_argument("--document-store", default=None,
                     help="MCP server (connections/servers.yaml) backing graph init, or 'none'")
+    pp.add_argument("--root", type=Path, default=None,
+                    help="repo root (defaults to mitos checkout root)")
     pc = sub.add_parser("connect",
                         help="map a project's docs into its knowledge graph (Stage 3)")
     pc.add_argument("--project", default=None,

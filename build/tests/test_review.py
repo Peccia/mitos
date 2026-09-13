@@ -2167,3 +2167,114 @@ def test_markdown_preview_loads_marked_and_still_sanitizes():
     assert not (review.UI_DIR / "snarkdown.js").exists()
     assert "window.marked.parse(" in app
     assert "window.DOMPurify.sanitize(html)" in app
+
+
+def test_create_project_rejects_invalid_slug():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    for bad in ("", "   ", "has space", "bad/slash", "bad\\slash", "bad.dot"):
+        out = review.create_project(treg, bad)
+        assert out["ok"] is False
+        assert "invalid slug" in out["error"]
+
+
+def test_create_project_shells_out_to_mitos_cli(monkeypatch):
+    import subprocess as _sp
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "created registry/local/projects/newproj.yaml"
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["cwd"] = kw.get("cwd")
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.create_project(treg, "newproj", name="New Project", document_store="gws")
+    assert out["ok"] is True
+    assert out["slug"] == "newproj"
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("mitos.py")
+    assert cmd[2:4] == ["project", "add"]
+    assert cmd[4] == "newproj"
+    assert cmd[cmd.index("--name") + 1] == "New Project"
+    assert cmd[cmd.index("--document-store") + 1] == "gws"
+    assert cmd[cmd.index("--root") + 1] == str(treg.root)
+    assert seen["cwd"] == str(treg.root)
+
+
+def test_create_project_surfaces_cli_error(monkeypatch):
+    import subprocess as _sp
+    from agentic import review
+    treg, _tmp = _temp_registry()
+
+    class _Fail:
+        returncode = 2
+        stdout = ""
+        stderr = "error: a project named 'existing' already exists in the registry\n"
+
+    def _fake_run(cmd, **kw):
+        return _Fail()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.create_project(treg, "existing")
+    assert out["ok"] is False
+    assert out["error"] == "a project named 'existing' already exists in the registry"
+
+
+def test_create_project_end_to_end_scaffolds_manifest_in_overlay():
+    from agentic import loader, review
+    treg, tmp = _temp_registry()
+    out = review.create_project(treg, "alpha-demo", name="Alpha Demo", document_store="none")
+    assert out["ok"] is True, out
+    assert out["slug"] == "alpha-demo"
+    manifest = tmp / "registry" / loader.LOCAL_OVERLAY / "projects" / "alpha-demo.yaml"
+    assert manifest.exists()
+    reloaded = loader.load(tmp)
+    assert "alpha-demo" in reloaded.projects
+    proj = reloaded.projects["alpha-demo"]
+    assert proj["name"] == "Alpha Demo"
+    assert proj["slug"] == "alpha-demo"
+    assert proj["document_store"] == "none"
+
+
+def test_state_exposes_known_stores():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    st = review.state(treg)
+    assert "known_stores" in st
+    assert isinstance(st["known_stores"], list)
+    assert "gws" in st["known_stores"]
+
+
+def test_api_project_new_endpoint():
+    import json
+    import threading
+    import urllib.request
+    from agentic import review
+    treg, tmp = _temp_registry()
+    server = review.make_server(treg, port=0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        port = server.server_address[1]
+        url = f"http://127.0.0.1:{port}/api/project/new"
+        payload = json.dumps({"slug": "beta-proj", "name": "Beta Proj", "document_store": "none"}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert data["ok"] is True
+            assert data["slug"] == "beta-proj"
+            assert "state" in data
+            assert any(g["slug"] == "beta-proj" for g in data["state"]["graphs"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+

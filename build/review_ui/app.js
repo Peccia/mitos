@@ -62,6 +62,11 @@ let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,descrip
 let projectEditOpen = false;   // is the Project panel's identity/repo editor open, for graphSlug
 let projectEditVals = null;    // { name, description, stage, repos:[{url,description}] } while editing
 let projectConfigOpen = false; // is the Project panel's read-only "View config" detail expanded
+let newProjectOpen = false;       // is the new project creation form open in Knowledge Graph tab
+let newProjectDraft = { slug: "", name: "", document_store: "none" };
+function resetNewProjectDraft() {
+  newProjectDraft = { slug: "", name: "", document_store: "none" };
+}
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
 //   add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}},
@@ -663,7 +668,16 @@ function renderGraph() {
   view.replaceChildren();
   const graphs = (STATE && STATE.graphs) || [];
   if (!graphs.length) {
-    view.append(el("div", "empty-state", "No projects in the registry."));
+    if (newProjectOpen) {
+      view.append(buildNewProjectWorkspace());
+    } else {
+      const empty = el("div", "empty-state");
+      empty.append(el("p", "", "No projects in the registry."));
+      const btn = el("button", "accept tiny", "+ New project");
+      btn.onclick = () => { newProjectOpen = true; renderGraph(); };
+      empty.append(btn);
+      view.append(empty);
+    }
     updateGraphDock();
     return;
   }
@@ -671,7 +685,7 @@ function renderGraph() {
   const g = graphs.find((x) => x.slug === graphSlug);
 
   const split = el("div"); split.id = "graph-split";
-  split.append(buildGraphSidebar(graphs), buildGraphWorkspace(g));
+  split.append(buildGraphSidebar(graphs), newProjectOpen ? buildNewProjectWorkspace() : buildGraphWorkspace(g));
   view.append(split);
   updateGraphDock();
 }
@@ -679,7 +693,14 @@ function renderGraph() {
 // ── left: searchable project sidebar (scales to 100s–1000s of projects) ───────
 function buildGraphSidebar(graphs) {
   const aside = el("aside"); aside.id = "graph-sidebar";
-  aside.append(el("h2", "sr-only", "Projects"));
+  const head = el("div", "graph-sidebar-head");
+  head.append(el("span", "graph-sidebar-title", "Projects"));
+  const newBtn = el("button", "tiny accept", "+ New");
+  newBtn.title = "Create a new project (Stage 1)";
+  newBtn.onclick = () => { newProjectOpen = true; renderGraph(); };
+  head.append(newBtn);
+  aside.append(head);
+
   const search = el("input", "field graph-proj-search");
   search.setAttribute("aria-label", "Filter projects");
   search.type = "search"; search.placeholder = "Filter projects…"; search.value = graphProjFilter;
@@ -720,8 +741,9 @@ function renderProjRows() {
 }
 
 function selectProject(slug) {
-  if (slug === graphSlug) return;
+  if (slug === graphSlug && !newProjectOpen) return;
   graphSlug = slug;
+  newProjectOpen = false;
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
@@ -973,6 +995,126 @@ function projectEditorCard(g) {
   card.append(actions);
   scrollCardIntoView(card);
   return card;
+}
+
+function buildNewProjectWorkspace() {
+  const ws = el("section"); ws.id = "graph-workspace";
+  const card = el("div", "card new-project-panel");
+
+  const head = el("div", "card-head");
+  head.append(el("h1", "project-panel-title", "New project"));
+  card.append(head);
+
+  card.append(el("p", "card-note muted",
+    "Scaffold a new project manifest in your private overlay (registry/local/projects/<slug>.yaml) "
+    + "via the CLI (Stage 1 of the Knowledge Graph pipeline)."));
+
+  // Slug
+  const slugWrap = el("div", "graph-field");
+  slugWrap.append(el("label", "", "Slug (identifier) *"));
+  const slugInput = el("input");
+  slugInput.type = "text";
+  slugInput.placeholder = "e.g. acme-web";
+  slugInput.value = newProjectDraft.slug || "";
+  slugInput.addEventListener("input", () => { newProjectDraft.slug = slugInput.value; });
+  slugWrap.append(slugInput);
+  card.append(slugWrap);
+
+  // Name
+  const nameWrap = el("div", "graph-field");
+  nameWrap.append(el("label", "", "Display name"));
+  const nameInput = el("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "e.g. Acme Web (defaults to slug)";
+  nameInput.value = newProjectDraft.name || "";
+  nameInput.addEventListener("input", () => { newProjectDraft.name = nameInput.value; });
+  nameWrap.append(nameInput);
+  card.append(nameWrap);
+
+  // Document store
+  const storeWrap = el("div", "graph-field");
+  storeWrap.append(el("label", "", "Document store"));
+  const storeSel = el("select", "graph-select");
+  const noneOpt = el("option", "", "none (unmapped / local-file fallback)");
+  noneOpt.value = "none";
+  storeSel.append(noneOpt);
+
+  const stores = (STATE && STATE.known_stores) ? STATE.known_stores : [];
+  for (const s of stores) {
+    const opt = el("option", "", s);
+    opt.value = s;
+    if (newProjectDraft.document_store === s) opt.selected = true;
+    storeSel.append(opt);
+  }
+  if (!newProjectDraft.document_store || newProjectDraft.document_store === "none") {
+    noneOpt.selected = true;
+  }
+  storeSel.addEventListener("change", () => { newProjectDraft.document_store = storeSel.value; });
+  storeWrap.append(storeSel);
+  storeWrap.append(el("p", "card-note muted",
+    "The MCP server backing graph init (mitos connect), or 'none' if unmapped."));
+  card.append(storeWrap);
+
+  // Enter in slug moves to name
+  slugInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); nameInput.focus(); }
+  });
+
+  const actions = el("div", "inline-actions");
+  const submitBtn = el("button", "accept tiny", "Create project");
+  const cancelBtn = el("button", "ghost tiny", "Cancel");
+
+  submitBtn.onclick = async () => {
+    const rawSlug = slugInput.value.trim();
+    if (!rawSlug) { toast("Project slug is required."); slugInput.focus(); return; }
+    if (!/^[A-Za-z0-9_-]+$/.test(rawSlug)) {
+      toast("Invalid slug — use letters, digits, '-' or '_'.");
+      slugInput.focus();
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating…";
+    try {
+      const res = await fetch("/api/project/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: rawSlug,
+          name: nameInput.value.trim(),
+          document_store: storeSel.value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast(data.error || "Failed to create project.");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Create project";
+        return;
+      }
+      if (data.state) STATE = data.state;
+      newProjectOpen = false;
+      resetNewProjectDraft();
+      toast(`Created project "${data.slug}" in overlay.`);
+      selectProject(data.slug);
+    } catch (e) {
+      toast("Request failed: " + e.message);
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Create project";
+    }
+  };
+
+  cancelBtn.onclick = () => {
+    newProjectOpen = false;
+    resetNewProjectDraft();
+    renderGraph();
+  };
+
+  actions.append(submitBtn, cancelBtn);
+  card.append(actions);
+  ws.append(card);
+
+  setTimeout(() => slugInput.focus(), 0);
+  return ws;
 }
 
 // ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
@@ -4357,6 +4499,13 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("deploy-confirm").hidden) {
     e.preventDefault();
     closeDeployConfirm();
+    return;
+  }
+  if (e.key === "Escape" && newProjectOpen) {
+    e.preventDefault();
+    newProjectOpen = false;
+    resetNewProjectDraft();
+    renderGraph();
     return;
   }
   // Prompt-library shortcuts only apply when that view is active

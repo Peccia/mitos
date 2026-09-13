@@ -982,6 +982,47 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
     return {"ok": True, "id": cid, "registry_path": registry_path}
 
 
+def create_project(reg: Registry, slug: str, name: str = "", document_store: str = "",
+                   timeout: int = 30) -> dict:
+    """Create a new project manifest in the overlay by delegating to the CLI:
+    `python build/mitos.py project add <slug> [--name <name>] [--document-store <store>] [--root <root>]`.
+
+    Invariant #11 holds by construction: this shells out to the separate `build/mitos.py`
+    entrypoint. The reach lives in a child process, mirroring refresh_staging and
+    peek_identity_effort.
+    """
+    slug = (slug or "").strip()
+    if not slug or not all(c.isalnum() or c in "-_" for c in slug):
+        return {"ok": False, "error": f"invalid slug {slug!r} — use letters, digits, '-' or '_'"}
+
+    cmd = [sys.executable, str(Path(__file__).resolve().parents[1] / "mitos.py"),
+           "project", "add", slug,
+           "--document-store", (document_store or "none").strip()]
+    if name and name.strip():
+        cmd.extend(["--name", name.strip()])
+    if reg.root:
+        cmd.extend(["--root", str(reg.root)])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(reg.root if reg.root else Path(__file__).resolve().parents[2]),
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return {"ok": False, "error": f"project creation failed: {e}"}
+
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        if err.startswith("error: "):
+            err = err[len("error: "):]
+        return {"ok": False, "error": err}
+
+    return {"ok": True, "slug": slug}
+
+
 # ── propose (a console prompt-library edit → inbox candidate) ─────────────────
 def _slug_path(registry_path: str) -> str:
     """Filesystem-safe candidate slug from a registry path — last two parts, sans
@@ -2198,6 +2239,8 @@ def state(reg: Registry) -> dict:
         "candidates": load_candidates(reg),
         "prompts": prompt_index(reg),
         "graphs": graph_index(reg),
+        # Available document stores (servers defined in connections/servers.yaml and overlay)
+        "known_stores": sorted((reg.servers.get("servers") or {}).keys()),
         # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
         "known_targets": sorted(loader.KNOWN_TARGETS),
@@ -2402,7 +2445,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/graph/purge", "/api/graph/refresh",
                                   "/api/graph/peek-identity",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
-                                  "/api/project/edit",
+                                  "/api/project/edit", "/api/project/new",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
@@ -2520,6 +2563,16 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     holder["reg"], str(body.get("slug", "")),
                     fields if isinstance(fields, dict) else {},
                     str(body.get("reason", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/project/new":
+                # create a new project via the CLI (Stage 1 of graph init)
+                slug = str(body.get("slug", "")).strip()
+                name = str(body.get("name", "")).strip()
+                store = str(body.get("document_store", "") or "").strip()
+                result = create_project(holder["reg"], slug, name=name, document_store=store)
+                if result.get("ok"):
+                    holder["reg"] = loader.load(holder["reg"].root)
+                    result["state"] = state(holder["reg"])
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/dismiss":
                 # Discovery's manual Dismiss action — moves doc(s) to Recovery
