@@ -2945,90 +2945,16 @@ function buildContextualEditor(opts) {
   return { root, textarea: ta, refreshStatus };
 }
 
-// ── extends_skill/extends_role selects — parsed client-side from each candidate
 // parent skill's raw body (mirrors review.py's _ORG_ROLE_HEADING_RE parsing) so the
 // dropdown works without depending on orgData, which only covers org_domain skills and
 // may not be fetched yet when a skill is opened from the Prompt Library. ────────────
 const EXT_ROLE_HEADING_RE = /^###\s+(.+?)\s+—\s+.+$/;
 
-function extendableSkills() {
-  return (STATE.prompts.skills || []).filter((s) =>
-    !s.extends_skill && s.body.includes("## Extended C-suite Roles"));
-}
-
-function getRolesForSkill(skillName) {
-  const skill = (STATE.prompts.skills || []).find((s) => s.name === skillName);
-  if (!skill) return [];
-  const roles = [];
-  let inExtended = false;
-  for (const raw of skill.body.split("\n")) {
-    const line = raw.trim();
-    if (!inExtended) {
-      if (line === "## Extended C-suite Roles") inExtended = true;
-      continue;
-    }
-    if (line.startsWith("## ") && !line.startsWith("### ")) break;
-    const m = line.match(EXT_ROLE_HEADING_RE);
-    if (m) roles.push(m[1].trim());
-  }
-  return roles;
-}
-
-// Builds the linked extends_skill/extends_role <select> pair. `onChange(skillVal,
 // roleVal)` fires after any user change (including the automatic role reset when the
 // parent skill changes) — callers use it to persist drafts or refresh dependent UI
 // (e.g. the New Skill form's target checkboxes). Preselects `currentSkill`/`currentRole`
 // even if they no longer resolve (stale registry state), injecting them as an extra
 // option rather than silently discarding the saved value.
-function buildExtensionSelects(currentSkill, currentRole, onChange) {
-  const skillSelect = document.createElement("select");
-  skillSelect.className = "graph-select";
-  const roleSelect = document.createElement("select");
-  roleSelect.className = "graph-select";
-
-  function populateSkillOptions() {
-    skillSelect.replaceChildren();
-    skillSelect.append(new Option("— none (regular skill) —", ""));
-    const eligible = extendableSkills();
-    for (const s of eligible) skillSelect.append(new Option(s.name, s.name));
-    if (currentSkill && !eligible.some((s) => s.name === currentSkill)) {
-      skillSelect.append(new Option(`${currentSkill} (saved value, not currently extendable)`, currentSkill));
-    }
-    skillSelect.value = currentSkill || "";
-  }
-
-  function populateRoleOptions(wantRole) {
-    roleSelect.replaceChildren();
-    const parent = skillSelect.value;
-    if (!parent) {
-      roleSelect.append(new Option("— select a skill first —", ""));
-      roleSelect.disabled = true;
-      return;
-    }
-    roleSelect.disabled = false;
-    const roles = getRolesForSkill(parent);
-    roleSelect.append(new Option("— none —", ""));
-    for (const r of roles) roleSelect.append(new Option(r, r));
-    if (wantRole && !roles.includes(wantRole)) {
-      roleSelect.append(new Option(`${wantRole} (saved value, not found in parent body)`, wantRole));
-    }
-    roleSelect.value = wantRole || "";
-  }
-
-  populateSkillOptions();
-  populateRoleOptions(currentRole);
-
-  skillSelect.onchange = () => {
-    populateRoleOptions("");
-    if (onChange) onChange(skillSelect.value, roleSelect.value);
-  };
-  roleSelect.onchange = () => {
-    if (onChange) onChange(skillSelect.value, roleSelect.value);
-  };
-
-  return { skillSelect, roleSelect };
-}
-
 function fieldWrap(label, node) {
   const f = el("div", "graph-field");
   f.append(el("label", "", label));
@@ -3077,7 +3003,6 @@ function buildMetaPanel(p) {
   grid.append(textField("version", "Version", "1.0.0"));
   grid.append(textField("category", "Category", "general"));
   wrap.append(grid);
-  // extends_skill/extends_role live in the Skills & Orgs tab (renderSkillExtensionSection)
   // — not here, to avoid the same two-tabs-edit-the-same-thing problem Supporting Files had.
 
   const targetsWrap = el("div", "graph-field");
@@ -3656,7 +3581,6 @@ function renderSkillDrawer(s, domain) {
   body.append(actBar);
 
   body.append(renderSkillFilesSection(s));
-  body.append(renderSkillExtensionSection(s));
   body.append(renderSkillScopeSection(s));
 
   // Org structure panel — only for org-domain skills
@@ -3721,81 +3645,16 @@ function renderSkillFilesSection(s) {
   return section;
 }
 
-// ── skill-row extension assignment: extends_skill/extends_role, moved here from the
 // Prompt Library metadata panel for the same reason as Supporting Files — it's a
 // structural choice about where this skill sits in an org, not part of authoring its
 // body. Shares metaDrafts (only the two extension keys) and saveDraft with the Prompt
 // Library, same `skill:<name>` key, so a draft either surface starts is visible from
 // both and Prompt Library's "Revert" still discards it as part of a full reset. ────
-function renderSkillExtensionSection(s) {
-  const key = `skill:${s.name}`;
-  const section = el("div", "skill-extension-section");
-
-  const header = el("div", "resources-panel-header");
-  header.append(el("h4", "", "Extension"));
-  const badge = el("span", "meta-modified-badge hidden", "● extension modified");
-  header.append(badge);
-  section.append(header);
-  section.append(el("div", "muted resources-hint",
-    "Both fields together turn this skill into an extension — its body splices into the "
-    + "named parent skill's matching role section at render time; it never deploys "
-    + "standalone. Leave both blank for a regular skill."));
-
-  const actions = el("div", "detail-actions");
-  const reason = el("input");
-  reason.type = "text";
-  reason.placeholder = "Reason (optional — logged on accept)";
-  const save = el("button", "accept tiny", "Save extension to inbox");
-  save.title = "Propose this skill's extension assignment as an inbox candidate";
-  const revert = el("button", "reject tiny", "Revert extension");
-  revert.title = "Discard the local extends_skill/extends_role edit for this skill";
-
-  function refreshActionState() {
-    const d = metaDrafts[key];
-    const hasDraft = !!d && (("extends_skill" in d) || ("extends_role" in d));
-    save.disabled = !hasDraft;
-    revert.disabled = !hasDraft;
-    badge.classList.toggle("hidden", !hasDraft);
-  }
-
-  const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
-  const { skillSelect, roleSelect } = buildExtensionSelects(
-    current.extends_skill, current.extends_role,
-    (skillVal, roleVal) => {
-      metaDrafts[key] = metaDrafts[key] || {};
-      metaDrafts[key].extends_skill = skillVal;
-      metaDrafts[key].extends_role = roleVal;
-      refreshActionState();
-    });
-  const extGrid = el("div", "meta-grid");
-  extGrid.append(fieldWrap("Extends skill", skillSelect));
-  extGrid.append(fieldWrap("Extends role", roleSelect));
-  section.append(extGrid);
-  refreshActionState();
-
-  save.onclick = () => {
-    const body = drafts[key] != null ? drafts[key] : s.body;
-    saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
-  };
-  revert.onclick = () => {
-    const d = metaDrafts[key];
-    if (d) {
-      delete d.extends_skill;
-      delete d.extends_role;
-      if (!Object.keys(d).length) delete metaDrafts[key];
-    }
-    renderSkills();
-  };
-  actions.append(reason, save, revert);
-  section.append(actions);
-  return section;
-}
-
 // ── skill-row scope assignment: global (default, deploys to every shared/global
 // directory a target offers — the antigravity_skills dir, the personal
 // claude_code_skills dir, mitos-agent, claude-app) vs project (deploys ONLY to the
 // projects that name this skill in their manifest's `skills:` list, on whichever of
-// claude-code/antigravity it targets). Mirrors renderSkillExtensionSection's pattern —
+// claude-code/antigravity it targets). Mirrors the Supporting Files panel's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
 // projects itself is read-only here: the console doesn't write project manifests
 // (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
@@ -3897,7 +3756,7 @@ function renderSkillScopeSection(s) {
 
 // ── renderSkillOrgSection: org role tree / Agent-MD folder view ──────────────
 // Embedded within the expanded body of an org-domain skill row. Uses the same
-// renderRoleTree / renderAgentsMdPicker / renderAgentsMdTree functions the old
+// renderDomainSummary / renderAgentsMdPicker / renderAgentsMdTree functions the old
 // Org tab used — they are unchanged; only the container changes.
 function renderSkillOrgSection(skillName, domain) {
   const section = el("div", "skill-org-section");
@@ -3921,7 +3780,7 @@ function renderSkillOrgSection(skillName, domain) {
   section.append(viewToggle);
 
   if (mode === "role") {
-    section.append(renderRoleTree(orgData[domain]));
+    section.append(renderDomainSummary(orgData[domain]));
   } else {
     section.append(renderAgentsMdPicker());
     section.append(renderAgentsMdTree());
@@ -3935,8 +3794,6 @@ function renderSkillOrgSection(skillName, domain) {
 let newSkillOpen = false;
 let newSkillDraftBody = "# Instructions\n\n";
 let newSkillPrefillName = "";         // set by the Org tab's "Edit playbook" before jumping here
-let newSkillPrefillExtendsSkill = ""; // set by a role card's "+ Extend department" button
-let newSkillPrefillExtendsRole = "";
 // Everything the operator types survives a re-render while the form is open (e.g. an
 // unrelated refresh() firing elsewhere, or loadOrgTree()'s renderSkills() call landing
 // mid-edit) — without this, any such render rebuilds the form from scratch: prefills
@@ -3956,8 +3813,7 @@ function resetNewSkillDraft() {
 
 function newSkillForm() {
   const wrap = el("div", "new-skill-form");
-  const isExtension = !!newSkillPrefillExtendsSkill;
-  wrap.append(el("h3", "", isExtension ? "New department extension" : "New skill"));
+  wrap.append(el("h3", "", "New skill"));
 
   const inputs = {};
   const field = (key, label, ph) => {
@@ -3989,11 +3845,6 @@ function newSkillForm() {
   nameInput.addEventListener("keydown", focusNext(descInput));
   descInput.addEventListener("keydown", focusNext(catInput));
 
-  const prefillExtSkill = newSkillPrefillExtendsSkill;
-  const prefillExtRole = newSkillPrefillExtendsRole;
-  newSkillPrefillExtendsSkill = "";
-  newSkillPrefillExtendsRole = "";
-
   const targetsWrap = el("div", "graph-field");
   targetsWrap.append(el("label", "", "Targets"));
   const targetsRow = el("div", "target-checks");
@@ -4016,28 +3867,6 @@ function newSkillForm() {
   // an extension defaults to its parent's targets — it never deploys standalone, but
   // targets is still required shape (schema uniformity), so save the operator a click.
   // Re-applied live whenever the parent select changes, not just on initial prefill.
-  function applyParentTargets(parentName) {
-    const parentTargets = new Set(
-      (STATE.prompts.skills || []).find((s) => s.name === parentName)?.targets || []);
-    for (const t of (STATE.known_targets || [])) targetBoxes[t].checked = parentTargets.has(t);
-    newSkillFieldDraft.targets = [...parentTargets];
-  }
-
-  const { skillSelect: extSkillSelect, roleSelect: extRoleSelect } = buildExtensionSelects(
-    prefillExtSkill, prefillExtRole,
-    (skillVal) => { if (skillVal) applyParentTargets(skillVal); });
-  // Skip the auto-populate once the operator has touched targets (draft.targets set) —
-  // a re-render mid-edit (see the draft-state note above) must not clobber their choice.
-  if (isExtension && !newSkillFieldDraft.targets) applyParentTargets(prefillExtSkill);
-
-  const extGrid = el("div", "meta-grid");
-  extGrid.append(fieldWrap("Extends skill (leave blank for a regular skill)", extSkillSelect));
-  extGrid.append(fieldWrap("Extends role", extRoleSelect));
-  wrap.append(extGrid);
-  wrap.append(el("div", "muted extension-hint",
-    "Both fields together turn this into an extension — it splices into the named "
-    + "parent skill's matching role section at render time and never deploys standalone."));
-
   wrap.append(targetsWrap);
 
   const editor = buildContextualEditor({
@@ -4057,12 +3886,10 @@ function newSkillForm() {
   const reason = el("input");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
-  const create = el("button", "accept", isExtension ? "Create extension" : "Create skill");
+  const create = el("button", "accept", "Create skill");
   create.onclick = async () => {
     const targets = (STATE.known_targets || []).filter((t) => targetBoxes[t].checked);
     const fm = { description: descInput.value.trim(), category: catInput.value.trim(), targets };
-    if (extSkillSelect.value.trim()) fm.extends_skill = extSkillSelect.value.trim();
-    if (extRoleSelect.value.trim()) fm.extends_role = extRoleSelect.value.trim();
     const res = await fetch("/api/skills/new", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4166,7 +3993,7 @@ function renderOrg() {
   box.append(toolbar);
 
   if (orgViewMode === "role") {
-    box.append(renderRoleTree(orgData[orgDomain]));
+    box.append(renderDomainSummary(orgData[orgDomain]));
   } else {
     box.append(renderAgentsMdPicker());
     box.append(renderAgentsMdTree());
@@ -4216,75 +4043,18 @@ function newOrgDomainForm() {
   return wrap;
 }
 
-function renderRoleTree(data) {
+function renderDomainSummary(data) {
+  // A domain playbook is prose about a market's function and output, not a structure to
+  // draw. The old role tree visualized a C-suite that no longer exists; what is useful is
+  // which skill carries the domain and what it claims to be for.
   const wrap = el("div", "org-tree");
-  const chainWrap = el("div", "org-chain");
-  chainWrap.append(el("h4", "", "Primary chain"));
-  if (data.primaryChain.length) {
-    const list = el("ol", "org-chain-list");
-    for (const step of data.primaryChain) {
-      const li = el("li");
-      li.append(el("strong", "", step.title), document.createTextNode(" — " + step.subtitle));
-      list.append(li);
-    }
-    chainWrap.append(list);
-  } else {
-    chainWrap.append(el("div", "muted", data.primaryChainSummary || "No primary chain parsed."));
-  }
-  wrap.append(chainWrap);
-
-  if (data.extendedRoles.length) {
-    const rolesWrap = el("div", "org-roles");
-    rolesWrap.append(el("h4", "", "Extended C-suite"));
-    for (const role of data.extendedRoles) rolesWrap.append(roleCard(role, data.skill));
-    wrap.append(rolesWrap);
-  }
+  if (!data) return wrap;
+  wrap.append(el("h4", "", data.skill || "domain playbook"));
+  if (data.description) wrap.append(el("div", "muted", data.description));
+  wrap.append(el("div", "muted", "Open the skill above to read or edit the playbook."));
   return wrap;
 }
 
-function roleCard(role, parentSkill) {
-  const field = (label, text) => {
-    const f = el("div", "role-field");
-    f.append(el("strong", "", label + ": "), document.createTextNode(text));
-    return f;
-  };
-  const details = el("details", "org-node-group role-card");
-  details.append(el("summary", "", `${role.title} — ${role.subtitle}`));
-  const body = el("div", "role-card-body");
-  if (role.lens) body.append(field("Lens", role.lens));
-  if (role.team) body.append(field("Team", role.team));
-  if (role.vocabulary) body.append(field("Vocabulary", role.vocabulary));
-  if (role.trigger) body.append(field("Trigger", role.trigger));
-
-  const exts = role.activeExtensions || [];
-  if (exts.length) {
-    const extWrap = el("div", "role-extensions");
-    extWrap.append(el("strong", "", "Active extensions: "));
-    for (const e of exts) {
-      const badge = el("span", "extension-badge", e.name);
-      if (e.description) badge.title = e.description;
-      extWrap.append(badge);
-    }
-    body.append(extWrap);
-  }
-
-  if (parentSkill) {
-    const extendBtn = el("button", "ghost tiny", "+ Extend department");
-    extendBtn.title = `Add a custom skill that extends ${parentSkill}'s ${role.title} role`;
-    extendBtn.onclick = (ev) => {
-      ev.preventDefault();   // don't toggle the <details> disclosure
-      newSkillPrefillExtendsSkill = parentSkill;
-      newSkillPrefillExtendsRole = role.title;
-      newSkillPrefillName = `${parentSkill}-${role.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-      newSkillOpen = true;
-      renderSkills();
-    };
-    body.append(extendBtn);
-  }
-
-  details.append(body);
-  return details;
-}
 
 function renderAgentsMdPicker() {
   const machines = STATE.agents_md_machines || [];

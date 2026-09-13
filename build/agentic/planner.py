@@ -278,8 +278,8 @@ def _plan_claude_app(reg, machine_name, spec, paths) -> list[Output]:
     staging = paths.get(sk.get("deploy_to_key", "claude_skills_staging"))
     if sk and staging:
         for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
-            body = render.compose_skill_body(reg, skill)
             resources = render.compose_skill_resources(reg, skill)
+            body = skill.body
             content = render.render_skill(skill, "claude-app", body=body)
             deploy_path = f"{staging.rstrip('/')}/{skill.name}.zip"
             # zip_members stays empty for the common case (no resources) so _payload
@@ -739,10 +739,6 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
       time). Curation is a personal, per-box choice, so it lives on the (overlayable)
       machine profile — never on the target spec, which is core and shared by everyone.
 
-    A skill carrying `extends_skill` never deploys standalone — it splices into its
-    parent's body at render time only (render.compose_skill_body); shipping it as its
-    own duplicate file would clutter every target it targets.
-
     On top of those two, a third, non-curatable gate: a skill declaring
     `requires_server:` is dropped unless this machine declares that server in its
     `document_store:`. A skill that is nothing but instructions for one MCP server's
@@ -781,7 +777,6 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     declared = _declared_deliverables(reg)
     return [s for s in reg.skills.values()
             if tgt in s.targets
-            and not s.frontmatter.get("extends_skill")
             and (s.requires_server is None or s.requires_server in stores)
             and (s.delivers is None or s.delivers in declared)
             and (include is None or s.name in include)
@@ -820,8 +815,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
         sk_spec = tspec.get("skills")
         if not sk_spec:
             continue
-        candidates = {s.name for s in reg.skills.values()
-                      if tname in s.targets and not s.frontmatter.get("extends_skill")}
+        candidates = {s.name for s in reg.skills.values() if tname in s.targets}
         selected = _selected_skills(reg, sk_spec, machine)
         selected_names = {s.name for s in selected}
         delivered.update(s.delivers for s in selected if s.delivers)
@@ -879,8 +873,7 @@ def _skill_resource_outputs(skill, resources: dict, target: str, base_dir: str,
     """One Output per skill resource file (examples/*, scripts/*), deployed alongside
     SKILL.md at base_dir. `sources` names the resource's OWN registry-relative path (not
     SKILL.md) so adopt/harvest routes an edited example/script back to the file that
-    authored it (R5) — resources merged in from an extension route back to the
-    extension's own file, never the parent's."""
+    authored it, never to SKILL.md."""
     outs: list[Output] = []
     for relpath, res in sorted(resources.items()):
         deploy_path = f"{base_dir.rstrip('/')}/{relpath}"
@@ -1328,7 +1321,7 @@ def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
             sub = sk["subdir"].format(category=skill.category, name=skill.name)
             base_dir = f"{home.rstrip('/')}/{sub}"
             policy = sk.get("drift_policy", "harvest")
-            body = render.compose_skill_body(reg, skill)
+            body = skill.body
             resources = render.compose_skill_resources(reg, skill)
             deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
@@ -1465,7 +1458,7 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
                 continue
             base_dir = f"{global_skills_dir.rstrip('/')}/{skill.name}"
             policy = sk.get("drift_policy", "harvest")
-            body = render.compose_skill_body(reg, skill)
+            body = skill.body
             resources = render.compose_skill_resources(reg, skill)
             deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
@@ -1492,12 +1485,11 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
         bound_skills = set(proj.get("skills") or [])
         for skill in reg.skills.values():
             if ("claude-code" not in skill.targets or skill.name not in bound_skills
-                    or skill.scope != "project"
-                    or skill.frontmatter.get("extends_skill")):
+                    or skill.scope != "project"):
                 continue
             base_dir = f"{local}/{sk_subdir.format(name=skill.name)}"
             policy = sk.get("drift_policy", "harvest")
-            body = render.compose_skill_body(reg, skill)
+            body = skill.body
             resources = render.compose_skill_resources(reg, skill)
             deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
@@ -1553,7 +1545,7 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             owned_prefix=f"mcp({alias}/", target_file=deploy_path,
         ))
     # Skills — Antigravity follows the directory-based Agent Skills standard, so this
-    # mirrors _plan_claude_code exactly: <dir>/<name>/SKILL.md with extension-composed
+    # mirrors _plan_claude_code exactly: <dir>/<name>/SKILL.md with the skill's own
     # body plus supporting-file outputs. Global scope deploys to the machine's
     # antigravity_skills path (~/.gemini/config/skills/); project scope deploys only
     # into bound checkouts at <local_path>/.agents/skills/ (the workspace convention).
@@ -1565,7 +1557,7 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             if skill.scope == "project":
                 continue
             base_dir = f"{skills_dir.rstrip('/')}/{sk['subdir'].format(name=skill.name)}"
-            body = render.compose_skill_body(reg, skill)
+            body = skill.body
             resources = render.compose_skill_resources(reg, skill)
             deploy_path = f"{base_dir}/SKILL.md"
             outputs.append(Output(
@@ -1584,11 +1576,10 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             bound_skills = set(proj.get("skills") or [])
             for skill in reg.skills.values():
                 if (skill.name not in bound_skills or "antigravity" not in skill.targets
-                        or skill.scope != "project"
-                        or skill.frontmatter.get("extends_skill")):
+                        or skill.scope != "project"):
                     continue
                 base_dir = f"{local}/.agents/skills/{sk['subdir'].format(name=skill.name)}"
-                body = render.compose_skill_body(reg, skill)
+                body = skill.body
                 resources = render.compose_skill_resources(reg, skill)
                 deploy_path = f"{base_dir}/SKILL.md"
                 outputs.append(Output(

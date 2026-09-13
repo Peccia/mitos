@@ -1185,7 +1185,7 @@ def test_propose_new_org_domain_creates_domain_skill_and_accepts_cleanly():
     idx = org_index(reloaded)
     assert "finance" in idx
     assert idx["finance"]["skill"] == "org-finance"
-    assert idx["finance"]["primaryChain"], "scaffolded body must parse into a primary chain"
+    assert idx["finance"]["skill"] == "org-finance"
 
 
 def test_propose_new_org_domain_rejects_existing_domain_and_bad_slug():
@@ -1203,25 +1203,20 @@ def test_propose_new_org_domain_rejects_existing_domain_and_bad_slug():
     assert not out["ok"]
 
 
-def test_org_index_parses_hierarchy_table_and_skill_roles():
+def test_org_index_lists_every_domain_and_the_skill_carrying_it():
+    """Domains are discovered from `org_domain` frontmatter, not a routing table. The index
+    is deliberately thin: a domain playbook is prose about a market's function and output,
+    so there is no structure to parse out of it and nothing to keep in sync with its
+    headings."""
     from agentic.review import org_index
 
     result = org_index(reg)
-    assert "software" in result
     assert result["software"]["skill"] == "org-software"
-    assert result["software"]["primaryChain"], "expected a non-empty primary chain"
-    cto = next((r for r in result["software"]["extendedRoles"] if r["title"] == "CTO"), None)
-    assert cto is not None
-    assert cto["lens"]
-    # a Lens/Trigger bullet that wraps onto an indented continuation line must not be
-    # truncated at the first physical line
-    assert "SEV0 post-mortems" in cto["trigger"]
-
-    # design and marketing share the same authored structure — same shape, no crash
+    assert result["software"]["description"]
     for domain in ("design", "marketing"):
-        assert domain in result
-        assert result[domain]["primaryChain"]
-        assert result[domain]["extendedRoles"]
+        assert result[domain]["skill"] == f"org-{domain}"
+    # No role structure is read out of the body — a heading rename cannot break the console.
+    assert set(result["software"]) == {"skill", "description"}
 
 
 def test_org_tree_reconstructs_agents_md_deploy_paths():
@@ -1497,72 +1492,6 @@ def test_propose_meta_edit_on_overlay_skill_routes_to_local():
     assert (tmp / "registry" / core_rel).read_text(encoding="utf-8") == core_text
 
 
-# ── skill extensions via the console (extends_skill/extends_role) — R1/R2 ──────
-def test_propose_new_skill_with_extension_fields_validates_and_accepts():
-    from agentic.review import decide, propose_new_skill
-
-    treg, tmp = _temp_registry()
-    assert "org-software" in treg.skills
-    out = propose_new_skill(
-        treg, "org-data-science",
-        {"description": "Data science CTO extension.", "targets": ["mitos-agent"],
-        "category": "productivity", "extends_skill": "org-software",
-        "extends_role": "CTO"},
-        "Extra CTO guidance for data science work.", "")
-    assert out["ok"], out
-
-    acc = decide(loader.load(tmp), out["id"], "accept", "")
-    assert acc["ok"], acc
-    written = (tmp / "registry" / "local" / "skills" / "org-data-science"
-              / "SKILL.md").read_text(encoding="utf-8")
-    assert "extends_skill: org-software" in written
-    assert "extends_role: CTO" in written
-
-    # the extension never deploys standalone; it only appears spliced into the parent
-    reloaded = loader.load(tmp)
-    from agentic import planner as plannermod
-    selected = plannermod._selected_skills(reloaded, {"include_target": "mitos-agent"})
-    assert "org-data-science" not in {s.name for s in selected}
-    parent = reloaded.skills["org-software"]
-    from agentic import render as rendermod
-    assert "Extra CTO guidance for data science work." in rendermod.compose_skill_body(
-        reloaded, parent)
-
-
-def test_propose_new_skill_rejects_extension_without_matching_role_field():
-    from agentic.review import propose_new_skill
-
-    treg, _tmp = _temp_registry()
-    out = propose_new_skill(
-        treg, "org-half-ext", {"targets": ["mitos-agent"], "extends_skill": "org-software"},
-        "body")
-    assert not out["ok"]
-    assert "must be specified together" in out["error"]
-
-
-def test_propose_new_skill_rejects_extension_of_unknown_parent():
-    from agentic.review import propose_new_skill
-
-    treg, _tmp = _temp_registry()
-    out = propose_new_skill(
-        treg, "org-bad-ext",
-        {"targets": ["mitos-agent"], "extends_skill": "no-such-org", "extends_role": "CTO"},
-        "body")
-    assert not out["ok"]
-    assert "is not a known skill" in out["error"]
-
-
-def test_propose_meta_edit_rejects_bad_extension_pair():
-    from agentic.review import propose_meta_edit
-
-    treg, _tmp = _temp_registry()
-    skill = next(iter(treg.skills.values()))
-    out = propose_meta_edit(treg, "skill", skill.name,
-                            {"extends_skill": "org-software"}, skill.body)
-    assert not out["ok"]
-    assert "must be specified together" in out["error"]
-
-
 # ── skill scope: global (default) | project — the Skills & Orgs Scope control ───
 def test_propose_meta_edit_accepts_valid_scope_and_it_survives_accept():
     from agentic.review import decide, propose_meta_edit
@@ -1588,7 +1517,7 @@ def test_propose_meta_edit_rejects_invalid_scope_value():
     assert "invalid scope" in out["error"]
 
 def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
-    """Unlike the extends_skill/target-binding checks, scope: project has no per-target
+    """Unlike the target-binding check, scope: project has no per-target
     incompatibility — mitos-agent/claude-app targets simply ignore it (see loader.
     validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
     from agentic.review import propose_meta_edit

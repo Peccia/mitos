@@ -240,13 +240,8 @@ provenance, so they sit there as a single compact line rather than a grid of car
   else); binary files are rejected with a warning. This section proposes the **full replacement
   set** on save — leave it untouched to propose no change to existing files; explicitly clear
   every entry to delete them all on accept.
-- **Extension**: In the drawer, two dropdowns set `extends_skill`/`extends_role` (see
-  **Extending a role** below). The skill picker lists only skills eligible to be extended (those
-  carrying an `## Extended C-suite Roles` section); choosing one populates the role picker from
-  that parent's roles. Setting both turns the skill into an extension; clearing both makes it a
-  regular skill again. Saving proposes a `kind: drift` candidate.
 - **+ New skill**: A one-screen form — name (slug), description, category, target checkboxes,
-  optional `extends_skill`/`extends_role`, and a Supporting Files editor — feeding into the
+  and a Supporting Files editor — feeding into the
   Contextual Editor for the body. Creating proposes a `kind: new` candidate; nothing is written to
   `registry/` until you Accept it in the Inbox, and it always lands in your private overlay
   (`registry/local/skills/<name>/SKILL.md`), never core.
@@ -258,23 +253,21 @@ provenance, so they sit there as a single compact line rather than a grid of car
   exclude a tool.
 - **Import from .zip**: A placeholder for a future release — no backend yet.
 
-### Org structure: Role Tree, extending a role, and the Agent-MD Folder View
+### Org domains and the Agent-MD Folder View
 
-Org structure is a **visualization** — it never edits the `org-*/SKILL.md` playbooks
-directly; those stay hand-authored prose. **Orgs are global domain
-skills and are never attached to a project** — the only org edge in the graph is an effort's
+An org is a **domain playbook** — prose about what a market's work must elicit and produce.
+It is hand-authored and never edited structurally from here. **Orgs are global domain skills
+and are never attached to a project** — the only org edge in the graph is an effort's
 `Org domain` tag, set in the Knowledge Graph tab.
 
-- **Role Tree**: The primary delegation chain (CEO → ... → Assistant) plus the Extended C-suite
-  roles (CTO, CFO, COO, CMO, CHCO) parsed from that domain's `org-*/SKILL.md` — each role expands
-  to show its Lens, Team, Vocabulary, Trigger, and any **active extensions** (skills that
-  `extends_skill`/`extends_role` it). The C-suite titles are identical across all domains; only
-  their lens is domain-flavored.
-- **+ Extend department**: On each role card, opens the New Skill form prefilled with
-  `extends_skill`/`extends_role` for that role — the console's write path onto an existing role.
-  The new skill's body splices into the parent's matching role section **at render time only**;
-  the parent skill's own `SKILL.md` is never modified, and the extension never deploys standalone
-  (it exists only spliced into its parent).
+- **Domain summary**: The skill carrying the domain and what it claims to be for, read from its
+  frontmatter. Nothing is parsed out of the body: a playbook's headings are prose the author
+  owns, so renaming one cannot break the console. Read or edit the playbook itself in the skill
+  drawer above, like any other skill.
+- **+ New org**: Seeds an `org-<domain>` skill with the section headings a domain playbook is
+  expected to fill — what it is for, how to turn a wish into something measurable, what closes
+  each coverage dimension, and what to surface unprompted. The substance is left to whoever
+  knows the market.
 - **Agent-MD Folder View**: The actual on-disk `AGENTS.md`/`AGENTS_DETAILS.md` tree a chosen
   machine deploys — including any dynamically discovered branches under
   `registry/context/<branch>/AGENTS.md` — reconstructed from the same plan `deploy` would use.

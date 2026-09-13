@@ -1841,71 +1841,6 @@ def test_cmd_sync_deploy_fails_when_pull_did_not_fix_overlay():
 
 
 # ── skill extensions (render-time splice only) — R1/R2 ─────────────────────────
-def test_compose_skill_body_no_extension_returns_original():
-    parent = reg.skills["org-software"]
-    assert render.compose_skill_body(reg, parent) == parent.body
-
-def test_compose_skill_body_splices_extension_under_anchor_never_mutates_registry():
-    import copy
-    from agentic.loader import Skill
-    rig = copy.deepcopy(reg)
-    rig.skills["org-data-science"] = Skill(
-        name="org-data-science", rel="local/skills/org-data-science/SKILL.md",
-        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
-                    "extends_role": "CTO"},
-        body="Extra CTO guidance for data science work.")
-    parent = rig.skills["org-software"]
-    composed = render.compose_skill_body(rig, parent)
-    assert "### CTO — org-data-science (extension)" in composed
-    assert "Extra CTO guidance for data science work." in composed
-    # inserted before the next top-level heading (Red-Team Protocols), not after it —
-    # order-independent, unlike matching a specific existing role heading (R2)
-    idx_ext = composed.index("### CTO — org-data-science (extension)")
-    idx_redteam = composed.index("## Red-Team Protocols")
-    assert idx_ext < idx_redteam
-    # R1: the loaded Skill.body is never mutated — only the render-time copy is composed
-    assert parent.body == reg.skills["org-software"].body
-    assert "org-data-science" not in parent.body
-
-def test_compose_skill_resources_merges_and_extension_wins_on_collision():
-    import copy
-    from agentic.loader import Skill, SkillResource
-    rig = copy.deepcopy(reg)
-    parent = rig.skills["org-software"]
-    parent.resources = {"examples/base.md": SkillResource(
-        text="base\n", rel="skills/org-software/examples/base.md")}
-    rig.skills["org-ext"] = Skill(
-        name="org-ext", rel="local/skills/org-ext/SKILL.md",
-        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
-                    "extends_role": "CTO"},
-        body="ext body",
-        resources={
-            "examples/base.md": SkillResource(
-                text="override\n", rel="local/skills/org-ext/examples/base.md"),
-            "scripts/check.sh": SkillResource(
-                text="#!/bin/sh\n", rel="local/skills/org-ext/scripts/check.sh"),
-        })
-    merged = render.compose_skill_resources(rig, parent)
-    assert merged["examples/base.md"].text == "override\n"      # extension wins on collision
-    assert merged["examples/base.md"].rel == "local/skills/org-ext/examples/base.md"
-    assert "scripts/check.sh" in merged
-
-def test_selected_skills_excludes_extension_skills():
-    import copy
-    from agentic import planner as plannermod
-    from agentic.loader import Skill
-    rig = copy.deepcopy(reg)
-    rig.skills["org-ext2"] = Skill(
-        name="org-ext2", rel="local/skills/org-ext2/SKILL.md",
-        frontmatter={"targets": ["mitos-agent"], "extends_skill": "org-software",
-                    "extends_role": "CFO"},
-        body="ext body")
-    selected = plannermod._selected_skills(rig, {"include_target": "mitos-agent"})
-    names = {s.name for s in selected}
-    assert "org-ext2" not in names
-    assert "org-software" in names
-
-
 # ── skill scope: global (default) | project ─────────────────────────────────────
 def test_antigravity_deploys_global_scope_skill_to_shared_dir():
     """Default scope (global): an antigravity-targeted skill deploys to the shared
@@ -2249,9 +2184,9 @@ def test_plan_mitos_agent_emits_skill_resource_outputs():
     assert script_out.executable is True
     assert example_out.executable is False
 
-def test_plan_antigravity_emits_skill_resources_and_composed_body():
-    """Antigravity mirrors claude-code: supporting files deploy alongside SKILL.md and
-    an extension's body is spliced in — the historical antigravity path dropped both."""
+def test_plan_antigravity_emits_skill_resources_alongside_skill_md():
+    """Antigravity mirrors claude-code: supporting files deploy alongside SKILL.md, each
+    routing back to its OWN registry path — the historical antigravity path dropped them."""
     import copy
     from agentic.loader import Skill, SkillResource
     r = copy.deepcopy(reg)
@@ -2260,25 +2195,17 @@ def test_plan_antigravity_emits_skill_resources_and_composed_body():
     r.skills["ag-skill"] = Skill(
         name="ag-skill", rel="local/skills/ag-skill/SKILL.md",
         frontmatter={"name": "ag-skill", "targets": ["antigravity"]},
-        body="## Extended C-suite Roles\n\nbase body",
+        body="base body",
         resources={"scripts/check.sh": SkillResource(
             text="#!/bin/sh\necho ok\n", rel="local/skills/ag-skill/scripts/check.sh")})
-    r.skills["ag-ext"] = Skill(
-        name="ag-ext", rel="local/skills/ag-ext/SKILL.md",
-        frontmatter={"name": "ag-ext", "targets": ["antigravity"],
-                     "extends_skill": "ag-skill", "extends_role": "CTO"},
-        body="extension body")
     outs = planner.plan_machine(r, "example-windows")
     skill_md = next(o for o in outs if o.target == "antigravity"
                     and o.deploy_path.replace("\\", "/").endswith("ag-skill/SKILL.md"))
-    assert "extension body" in skill_md.content          # extension spliced at render
+    assert "base body" in skill_md.content
     base_dir = skill_md.deploy_path.rsplit("/", 1)[0]
     script_out = next(o for o in outs if o.deploy_path == f"{base_dir}/scripts/check.sh")
     assert script_out.executable is True
     assert script_out.sources == ["local/skills/ag-skill/scripts/check.sh"]
-    # the extension itself never deploys standalone
-    assert not any(o.deploy_path.replace("\\", "/").endswith("ag-ext/SKILL.md")
-                   for o in outs)
 
 def test_plan_claude_app_zip_bundles_resources_deterministically():
     import dataclasses

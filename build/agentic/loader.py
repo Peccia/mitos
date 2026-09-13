@@ -66,12 +66,6 @@ _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
                  "email": "user@example.com", "location": "Your City, State",
                  "default_deliverables": ["documentation", "tests"]}
 
-# The structural anchor a skill extension splices under (render-time only — see
-# render.compose_skill_body). Fixed and order-independent: extensions land as new
-# subsections at the end of this section, never matched against a specific existing
-# role heading, so a role rename never orphans an extension (the R2 design decision).
-EXTENSION_ANCHOR = "## Extended C-suite Roles"
-
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
 # The set is the union of the harnesses' documented conventions: examples/ + scripts/
@@ -568,34 +562,6 @@ def known_org_domains(reg: Registry) -> set[str]:
     return declared or {"software", "design", "marketing"}
 
 
-def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict) -> str | None:
-    """Cross-check an `extends_skill`/`extends_role` pair declared on `skill_name`'s
-    frontmatter. Returns an error string, or None when the pair is absent (not an
-    extension) or valid. Shared by `_validate` (compile-time) and the console's
-    propose/accept path (review._revalidate_verbatim, propose_meta_edit,
-    propose_new_skill) so a bad console edit is caught before it ever reaches the
-    registry — see R1/R2 in the extensions design."""
-    ext_skill = frontmatter.get("extends_skill")
-    ext_role = frontmatter.get("extends_role")
-    if not ext_skill and not ext_role:
-        return None
-    if bool(ext_skill) != bool(ext_role):
-        return (f"skill {skill_name!r}: 'extends_skill' and 'extends_role' must be "
-                f"specified together")
-    if ext_skill == skill_name:
-        return f"skill {skill_name!r}: cannot extend itself"
-    parent = reg.skills.get(ext_skill)
-    if parent is None:
-        return f"skill {skill_name!r}: extends_skill {ext_skill!r} is not a known skill"
-    if parent.frontmatter.get("extends_skill"):
-        return (f"skill {skill_name!r}: cannot extend {ext_skill!r} — it is itself an "
-                f"extension (chained extensions are not supported)")
-    if EXTENSION_ANCHOR not in parent.body:
-        return (f"skill {skill_name!r}: parent skill {ext_skill!r} has no "
-                f"{EXTENSION_ANCHOR!r} section to extend")
-    return None
-
-
 def document_stores(raw) -> list[str]:
     """Normalize an already-validated `document_store:` value (project or machine) to a list
     of server names for iteration. A single string (the common case) becomes a one-item
@@ -666,12 +632,6 @@ def _validate(reg: Registry) -> None:
         bad = set(s.targets) - KNOWN_TARGETS
         if bad:
             raise RegistryError(f"{s.rel}: unknown target(s) {sorted(bad)}")
-    # skill extensions (extends_skill/extends_role): pairing, parent existence, no
-    # chained extensions, and a real anchor section to splice into
-    for s in reg.skills.values():
-        err = validate_skill_extension(reg, s.name, s.frontmatter)
-        if err:
-            raise RegistryError(err)
     # scope: global (default) | project — see validate_skill_scope / Skill.scope
     for s in reg.skills.values():
         err = validate_skill_scope(s.name, s.frontmatter)
@@ -931,11 +891,6 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: bound skill {sname!r} does not target "
                     f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
                     f"takes effect on a target with a project-scoped skill surface")
-            if reg.skills[sname].frontmatter.get("extends_skill"):
-                raise RegistryError(
-                    f"project {slug}: skills binds {sname!r}, which is an extension "
-                    f"(extends_skill) — bind its parent skill instead; extensions "
-                    f"deploy only spliced into their parent, never standalone")
         for pname in (proj.get("prompts") or []):
             if pname not in reg.prompts:
                 raise RegistryError(

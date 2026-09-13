@@ -114,7 +114,7 @@ than inside it.
 A `SKILL.md` body opens with `# <Skill Title>` (a human-readable name, so the file
 self-identifies even where frontmatter is stripped) and a short purpose paragraph, then
 `## Instructions`. Org skills keep their parser-bound sections (`## Description`,
-`## <n>. <Role> — <mandate>`, `## Extended C-suite Roles`) unchanged — those feed the
+`## <n>. <Role> — <mandate>`) unchanged — those feed the
 generated org-domain table and the extension-splice anchor.
 
 ## Exceptions

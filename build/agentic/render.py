@@ -12,7 +12,7 @@ import re
 
 import yaml
 
-from .loader import EXTENSION_ANCHOR, Prompt, Registry, Skill, SkillResource, document_stores
+from .loader import Prompt, Registry, Skill, SkillResource, document_stores
 
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
@@ -392,50 +392,11 @@ def org_domain_table(skills: list) -> str:
 _H2_HEADING = re.compile(r"^## ", re.MULTILINE)
 
 
-def _skill_extensions(reg: Registry, skill: Skill) -> list[Skill]:
-    """Skills that `extends_skill` this one, sorted by name for deterministic output."""
-    return sorted((s for s in reg.skills.values()
-                  if s.frontmatter.get("extends_skill") == skill.name),
-                 key=lambda s: s.name)
-
-
-def compose_skill_body(reg: Registry, skill: Skill) -> str:
-    """Splice any extension skills into `skill`'s body — at RENDER time only, never on
-    the loaded Registry (Skill.body stays pristine so the console, adopt, and harvest
-    all read true registry state — see the R1 design decision). Extensions are inserted
-    as new '### <role> — <ext-name> (extension)' subsections at the end of the
-    EXTENSION_ANCHOR section (right before the next top-level '## ' heading, or at the
-    end of the body if the anchor section is last) — order-independent and
-    rename-tolerant, unlike matching a specific existing role heading (R2)."""
-    exts = _skill_extensions(reg, skill)
-    if not exts:
-        return skill.body
-    anchor_idx = skill.body.find(EXTENSION_ANCHOR)
-    if anchor_idx < 0:
-        # _validate rejects this at load time; stay defensive if called out of band
-        return skill.body
-    search_from = anchor_idx + len(EXTENSION_ANCHOR)
-    m = _H2_HEADING.search(skill.body, search_from)
-    insert_at = m.start() if m else len(skill.body)
-    blocks = "\n\n".join(
-        f"### {ext.frontmatter.get('extends_role', '')} — {ext.name} (extension)\n\n"
-        f"{ext.body.strip(chr(10))}"
-        for ext in exts)
-    before = skill.body[:insert_at].rstrip("\n")
-    after = skill.body[insert_at:]
-    sep = "\n\n" if after else "\n"
-    return f"{before}\n\n{blocks}{sep}{after}".rstrip("\n") + "\n"
-
-
 def compose_skill_resources(reg: Registry, skill: Skill) -> dict[str, SkillResource]:
-    """Merge `skill`'s own resources with those of any skill(s) that extend it — an
-    extension's examples/scripts deploy alongside the parent's. On a relpath collision
-    the extension wins (later in sort order wins), mirroring compose_skill_body's
-    ordering."""
-    merged = dict(skill.resources)
-    for ext in _skill_extensions(reg, skill):
-        merged.update(ext.resources)
-    return merged
+    """A skill's supporting files. Kept as a function rather than inlined at the call sites
+    because it is the ONE place that answers "which resources deploy with this skill" — the
+    seam a future merge would reattach to."""
+    return dict(skill.resources)
 
 
 def dynamic_branches_block(branches: list[str]) -> str:
@@ -592,9 +553,8 @@ _SKILL_BANNER = (
 def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
     """Render a skill's SKILL.md in the frontmatter flavor a target expects.
 
-    `body` overrides skill.body when given — the planner passes the extension-composed
-    body here (render.compose_skill_body) so the merge happens only at render time,
-    never mutating the loaded Skill (see the R1 design decision)."""
+    `body` overrides skill.body when given, for a caller that renders something other than
+    the registry's own text."""
     fm = skill.frontmatter
     b = body if body is not None else skill.body
     if target == "mitos-agent":

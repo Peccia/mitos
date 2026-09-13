@@ -1050,7 +1050,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role", "scope",
+                         "targets", "category", "scope",
                          "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
@@ -1144,9 +1144,6 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         if bind_err:
             return {"ok": False, "error": bind_err}
     if kind == "skill":
-        ext_err = loader.validate_skill_extension(reg, ident, new_fm)
-        if ext_err:
-            return {"ok": False, "error": ext_err}
         scope_err = loader.validate_skill_scope(ident, new_fm)
         if scope_err:
             return {"ok": False, "error": scope_err}
@@ -1215,9 +1212,6 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         bind_err = _check_target_binding(reg, skill.name, [str(t) for t in targets])
         if bind_err:
             return bind_err
-        ext_err = loader.validate_skill_extension(reg, skill.name, fm)
-        if ext_err:
-            return ext_err
         scope_err = loader.validate_skill_scope(skill.name, fm)
         if scope_err:
             return scope_err
@@ -1250,9 +1244,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
 
     `org_domain`, when set, is stamped into the frontmatter as-is — it marks this skill
     as a domain-template org (see loader.known_org_domains / org_index); propose_new_org_
-    domain is the only caller that passes it. `frontmatter_fields` may also carry
-    `extends_skill`/`extends_role` (the Org tab's "+ Extend department" button) —
-    validated the same way a metadata edit is. `resources` seeds examples/*, scripts/*
+    domain is the only caller that passes it. `resources` seeds examples/*, scripts/*
     files alongside the new SKILL.md (optional).
     Returns {ok, id, registry_path} or {ok: False, error}."""
     name = str(name).strip()
@@ -1283,15 +1275,6 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     }
     if org_domain:
         meta_fm["org_domain"] = org_domain
-    ext_skill = str(frontmatter_fields.get("extends_skill", "") or "").strip()
-    ext_role = str(frontmatter_fields.get("extends_role", "") or "").strip()
-    if ext_skill:
-        meta_fm["extends_skill"] = ext_skill
-    if ext_role:
-        meta_fm["extends_role"] = ext_role
-    ext_err = loader.validate_skill_extension(reg, name, meta_fm)
-    if ext_err:
-        return {"ok": False, "error": ext_err}
     registry_path = f"local/skills/{name}/SKILL.md"
     payload = ("---\n" + yaml.safe_dump(meta_fm, sort_keys=False, allow_unicode=True)
               + "---\n\n" + str(body).rstrip("\n") + "\n")
@@ -1318,13 +1301,16 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
 
 
 def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict:
-    """Propose a brand-new org domain (the console's `+ ORG` button): a single `kind:
-    new` skill candidate at registry/local/skills/org-<domain>/SKILL.md carrying
-    `org_domain: <domain>` in its frontmatter plus a CEO/VP/Assistant template body (the
-    same numbered-heading shape _parse_org_skill expects). Once accepted, the domain is
-    immediately valid for a project's `org:` field (loader.known_org_domains) and
-    appears in the console's Org tab domain switcher (org_index) — no separate routing
-    table edit required, since domain discovery reads the skill's own frontmatter.
+    """Propose a brand-new org domain (the console's `+ ORG` button): a single `kind: new`
+    skill candidate at registry/local/skills/org-<domain>/SKILL.md carrying
+    `org_domain: <domain>` in its frontmatter, seeded with the section headings a domain
+    playbook is expected to fill.
+
+    The seed is a PROMPT TO THE AUTHOR, not a structure to simulate. What a domain skill
+    contributes is expertise — what to ask, what to measure, what to refuse — so the
+    template names those sections and leaves the substance to whoever knows the market.
+    Once accepted the domain is immediately valid (loader.known_org_domains) and appears in
+    the console's domain switcher (org_index); no routing table to edit.
     Returns {ok, id, registry_path} or {ok: False, error}."""
     domain = str(domain).strip().lower()
     if not domain:
@@ -1337,22 +1323,27 @@ def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict
     name = f"org-{domain}"
     title = domain.replace("-", " ").title()
     body = (
-        "# Instructions\n\n"
-        "Use this when a project request needs real planning or multi-step execution — "
-        f"not a quick lookup. Handle it as the owner's {title} organization. Truth over "
-        "politeness: if the request is unsound, mis-scoped, or would incur unacceptable "
-        "risk, say so as the CEO before anything is built.\n\n"
-        "## 1. CEO — intent and objectives\n"
-        "- Restate the request as concrete objectives and a clear definition of "
-        "\"done\".\n\n"
-        "## 2. VP — plan\n"
-        "- Turn objectives into a concrete plan grounded in real project context.\n\n"
-        "## 3. Assistant — execution\n"
-        "- Execute the plan: gather context, draft, and report back.\n"
+        f"# {title} Domain\n\n"
+        "## What this is for\n\n"
+        f"You are the {title.lower()} expert on this Work item. Your output is a "
+        "requirements specification another harness plans and builds from — what must be "
+        "true, and how each is checked. Truth over politeness: if the ask is unsound or "
+        "mis-scoped, say so before a requirement is written, and propose the cheaper "
+        "version.\n\n"
+        "## Turn a wish into something measurable\n\n"
+        f"The words this domain's owners use loosely, the question that pins each one "
+        "down, and the requirement it becomes. Never invent the number — ask for it.\n\n"
+        "## Close a coverage dimension\n\n"
+        "The questions that actually close each dimension this Work item declares. Naming "
+        "a dimension is not closing it.\n\n"
+        "## Surface these unprompted\n\n"
+        "What an owner in this domain will not think to mention and will be unhappy about "
+        "later.\n"
     )
     fields = {
-        "description": f"Run a substantive request through the simulated {title} "
-                       f"organization — CEO (intent), VP (plan), Assistant (execution).",
+        "description": f"{title} domain expertise for requirements gathering — turns an "
+                       f"owner's ask into requirements another harness can plan and build "
+                       f"from.",
         "category": "productivity",
         "targets": ["mitos-agent"],
     }
@@ -1547,8 +1538,6 @@ def prompt_index(reg: Registry) -> dict:
         "frontmatter": _meta_dict(s.frontmatter, _SKILL_META_WHITELIST),
         "favorited": s.name in favorites,
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
-        "extends_skill": s.frontmatter.get("extends_skill", ""),
-        "extends_role": s.frontmatter.get("extends_role", ""),
         # projects whose manifest `skills:` list names this skill — the read-only
         # "where does scope: project actually apply" view (renderSkillScopeSection).
         # Editing this list happens in the project manifest YAML directly; the console
@@ -2140,118 +2129,21 @@ def graph_index(reg: Registry) -> list[dict]:
 # so `+ ORG` can add a domain purely by proposing a new skill candidate.
 # Orgs are GLOBAL domain skills — nothing org-shaped is stored per project; the only
 # org edge in the graph is an effort's orgDomain tag (see graph.ORG_DOMAIN_PRED). ──
-_ORG_NUMBERED_HEADING_RE = re.compile(r"^##\s+\d+\.\s+(.+?)\s+—\s+(.+)$")
-_ORG_ROLE_HEADING_RE = re.compile(r"^###\s+(.+?)\s+—\s+(.+)$")
-_ORG_LENS_RE = re.compile(r"^-\s+\*\*Lens\*\*:\s*(.+)$")
-_ORG_TEAM_RE = re.compile(r"^-\s+\*\*Team\*\*:\s*(.+)$")
-_ORG_VOCAB_RE = re.compile(r"^-\s+\*\*Vocabulary\*\*:\s*(.+)$")
-_ORG_TRIGGER_RE = re.compile(r"^-\s+Trigger:\s*(.+)$")
-
-
-def _parse_org_skill(reg: Registry, skill_name: str) -> dict:
-    """Walk one org-<domain>/SKILL.md: the numbered primary-chain headings, then the
-    Extended C-suite Roles block (### headings + Lens/Team/optional Vocabulary/Trigger).
-    Best-effort — an unexpected heading shape just yields fewer parsed roles; this only
-    ever degrades the visualization, never registry data (nothing here is written back)."""
-    skill = reg.skills.get(skill_name)
-    if skill is None:
-        return {"skill": skill_name, "primaryChain": [], "extendedRoles": []}
-    primary_chain: list[dict] = []
-    extended_roles: list[dict] = []
-    in_extended = False
-    role: dict | None = None
-    last_attr: str | None = None    # bullet a wrapped continuation line should extend
-    for raw in skill.body.splitlines():
-        line = raw.strip()
-        if not in_extended:
-            m = _ORG_NUMBERED_HEADING_RE.match(line)
-            if m:
-                primary_chain.append({"title": m.group(1).strip(), "subtitle": m.group(2).strip()})
-                continue
-            if line == "## Extended C-suite Roles":
-                in_extended = True
-            continue
-        role_m = _ORG_ROLE_HEADING_RE.match(line)
-        if role_m:
-            if role:
-                extended_roles.append(role)
-            role = {"title": role_m.group(1).strip(), "subtitle": role_m.group(2).strip(),
-                    "lens": "", "team": "", "vocabulary": "", "trigger": ""}
-            last_attr = None
-            continue
-        if line.startswith("## ") and not line.startswith("### "):
-            # a non-role "##" heading (e.g. "## Red-Team Protocols") ends the block
-            if role:
-                extended_roles.append(role)
-                role = None
-            in_extended = False
-            last_attr = None
-            continue
-        if role is None:
-            continue
-        matched = False
-        for attr, pat in (("lens", _ORG_LENS_RE), ("team", _ORG_TEAM_RE),
-                          ("vocabulary", _ORG_VOCAB_RE), ("trigger", _ORG_TRIGGER_RE)):
-            m = pat.match(line)
-            if m:
-                role[attr] = m.group(1).strip()
-                last_attr, matched = attr, True
-                break
-        if matched:
-            continue
-        # a wrapped continuation of the previous bullet (indented in the source, not a
-        # new bullet/heading) — append rather than drop, so long Lens/Trigger text isn't
-        # silently truncated mid-sentence
-        if last_attr and line and raw[:1] in (" ", "\t"):
-            role[last_attr] = f"{role[last_attr]} {line}".strip()
-        else:
-            last_attr = None
-    if role:
-        extended_roles.append(role)
-    return {"skill": skill_name, "primaryChain": primary_chain, "extendedRoles": extended_roles}
-
-
-def _extensions_by_target(reg: Registry) -> dict[str, list]:
-    """parent skill name -> [extension Skill, ...] (sorted by name), from every skill
-    that declares `extends_skill`. Used to surface active extensions on the role card
-    they target, without re-deriving this on every _parse_org_skill call."""
-    out: dict[str, list] = {}
-    for s in reg.skills.values():
-        parent = s.frontmatter.get("extends_skill")
-        if parent:
-            out.setdefault(parent, []).append(s)
-    for lst in out.values():
-        lst.sort(key=lambda s: s.name)
-    return out
-
-
 def org_index(reg: Registry) -> dict:
     """Every org domain, discovered dynamically from skills carrying an `org_domain`
-    frontmatter key (see loader.known_org_domains) — combined with each domain's parsed
-    role structure. Role TREE reading stays READ-ONLY here; role structure lives in
-    hand-authored prose and is never edited through this endpoint (extensions are the
-    one write path onto a role — see propose_new_skill's extends_skill/extends_role)."""
-    extensions_by_target = _extensions_by_target(reg)
+    frontmatter key (see loader.known_org_domains).
+
+    READ-ONLY, and deliberately thin: a domain playbook is prose about a market's function
+    and output, not a structure to visualize. The console lists the domains and points at
+    the skill; the playbook itself is read where every other skill is read."""
     out: dict[str, dict] = {}
     for skill in sorted(reg.skills.values(), key=lambda s: s.name):
         domain = skill.frontmatter.get("org_domain")
         if not domain:
             continue
-        parsed = _parse_org_skill(reg, skill.name)
-        summary = " → ".join(step["title"] for step in parsed["primaryChain"])
-        exts = extensions_by_target.get(skill.name, [])
-        for role in parsed["extendedRoles"]:
-            role["activeExtensions"] = [
-                {"name": e.name, "description": e.frontmatter.get("description", "")}
-                for e in exts
-                if (e.frontmatter.get("extends_role") or "").strip().lower()
-                == role["title"].strip().lower()
-            ]
         out[domain] = {
             "skill": skill.name,
-            "primaryChainSummary": summary,
-            "primaryChain": parsed["primaryChain"],
-            "extendedRoles": parsed["extendedRoles"],
+            "description": skill.frontmatter.get("description", ""),
         }
     return out
 
