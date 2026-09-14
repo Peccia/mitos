@@ -575,11 +575,19 @@ def _cmd_project(args) -> int:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(_project_manifest_yaml(slug, name, store), encoding="utf-8")
     print(f"created registry/{loader.LOCAL_OVERLAY}/projects/{slug}.yaml")
+    graph_file = overlay / "graph" / f"{slug}.jsonld"
+    if not graph_file.exists():
+        from agentic.graph import ProjectGraph, canonical_jsonld
+        graph_file.parent.mkdir(parents=True, exist_ok=True)
+        pg = ProjectGraph(slug=slug, name=name, description="", documents=[], efforts=[], path=None)
+        graph_file.write_text(canonical_jsonld(pg), encoding="utf-8")
+        print(f"created registry/{loader.LOCAL_OVERLAY}/graph/{slug}.jsonld")
     if store != "none":
         print("\nNext: map its documents into the knowledge graph (Stage 3):")
         print(f"  python build/mitos.py connect --project {slug}")
     else:
-        print(f"\nSet `document_store:` in the manifest to a server, then "
+        print(f"\nProject initialized with minimal knowledge graph (no document store).")
+        print(f"To map documents later, set `document_store:` in the manifest, then "
               f"`python build/mitos.py connect --project {slug}`.")
     return 0
 

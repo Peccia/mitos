@@ -858,7 +858,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables", "hidden"}
+                            "default_deliverables", "hidden", "document_store"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -951,6 +951,16 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["repo_notes"] = notes
         else:
             updated.pop("repo_notes", None)
+    if "document_store" in fields:
+        raw_ds = fields["document_store"]
+        if raw_ds is None or raw_ds == "" or raw_ds == "none":
+            updated["document_store"] = "none"
+        elif isinstance(raw_ds, str):
+            updated["document_store"] = raw_ds.strip()
+        elif isinstance(raw_ds, list):
+            updated["document_store"] = [str(s).strip() for s in raw_ds if str(s).strip()]
+        else:
+            return {"ok": False, "error": "document_store must be a string or list of strings"}
 
     import copy
     trial = copy.deepcopy(reg)
@@ -2131,6 +2141,7 @@ def graph_index(reg: Registry) -> list[dict]:
             # everything else). is_local flags where an accepted edit will land.
             "description": proj.get("description") or "",
             "stage": proj.get("stage") or "",
+            "document_store": proj.get("document_store") or "none",
             "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
             "repo": _project_repos(proj),

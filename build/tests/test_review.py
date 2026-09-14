@@ -225,9 +225,9 @@ def test_propose_project_edit_rejects_unknown_field():
     from agentic.review import propose_project_edit
 
     treg, tmp = _temp_registry()
-    out = propose_project_edit(treg, "example-project", {"document_store": "gws"}, "")
+    out = propose_project_edit(treg, "example-project", {"unknown_custom_field": "val"}, "")
     assert not out["ok"]
-    assert "document_store" in out["error"]
+    assert "unknown_custom_field" in out["error"]
 
 
 def test_propose_project_edit_rejects_bad_repo_notes():
@@ -2095,6 +2095,40 @@ def test_project_edit_hides_and_unhides_through_the_same_candidate_valve():
     assert "hidden" not in twice_reloaded.projects["example-project"]
 
 
+def test_project_edit_updates_document_store_through_candidate_valve():
+    """Updating a project's document_store from none -> gws (or another known store)
+    proposes a kind: project candidate, validates against servers.yaml, and applies cleanly."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, graph_index, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    assert treg.projects["example-project"]["document_store"] == "none"
+
+    # 1. Propose updating document_store to 'gws'
+    out = propose_project_edit(treg, "example-project", {"document_store": "gws"})
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"]["document_store"] == "gws"
+    idx = next(g for g in graph_index(reloaded) if g["slug"] == "example-project")
+    assert idx["document_store"] == "gws"
+
+    # 2. Reject an unknown document_store
+    out_bad = propose_project_edit(reloaded, "example-project", {"document_store": "unknown-server"})
+    assert not out_bad["ok"]
+    assert "unknown-server" in out_bad["error"]
+
+    # 3. Can revert back to 'none'
+    out_none = propose_project_edit(reloaded, "example-project", {"document_store": "none"})
+    assert out_none["ok"], out_none
+    result_none = decide(reloaded, out_none["id"], "accept", "")
+    assert result_none["ok"], result_none
+    reloaded_none = loadermod.load(tmp)
+    assert reloaded_none.projects["example-project"]["document_store"] == "none"
+
+
 def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
     """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
     Collapsing them would make "this project wants no defaults" unauthorable."""
@@ -2235,8 +2269,15 @@ def test_create_project_end_to_end_scaffolds_manifest_in_overlay():
     assert out["slug"] == "alpha-demo"
     manifest = tmp / "registry" / loader.LOCAL_OVERLAY / "projects" / "alpha-demo.yaml"
     assert manifest.exists()
+    graph_file = tmp / "registry" / loader.LOCAL_OVERLAY / "graph" / "alpha-demo.jsonld"
+    assert graph_file.exists()
     reloaded = loader.load(tmp)
     assert "alpha-demo" in reloaded.projects
+    assert "alpha-demo" in reloaded.graphs
+    pg = reloaded.graphs["alpha-demo"]
+    assert pg.name == "Alpha Demo"
+    assert pg.documents == []
+    assert pg.efforts == []
     proj = reloaded.projects["alpha-demo"]
     assert proj["name"] == "Alpha Demo"
     assert proj["slug"] == "alpha-demo"

@@ -794,6 +794,7 @@ function buildProjectPanel(container, g) {
   editBtn.onclick = () => {
     projectEditVals = {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
+      document_store: g.document_store || "none",
       hidden: !!g.hidden,
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
       // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
@@ -814,6 +815,7 @@ function buildProjectPanel(container, g) {
   if (projectConfigOpen) {
     const detail = el("div", "project-config-detail");
     if (g.description) detail.append(el("p", "card-note muted", g.description));
+    detail.append(el("p", "card-note muted", `Document store: ${g.document_store || "none"}`));
     if (repoCount) {
       const list = el("div", "card-note project-repo-list");
       for (const url of g.repo) {
@@ -874,6 +876,23 @@ function projectEditorCard(g) {
     stageSel.append(opt);
   }
   stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
+
+  const storeWrap = el("div", "graph-field");
+  storeWrap.append(el("label", "", "Document Store"));
+  const storeSel = el("select", "graph-select");
+  const noneOpt = el("option", "", "none (no document store)");
+  noneOpt.value = "none";
+  if (!vals.document_store || vals.document_store === "none") noneOpt.selected = true;
+  storeSel.append(noneOpt);
+  for (const s of (STATE.known_stores || [])) {
+    const opt = el("option", "", s);
+    opt.value = s;
+    if (vals.document_store === s) opt.selected = true;
+    storeSel.append(opt);
+  }
+  storeWrap.append(storeSel);
+  card.append(storeWrap);
+  inputs.document_store = storeSel;
 
   // Hidden — keeps a finished/parked project out of every deployed tree (no tree node, no
   // roster entry, no clone, no per-project AGENTS.md/CLAUDE.md) without touching the
@@ -963,6 +982,7 @@ function projectEditorCard(g) {
     for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
     const fields = {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      document_store: inputs.document_store.value,
       hidden: inputs.hidden.checked,
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
