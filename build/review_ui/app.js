@@ -78,6 +78,8 @@ let graphDrafts = store.get(LS.graphDrafts, {});
 let expandedSkillName = null;   // slug of the currently expanded skill row, or null
 let skillFilterText = "";       // client-side search text
 let skillFilterTarget = "";     // filter by target slug, "" = all
+let skillFilterTargetMode = "show"; // "show" (match target) | "hide" (hide target(s))
+let skillHiddenTargets = [];    // targets to hide when in hide mode
 let skillFilterOrg = false;     // filter to only org-domain skills
 // Default view = only what this registry's machines would actually deploy (the server's
 // per-item `deploys_here`). A coding-harness box therefore opens on its own skills instead
@@ -3592,19 +3594,64 @@ function renderSkills() {
   // Target filter chips — in the scoped view they come from the targets this registry's
   // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `mitos-agent` as
   // a filter on a coding-harness box is a control that can only ever empty the list.
-  const targetOpts = skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []);
+  // Note: agents-md never deploys skills, so it is always filtered out of skill target filters.
+  const targetOpts = (skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []))
+    .filter((t) => t !== "agents-md");
   // Drop a narrow left over from the other scope BEFORE rendering — e.g. `mitos-agent` picked
   // under All, then back to My machines. Without this the list empties with no active chip
   // on screen to explain why, which reads as a bug rather than a filter.
   if (skillFilterTarget && !targetOpts.includes(skillFilterTarget)) skillFilterTarget = "";
+  skillHiddenTargets = skillHiddenTargets.filter((t) => targetOpts.includes(t));
   if (targetOpts.length > 1) {          // nothing to narrow between when there's only one
-    for (const t of ["any", ...targetOpts]) {
-      const active = (t === "any" ? "" : t) === skillFilterTarget;
-      const b = el("button", "pool-opt" + (active ? " active" : ""), t === "any" ? "Any target" : t);
+    const modeToggle = el("div", "pool-toggle");
+    for (const [id, label, title] of [
+      ["show", "Show", "Show skills matching a specific target"],
+      ["hide", "Hide", "Hide all skills associated with selected target(s)"],
+    ]) {
+      const active = skillFilterTargetMode === id;
+      const b = el("button", "pool-opt" + (active ? " active" : ""), label);
+      b.title = title;
       b.setAttribute("aria-pressed", String(active));
-      b.onclick = () => { skillFilterTarget = t === "any" ? "" : t; renderSkills(); };
-      chipRow.append(b);
+      b.onclick = () => { skillFilterTargetMode = id; renderSkills(); };
+      modeToggle.append(b);
     }
+    chipRow.append(modeToggle);
+
+    if (skillFilterTargetMode === "show") {
+      for (const t of ["any", ...targetOpts]) {
+        const active = (t === "any" ? "" : t) === skillFilterTarget;
+        const b = el("button", "pool-opt" + (active ? " active" : ""), t === "any" ? "Any target" : t);
+        b.setAttribute("aria-pressed", String(active));
+        b.onclick = () => {
+          skillFilterTarget = (skillFilterTarget === t || t === "any") ? "" : t;
+          renderSkills();
+        };
+        chipRow.append(b);
+      }
+    } else {
+      const noneActive = skillHiddenTargets.length === 0;
+      const bNone = el("button", "pool-opt" + (noneActive ? " active" : ""), "Hide none");
+      bNone.setAttribute("aria-pressed", String(noneActive));
+      bNone.onclick = () => { skillHiddenTargets = []; renderSkills(); };
+      chipRow.append(bNone);
+
+      for (const t of targetOpts) {
+        const isHidden = skillHiddenTargets.includes(t);
+        const b = el("button", "pool-opt" + (isHidden ? " active hide-active" : ""), (isHidden ? "✕ " : "") + t);
+        b.title = isHidden ? `Click to unhide ${t}` : `Hide skills associated with ${t}`;
+        b.setAttribute("aria-pressed", String(isHidden));
+        b.onclick = () => {
+          if (skillHiddenTargets.includes(t)) {
+            skillHiddenTargets = skillHiddenTargets.filter((x) => x !== t);
+          } else {
+            skillHiddenTargets.push(t);
+          }
+          renderSkills();
+        };
+        chipRow.append(b);
+      }
+    }
+    chipRow.append(el("span", "chip-sep"));
   }
   // Same rule for "Orgs only": omit it when the active scope holds no org-domain skill, so
   // it can't sit there as the one chip guaranteed to yield nothing on a coding-harness box.
@@ -3637,7 +3684,11 @@ function renderSkills() {
   const visible = skills.filter(s => {
     if (!skillShowAll && s.deploys_here === false) return false;
     if (skillFilterOrg && !orgDomainBySkill[s.name]) return false;
-    if (skillFilterTarget && !(s.targets || []).includes(skillFilterTarget)) return false;
+    if (skillFilterTargetMode === "show") {
+      if (skillFilterTarget && !(s.targets || []).includes(skillFilterTarget)) return false;
+    } else if (skillFilterTargetMode === "hide") {
+      if (skillHiddenTargets.length && (s.targets || []).some((t) => skillHiddenTargets.includes(t))) return false;
+    }
     if (q && !s.name.includes(q) && !(s.description || "").toLowerCase().includes(q)) return false;
     return true;
   });

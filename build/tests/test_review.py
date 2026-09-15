@@ -2343,3 +2343,24 @@ def test_api_project_new_endpoint():
         server.server_close()
 
 
+def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
+    """Regression test: within the Skills & Org tab, the target filter chips must
+    not display 'agents-md' (as it never deploys skills), and operators must be able
+    to hide skills associated with a target via the hide mode."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
+
+    # agents-md must be excluded from targetOpts in Skills & Org
+    assert '.filter((t) => t !== "agents-md")' in app
+
+    # Target filter mode (show vs hide) and hidden targets tracking must exist
+    assert "skillFilterTargetMode" in app
+    assert "skillHiddenTargets" in app
+    assert 'skillFilterTargetMode === "hide"' in app
+
+    # CSS styling for active hidden chips must exist
+    assert ".pool-opt.active.hide-active" in css
+
+
+
