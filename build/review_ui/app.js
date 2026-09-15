@@ -1825,7 +1825,7 @@ function buildRegistryPane(container, g) {
     // g.defaultDeliverables, so the client never reimplements the chain and can never drift
     // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "",
+                   vals: { id: "", name: "", description: "", hidden: false,
                            deliverables: (g.defaultDeliverables || []).slice() } };
     renderRegistryRows(g);
   };
@@ -1907,6 +1907,11 @@ function renderRegistryRows(g) {
                          " · coverage: " + effort.requirementsCoverage.length));
     }
     head.append(nameSpan);
+    if (effort.hidden) {
+      const badge = el("span", "badge", "hidden");
+      badge.title = "Kept out of deployed AGENTS.md — the effort and its documents remain in the graph.";
+      head.append(badge);
+    }
     if (status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
       head.append(el("span", "badge draft", label));
@@ -1918,6 +1923,13 @@ function renderRegistryRows(g) {
       actions.append(undo);
     }
     if (status !== "remove") {
+      const visBtn = el("button", "ghost tiny", effort.hidden ? "Unhide" : "Hide");
+      visBtn.title = effort.hidden ? "Restore to deployed AGENTS.md" : "Hide from deployed AGENTS.md";
+      visBtn.onclick = () => {
+        effortDraftUpsert(g.slug, { ...effort, hidden: !effort.hidden }, status === "add");
+        renderGraph();
+      };
+      actions.append(visBtn);
       const edit = el("button", "ghost tiny", "Edit");
       edit.onclick = () => {
         openEditor = { where: "registry", lockId: true, kind: "effort",
@@ -1925,7 +1937,8 @@ function renderRegistryRows(g) {
                                goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "",
                                deliverables: (effort.deliverables || []).slice(),
-                               requirementsCoverage: (effort.requirementsCoverage || []).slice() } };
+                               requirementsCoverage: (effort.requirementsCoverage || []).slice(),
+                               hidden: !!effort.hidden } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -2297,6 +2310,16 @@ function effortEditorCard(g) {
   syncReceiptWarn();
   card.append(receiptWarn);
 
+  // Hidden — keeps this effort and its documents out of deployed context (AGENTS.md,
+  // CLAUDE.md) without touching the graph, which still loads and queries fine.
+  const hiddenWrap = el("div", "graph-field");
+  const hiddenBox = el("input"); hiddenBox.type = "checkbox"; hiddenBox.checked = !!vals.hidden;
+  const hiddenLbl = el("label", "target-check");
+  hiddenLbl.append(hiddenBox, document.createTextNode(
+    " Hidden — keep out of deployed AGENTS.md"));
+  hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
+  inputs.hidden = hiddenBox;
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -2307,6 +2330,7 @@ function effortEditorCard(g) {
                      description: inputs.description.value.trim(),
                      goal: inputs.goal.value.trim(),
                      orgDomain: inputs.orgDomain.value,
+                     hidden: inputs.hidden.checked,
                      deliverables: (STATE.known_deliverables || [])
                        .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
                      requirementsCoverage: (STATE.known_coverage || [])

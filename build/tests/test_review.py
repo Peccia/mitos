@@ -1347,6 +1347,30 @@ def test_propose_graph_change_valid_deliverables_reach_the_candidate():
     assert eff.deliverables == ("documentation", "tests")
 
 
+def test_propose_graph_change_updates_effort_visibility_and_surfaces_in_graph_index():
+    """Effort hidden status reaches the candidate, updates the graph on accept,
+    and surfaces in graph_index."""
+    from agentic.review import decide, graph_index, propose_graph_change
+    from agentic import graph, loader as loadermod
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-hide", "name": "Effort To Hide", "hidden": True}])
+    assert out["ok"], out
+    assert decide(loadermod.load(tmp), out["id"], "accept", "")["ok"]
+
+    reloaded_reg = loadermod.load(tmp)
+    merged = graph.load_project_graph(tmp / "registry" / "graph" / f"{slug}.jsonld")
+    eff = next(e for e in merged.efforts if e.id == "eff-hide")
+    assert eff.hidden is True
+
+    idx = next(g for g in graph_index(reloaded_reg) if g["slug"] == slug)
+    idx_eff = next(e for e in idx["efforts"] if e["id"] == "eff-hide")
+    assert idx_eff["hidden"] is True
+
+
 def test_prompt_index_frontmatter_whitelist_shape():
     """Skills/prompts carry a `frontmatter` dict scoped to the per-kind editable
     whitelist — never the full raw frontmatter (which may carry e.g. a skill's

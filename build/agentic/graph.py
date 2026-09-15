@@ -109,6 +109,10 @@ def order_coverage(names) -> tuple[str, ...]:
 # the value is the SAME server key used everywhere else (env files, urls:, connection
 # labels) — never a second identity for one store.
 STORE_PRED = PECCIA + "store"
+# hidden is likewise a peccia predicate: whether an effort (CreativeWork) is hidden
+# from deployed context trees (AGENTS.md, CLAUDE.md) while staying in the graph.
+# Omit-when-absent/false, same as project hidden.
+HIDDEN_PRED = PECCIA + "hidden"
 
 # The @context every stored graph carries (kept verbatim in canonical output). An
 # explicit @vocab — not the bare "https://schema.org" string — so terms resolve offline
@@ -171,6 +175,7 @@ class CreativeWork:
                                         # effort's requirements are exportable (the interview
                                         # contract). A tuple for the same reason as above.
     keywords: str = ""    # schema:keywords — optional comma-separated tags/aliases
+    hidden: bool = False  # peccia:hidden — whether this effort is hidden from deployed trees
 
     @property
     def iri(self) -> str:
@@ -305,12 +310,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                 str(o) for o in g.objects(subj, URIRef(REQ_COVERAGE_PRED)))
             keywords_val = g.value(subj, SDO("keywords"))
             keywords = str(keywords_val) if keywords_val is not None else ""
+            hidden_val = g.value(subj, URIRef(HIDDEN_PRED))
+            hidden = bool(hidden_val and str(hidden_val).lower() in ("true", "1"))
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
                                 str(goal_val) if goal_val is not None else "",
-                                deliv_vals, cover_vals, keywords))
+                                deliv_vals, cover_vals, keywords, hidden))
 
-    effort_iris = {iri for iri, _, _, _, _, _, _, _ in raw_efforts}
+    effort_iris = {iri for iri, _, _, _, _, _, _, _, _ in raw_efforts}
 
     # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
     docs: list[tuple[str, Document]] = []
@@ -363,7 +370,7 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal, deliverables, coverage, keywords in raw_efforts:
+    for iri, name, desc, org_domain, goal, deliverables, coverage, keywords, hidden in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
@@ -372,7 +379,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                                     goal=goal,
                                     deliverables=deliverables,
                                     requirements_coverage=coverage,
-                                    keywords=keywords))
+                                    keywords=keywords,
+                                    hidden=hidden))
 
     return projects, docs, efforts
 
@@ -463,6 +471,8 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             effort_node[REQ_COVERAGE_PRED] = list(e.requirements_coverage)
         if e.keywords:
             effort_node["keywords"] = e.keywords
+        if e.hidden:
+            effort_node[HIDDEN_PRED] = True
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
@@ -717,23 +727,19 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
     if emit_heading:
         lines += [f"{h} {heading}", ""]
     lines += [intro, ""]
-    # No documents AND no efforts is the only case with nothing to say. An effort with no
-    # documents mapped yet still carries its goal, its expected deliverables and its requirements
-    # coverage — the forward and interview contracts a coding harness reads — plus the stable id a
-    # downstream record keys on. Those are declared in the graph, not derived from documents, so
-    # gating them on a document existing hid a project's whole contract until somebody mapped a
-    # file to it, while the deliverables line is documented as ungated in EVERY generated view.
-    if not pg.documents and not pg.efforts:
+    visible_efforts = [e for e in pg.efforts if not e.hidden]
+    groups, _has_efforts = _grouped(pg)
+    has_visible_efforts = bool(visible_efforts)
+    if not groups[""] and not has_visible_efforts:
         lines.append("_No documents mapped yet._")
         return "\n".join(lines).rstrip("\n") + "\n"
 
-    groups, has_efforts = _grouped(pg)
-    if not has_efforts:
+    if not has_visible_efforts:
         lines += entry_fn(groups[""])
     else:
         if groups[""]:
             lines += [f"{gh} Documents", ""] + entry_fn(groups[""])
-        for e in sorted(pg.efforts, key=lambda e: (e.name.lower(), e.id)):
+        for e in sorted(visible_efforts, key=lambda e: (e.name.lower(), e.id)):
             docs_in_effort = groups.get(e.iri, [])
             lines += [f"{gh} {effort_heading(e)}", ""]
             lines += _effort_domain_line(e, org_routing=org_routing)

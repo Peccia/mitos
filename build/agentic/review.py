@@ -789,6 +789,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                                           f"{', '.join(graphmod.KNOWN_COVERAGE)}"}
         try:
             eid = str(e_dict["id"]).strip()
+            prev_hidden = effective_efforts[eid].hidden if eid in effective_efforts else False
+            hidden_val = bool(e_dict.get("hidden", prev_hidden))
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
@@ -796,7 +798,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 org_domain=str(e_dict.get("orgDomain", "")).strip(),
                 goal=str(e_dict.get("goal", "")).strip(),
                 deliverables=_deliv,
-                requirements_coverage=_cover)
+                requirements_coverage=_cover,
+                hidden=hidden_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -2162,7 +2165,8 @@ def graph_index(reg: Registry) -> list[dict]:
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
                          "orgDomain": e.org_domain, "goal": e.goal,
                          "deliverables": list(e.deliverables),
-                         "requirementsCoverage": list(e.requirements_coverage)}
+                         "requirementsCoverage": list(e.requirements_coverage),
+                         "hidden": bool(e.hidden)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
