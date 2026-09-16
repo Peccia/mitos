@@ -883,3 +883,72 @@ def test_compute_deploy_plan_matches_cmd_deploy_dry_run_output():
         assert f"[warn     ] {w}" in printed
     assert len(plan.blocked) == printed.count("<-- protected, blocked")
 
+
+def test_run_deploy_outcome_reports_written_blocked_and_captured():
+    from agentic.commands import run_deploy
+    treg, tmp = _temp_registry()
+    first = run_deploy(treg, "rig", dry_run=False, force=False)
+    assert first.rc == 0 and first.error is None and not first.blocked
+    assert any(p.endswith("SOUL.md") for p in first.written)
+    assert sum(first.counts.values()) == len(first.written)
+    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue\n", encoding="utf-8")
+    preview = run_deploy(treg, "rig", dry_run=True, force=False)
+    assert preview.rc == 0 and preview.written == []
+    assert [p for p in preview.blocked if p.endswith("SOUL.md")]
+    refused = run_deploy(treg, "rig", dry_run=False, force=False)
+    assert refused.rc == 1 and refused.written == [] and refused.blocked
+    forced = run_deploy(treg, "rig", dry_run=False, force=True)
+    assert forced.rc == 0 and forced.captured and forced.blocked == []
+
+def test_deploy_lock_busy_refuses_and_leaves_the_lockfile_untouched():
+    import time
+    from agentic import lockfile
+    from agentic.commands import cmd_deploy, run_deploy
+    treg, tmp = _temp_registry()
+    assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
+    before = (tmp / ".deploy-lock.json").read_bytes()
+    with lockfile.deploy_lock(tmp):
+        start = time.monotonic()
+        real = lockfile.deploy_lock
+        lockfile.deploy_lock = lambda base: real(base, wait=0.3)
+        try:
+            out = run_deploy(treg, "rig", dry_run=False, force=False)
+            # a preview never takes the lock, so it is not blocked by one
+            assert run_deploy(treg, "rig", dry_run=True, force=False).rc == 0
+        finally:
+            lockfile.deploy_lock = real
+        assert time.monotonic() - start < 5
+    assert out.rc == 1 and out.error.startswith("error: deploy in progress (pid")
+    assert (tmp / ".deploy-lock.json").read_bytes() == before
+    assert not (tmp / ".deploy-lock.json.lock").exists()     # released on exit
+
+def test_stale_deploy_lock_is_broken_by_age():
+    import os
+    import time
+    from agentic.commands import run_deploy
+    treg, tmp = _temp_registry()
+    lock = tmp / ".deploy-lock.json.lock"
+    lock.write_text('{"pid": 1, "started": "long ago"}', encoding="utf-8")
+    old = time.time() - 16 * 60
+    os.utime(lock, (old, old))
+    assert run_deploy(treg, "rig", dry_run=False, force=False).rc == 0
+    assert not lock.exists()
+
+def test_two_machines_deployed_in_sequence_keep_both_lock_sections():
+    """A2 regression: one .deploy-lock.json carries a section per machine."""
+    import copy
+    import json
+
+    import yaml as _y
+    from agentic.commands import cmd_deploy
+    treg, tmp = _temp_registry()
+    profile = _y.safe_load((tmp / "machines" / "rig.yaml").read_text(encoding="utf-8"))
+    profile["name"] = "rig2"
+    profile["paths"] = {k: v.replace("/home/", "/home2/") for k, v in profile["paths"].items()}
+    (tmp / "machines" / "rig2.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
+    treg = loader.load(tmp)
+    assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
+    assert cmd_deploy(copy.deepcopy(treg), "rig2", dry_run=False, force=False) == 0
+    machines = json.loads((tmp / ".deploy-lock.json").read_text(encoding="utf-8"))["machines"]
+    assert {"rig", "rig2"} <= set(machines) and machines["rig"]["files"]

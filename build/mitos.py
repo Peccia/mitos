@@ -13,6 +13,7 @@ Usage:
   python build/mitos.py connectors
   python build/mitos.py sync --machine NAME init|clone --hub URL [--branch B] [--ssh-key PATH]
   python build/mitos.py sync --machine NAME [all|pull|push|refresh|status] [--dry-run]
+  python build/mitos.py update --machine NAME [--dry-run] [--json]
 """
 from __future__ import annotations
 
@@ -767,6 +768,41 @@ def _cmd_sync(args) -> int:
     return 0
 
 
+def _cmd_update(args) -> int:
+    """Core pull → overlay pull → deploy, unattended. With --json, stdout carries exactly one
+    schema-1 object and everything else (deploy prose, git noise) goes to stderr."""
+    import contextlib
+    import json
+
+    from agentic.update import run_update
+    with contextlib.redirect_stdout(sys.stderr):
+        result = run_update(REPO_ROOT, args.machine, scheduled=args.scheduled,
+                            skip_core_pull=args.skip_core_pull, dry_run=args.dry_run)
+    if args.json:
+        sys.__stdout__.write(json.dumps(result, ensure_ascii=True) + "\n")
+        sys.__stdout__.flush()
+    else:
+        d = result["deploy"] or {}
+        print(f"update {args.machine}: {'ok' if result['ok'] else 'NOT ok'}")
+        for label in ("skipped", "error"):
+            if result[label]:
+                print(f"  {label}: {result[label]}")
+        for block in ("core", "overlay"):
+            b = result[block]
+            if b:
+                why = f" ({b['skipped_reason']})" if b["skipped_reason"] else ""
+                print(f"  {block}: {'pulled' if b['pulled'] else 'not pulled'}{why}")
+        if d:
+            print(f"  deploy: rc {d['rc']}, {len(d['written'])} written, "
+                  f"{len(d['blocked'])} blocked, {len(d['captured'])} captured, "
+                  f"{len(d['orphans'])} orphan(s)")
+            for p in d["blocked"]:
+                print(f"    blocked {p} — resolve with `adopt` / `harvest`")
+    if result["ok"]:
+        return 0
+    return 2 if (result["error"] or "").startswith("unknown machine") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -832,6 +868,18 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--remote", default=None,
                     help="git remote name, for `init`/`clone` (default: origin)")
     ps.add_argument("--dry-run", action="store_true")
+    pu = sub.add_parser("update",
+                        help="unattended core pull → overlay pull → deploy (never force, "
+                             "prune, or push)")
+    pu.add_argument("--machine", required=True)
+    pu.add_argument("--dry-run", action="store_true",
+                    help="no pulls; preview the deploy only")
+    pu.add_argument("--json", action="store_true",
+                    help="print exactly one schema-1 JSON object to stdout")
+    pu.add_argument("--skip-core-pull", action="store_true",
+                    help="internal: set by the re-exec after a core pull")
+    pu.add_argument("--scheduled", action="store_true",
+                    help="internal: a timer run — a dirty core skips the whole update")
     args = p.parse_args(argv)
     if args.cmd == "init":
         return _cmd_init(args)
@@ -845,6 +893,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_peek(args)
     if args.cmd == "sync":
         return _cmd_sync(args)
+    if args.cmd == "update":
+        return _cmd_update(args)
     return 1
 
 

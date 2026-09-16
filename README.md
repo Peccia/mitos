@@ -491,6 +491,7 @@ reference:
 | `graph --project <slug>` | Inspect/query a project's knowledge graph. |
 | `mitos.py init` / `project add` / `connect` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) — the separate, optional entrypoint. |
 | `mitos.py sync --machine M [init\|clone --hub URL\|status]` | Set up (`init`/`clone`) or run git-only overlay sync across your machines: pull → deploy → push. |
+| `mitos.py update --machine M [--dry-run] [--json]` | Unattended core pull → overlay pull → deploy; never force, prune, or push. `--json` prints one `schema: 1` outcome (see [managing state](docs/managing-state.md#automating-an-update)). |
 
 ## Documentation index
 
