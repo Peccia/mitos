@@ -2255,3 +2255,32 @@ def test_project_roster_block_aliases():
     roster = render.project_roster_block(projects)
     assert "- `Projects/Apdict/` (apdict) [aliases: sensual predictions, apdicts] — Financial narrative processing" in roster
     assert "- `Projects/Mitos/` (mitos) — Human-agentic harness" in roster
+
+def test_agent_only_skills_have_no_harness_shell_steps():
+    """A skill deployed only to mitos-agent is read by a harness that runs no shell. A step telling
+    it to run git, python, or a Mitos verb is inert at best and a false promise at worst — unless the
+    line hands the command to the owner. Checks fenced-block lines and inline code spans."""
+    import re
+
+    import yaml as _y
+    rule = re.compile(r"^(git |python|py |build/\.venv|\.?/?mitos (sync|deploy|update|compile)"
+                      r"|.*compile\.py (compile|deploy))")
+    problems = []
+    for path in sorted((REPO_ROOT / "registry" / "skills").glob("*/SKILL.md")):
+        text = path.read_text(encoding="utf-8")
+        _, head, body = text.split("---", 2)
+        if (_y.safe_load(head) or {}).get("targets") != ["mitos-agent"]:
+            continue
+        in_fence = False
+        for n, line in enumerate(body.splitlines(), 1):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            snippets = [line.strip()] if in_fence else re.findall(r"`([^`]+)`", line)
+            if "the owner" in line:
+                continue
+            for s in snippets:
+                if rule.match(s.strip()):
+                    problems.append(f"{path.parent.name}: body line {n}: `{s}` "
+                                    f"(agent-only skill runs a shell step; hand it to the owner)")
+    assert not problems, "\n".join(problems)

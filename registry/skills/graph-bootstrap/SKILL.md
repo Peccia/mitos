@@ -54,10 +54,11 @@ touches Drive; this enumeration is your job.
      note: <N> document mapping(s) discovered in Drive folder <folder>
      ```
    - `graph.jsonld`: the fragment from step 4.
-6. **Surface for review.** The candidate now sits in `registry/local/inbox/`. Push it to the
-   review machine via the **private** overlay sync (`mitos sync --machine <this-box> push` then
-   `mitos sync --machine <review-pc> pull`) — the queue lives inside `registry/local/` and
-   travels with the overlay; it never touches the public-track repo.
+6. **Surface for review.** The candidate now sits in `registry/local/inbox/`. Ask the owner to
+   move it to the review machine through the **private** overlay sync:
+   the owner runs `mitos sync --machine <this-box> push` here,
+   then the owner runs `mitos sync --machine <review-pc> pull` on the review machine. The queue lives inside `registry/local/` and travels with the overlay; it never
+   touches the public-track repo.
 7. **Report** to the owner over Telegram: the project, how many documents were proposed, the
    folder searched, and that the candidate is waiting in their operator console
    (`compile.py review`) for accept/reject. Accept upserts it into
