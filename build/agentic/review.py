@@ -2279,6 +2279,12 @@ def state(reg: Registry) -> dict:
         # one rarely-changed key would be more machinery than the edit is worth (invariant #10).
         "registry_default_deliverables": list(
             graphmod.order_deliverables(reg.user.get("default_deliverables") or [])),
+        # The Mitos Agent presentation gate (registry/user.yaml's FEATURES group). A DISPLAY
+        # flag, deliberately NOT a sibling of `machine_targets`: what a machine compiles is
+        # decided by its own `targets:`, so a fleet with a mitos-agent machine keeps compiling
+        # it byte-for-byte while the console hides the harness's affordances. The client reads
+        # it through one predicate (`hasMitosAgent`) — see build/review_ui/app.js.
+        "mitos_agent": bool(reg.user.get("mitos_agent")),
         # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
         # checkbox group reads this the same way, for the same reason.
         "known_coverage": list(graphmod.KNOWN_COVERAGE),

@@ -2351,8 +2351,11 @@ def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
     css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
 
-    # agents-md must be excluded from targetOpts in Skills & Org
-    assert '.filter((t) => t !== "agents-md")' in app
+    # agents-md must be excluded from targetOpts in Skills & Org. The rule now lives in
+    # the shared isTargetVisible predicate (which also carries the mitos_agent gate), so
+    # the chips read it rather than spelling the exclusion out a second time.
+    assert 'const isTargetVisible = (t) => t !== "agents-md"' in app
+    assert ".filter(isTargetVisible)" in app
 
     # Target filter mode (show vs hide) and hidden targets tracking must exist
     assert "skillFilterTargetMode" in app
@@ -2450,3 +2453,114 @@ def test_api_graph_effort_hidden_toggle_end_to_end():
 
 
 
+
+
+# ── The mitos_agent presentation gate ────────────────────────────────────────────
+def test_state_exposes_mitos_agent():
+    """The flag reaches the client as its own boolean. It is NOT derived from
+    machine_targets: a fresh clone's example machine legitimately targets mitos-agent and
+    must keep compiling it, while the console still hides the harness."""
+    from agentic.review import state
+
+    treg, tmp = _temp_registry()
+    assert state(treg)["mitos_agent"] is False
+
+    local = tmp / "registry" / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
+    assert state(loader.load(tmp))["mitos_agent"] is True
+
+
+def test_app_js_syntax_is_valid():
+    """app.js is 4,800+ lines of hand-written vanilla JS with no bundler — one stray
+    bracket takes the whole console down, and nothing else in the suite would notice.
+
+    Node is not a Mitos dependency, so its absence must not fail the suite: without it we
+    fall back to a cheap balance check and warn, which is what a minimal Python-only CI
+    container gets. Any normal developer box runs the real V8 parse."""
+    import shutil
+    import subprocess
+    import warnings
+    from agentic import review
+
+    path = review.UI_DIR / "app.js"
+    node = shutil.which("node")
+    if node:
+        out = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+        assert out.returncode == 0, f"node --check failed:\n{out.stderr}"
+        return
+    src = path.read_text(encoding="utf-8")
+    for open_c, close_c in (("{", "}"), ("(", ")"), ("[", "]")):
+        assert src.count(open_c) == src.count(close_c), f"unbalanced {open_c}{close_c}"
+    warnings.warn("node not found — app.js checked for bracket balance only, not syntax")
+
+
+def test_app_js_gates_every_org_surface_behind_the_flag():
+    """The six affordances the flag owns, plus the dead Org-tab code it replaced.
+
+    Asserted as source invariants because there is no DOM to drive here — the point is
+    that nobody reintroduces an ungated org control while the console has no test harness
+    that would render one."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    # the single source of the flag, and the two static item predicates
+    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
+    assert "const isTargetVisible = (t) =>" in app
+    assert "const isSkillVisible = (s) =>" in app
+    # static, never a join against the async /api/org response — a predicate that fails
+    # open is not a gate
+    assert 's.name.startsWith("org-")' in app
+
+    # 1 + 2: the "+ New org" button and the "Orgs only" chip
+    assert 'if (hasMitosAgent()) {\n    const newOrgBtn' in app
+    assert "if (hasMitosAgent() && scopedSkills.some(" in app
+    # 3: the drawer's org role-tree panel
+    assert "if (hasMitosAgent() && domain && orgData" in app
+    # 4 + 5: target filter chips and new-skill authoring checkboxes
+    assert app.count(".filter(isTargetVisible)") >= 2
+    # 6: the card grid
+    assert "(STATE.prompts.skills || []).filter(isSkillVisible)" in app
+    # the network call the gate makes pointless
+    assert "if (!orgData && hasMitosAgent()) {" in app
+
+    # dead Org-tab leftovers, pruned: both wrote to #view-org, which index.html lost when
+    # the tab merged into Skills
+    assert "function renderOrg(" not in app
+    assert "loadOrgData" not in app
+    assert "view-org" not in app
+
+
+def test_effort_editor_save_preserves_org_domain_when_field_is_hidden():
+    """Hiding a control must never propose its value away. With the flag off the Org
+    domain select is not rendered, so the save handler reads the effort's stored tag
+    instead of dereferencing a null input."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "inputs.orgDomain = null;" in app
+    assert 'orgDomain: inputs.orgDomain ? inputs.orgDomain.value' in app
+    assert "(vals.orgDomain || \"\")" in app
+
+
+def test_propose_graph_change_preserves_existing_org_domain():
+    """The round trip the guard above protects: re-proposing an effort with its stored
+    orgDomain must land that tag in the candidate, so accepting it is a no-op on the
+    org edge rather than a silent untagging."""
+    import json
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    dom = sorted(loader.known_org_domains(treg))[0]
+
+    # tag it, accept-shaped: propose once with a domain, then propose again carrying the
+    # value the editor would have read back out of STATE
+    review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch prep", "orgDomain": dom}])
+    cand = sorted((tmp / "registry" / "local" / "inbox").glob("*/*.jsonld"))[-1]
+    body = json.loads(cand.read_text(encoding="utf-8"))
+    tagged = [n for n in body["@graph"]
+              if str(n.get("@id", "")).endswith("launch-prep")]
+    assert tagged, "the effort node must be in the candidate"
+    assert any(dom in json.dumps(n) for n in tagged), \
+        "the orgDomain tag must survive into the proposed JSON-LD"
