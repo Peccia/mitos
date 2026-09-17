@@ -45,6 +45,12 @@ def is_manual_skill_target(tspec: dict) -> bool:
 #     `default_deliverables` is the first: the forward contract a new effort starts with.
 #     Widening this file beyond identity is deliberate and recorded here rather than left
 #     to be inferred; the alternative was a second registry-level config file for one key.
+#   FEATURES — presentation flags. `mitos_agent` is the first: it gates the console and
+#     `mitos init` affordances for the incubating planning harness (org skills, the
+#     mitos-agent target chip, the effort Org domain field, the init wizard's agent
+#     option). It gates presentation only — the compiler keys off machine `targets:`, so
+#     a machine that names mitos-agent compiles identically whatever this flag says.
+#     Deliberately absent from _USER_TOKENS: a feature flag is not a placeholder.
 #
 # Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
 # _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
@@ -53,9 +59,13 @@ def is_manual_skill_target(tspec: dict) -> bool:
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
 KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
-                   "default_deliverables"}
+                   "default_deliverables", "mitos_agent"}
 # The subset of KNOWN_USER_KEYS whose value is a list, not a string.
 _USER_LIST_KEYS = {"default_deliverables"}
+# The subset whose value is a bool. YAML's `true` is the only accepted spelling — the
+# string "true" and the int 1 are rejected, so a typo fails at load rather than reading
+# as truthy and quietly turning a surface on.
+_USER_BOOL_KEYS = {"mitos_agent"}
 # documentation + tests are the registry-wide default because they are the two every kind
 # of work owes regardless of shape, and a default inherited silently should fit everything
 # it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
@@ -64,7 +74,8 @@ _USER_LIST_KEYS = {"default_deliverables"}
 # surfaced as a warning where the declaration is made (see the console's effort editor).
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
                  "email": "user@example.com", "location": "Your City, State",
-                 "default_deliverables": ["documentation", "tests"]}
+                 "default_deliverables": ["documentation", "tests"],
+                 "mitos_agent": False}
 
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
@@ -274,6 +285,14 @@ def _load_user(dir_path: Path, label: str) -> dict:
         if k in _USER_LIST_KEYS:
             if not isinstance(v, list):
                 raise RegistryError(f"{label}: {k!r} must be a list")
+            continue
+        if k in _USER_BOOL_KEYS:
+            # `is bool` via isinstance is exact here: bool is the only type accepted, and
+            # Python's int/bool subclassing does not let 1 through because isinstance(1,
+            # bool) is False.
+            if not isinstance(v, bool):
+                raise RegistryError(f"{label}: {k!r} must be true or false, not "
+                                    f"{v!r}")
             continue
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")

@@ -25,11 +25,44 @@ def test_user_defaults_when_no_user_yaml_overlay():
     DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
     a change to one group cannot be waved through as a change to the other."""
     treg, tmp = _temp_registry()
-    identity = {k: v for k, v in treg.user.items() if k != "default_deliverables"}
+    non_identity = {"default_deliverables", "mitos_agent"}
+    identity = {k: v for k, v in treg.user.items() if k not in non_identity}
     assert identity == {"given_name": "User", "full_name": "Mitos User",
                         "email": "user@example.com", "location": "Your City, State"}
     # documentation + tests: the two every kind of work owes regardless of shape
     assert treg.user["default_deliverables"] == ["documentation", "tests"]
+    # FEATURES: the planning harness is off until an overlay turns it on
+    assert treg.user["mitos_agent"] is False
+
+
+def test_user_yaml_mitos_agent_overlay_wins():
+    """The flag follows the same last-layer-wins merge as identity — the public core
+    ships it off, a maintainer's untracked overlay turns it on."""
+    _treg, tmp = _temp_registry()
+    local = tmp / "registry" / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
+    assert loader.load(tmp).user["mitos_agent"] is True
+
+
+def test_user_yaml_rejects_non_bool_mitos_agent():
+    """A typo must fail at load, not read as truthy and silently reveal the harness."""
+    _treg, tmp = _temp_registry()
+    for bad in ("'true'", "1", "0", "null", "[true]"):
+        (tmp / "registry" / "user.yaml").write_text(
+            f"mitos_agent: {bad}\n", encoding="utf-8")
+        try:
+            loader.load(tmp)
+            raise AssertionError(f"expected RegistryError for mitos_agent: {bad}")
+        except loader.RegistryError as e:
+            assert "mitos_agent" in str(e)
+
+
+def test_mitos_agent_is_not_a_placeholder_token():
+    """FEATURES keys never reach render's token map — {{user_mitos_agent}} must not be
+    a thing."""
+    toks = render.user_token_map(_FakeReg({"given_name": "X", "mitos_agent": True}))
+    assert not any("mitos_agent" in t for t in toks)
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()
