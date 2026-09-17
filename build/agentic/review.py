@@ -790,7 +790,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         try:
             eid = str(e_dict["id"]).strip()
             prev_hidden = effective_efforts[eid].hidden if eid in effective_efforts else False
-            hidden_val = bool(e_dict.get("hidden", prev_hidden))
+            hidden_val = bool(e_dict["hidden"]) if "hidden" in e_dict else prev_hidden
+            prev_kw = effective_efforts[eid].keywords if eid in effective_efforts else ""
+            kw_val = str(e_dict.get("keywords", prev_kw)).strip()
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
@@ -799,6 +801,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 goal=str(e_dict.get("goal", "")).strip(),
                 deliverables=_deliv,
                 requirements_coverage=_cover,
+                keywords=kw_val,
                 hidden=hidden_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}

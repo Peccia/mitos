@@ -2363,4 +2363,90 @@ def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
     assert ".pool-opt.active.hide-active" in css
 
 
+def test_app_js_propose_graph_draft_includes_hidden():
+    """Ensure app.js maps the hidden property in proposeGraphDraft so the UI
+    sends visibility state to /api/graph."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "hidden: !!x.hidden" in app
+
+
+def test_api_graph_effort_hidden_toggle_end_to_end():
+    """HTTP API test: toggle effort hidden on and off via /api/graph and /api/decide,
+    verifying it reflects in /api/state."""
+    import json
+    import threading
+    import urllib.request
+    from agentic import review
+    treg, tmp = _temp_registry()
+    server = review.make_server(treg, port=0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        port = server.server_address[1]
+        slug = next(iter(treg.projects))
+
+        # 1. Propose hiding an effort via /api/graph
+        url_graph = f"http://127.0.0.1:{port}/api/graph"
+        payload_hide = json.dumps({
+            "slug": slug,
+            "documents": [],
+            "removals": [],
+            "efforts": [{"id": "launch-prep", "name": "Launch prep", "hidden": True}],
+            "effortRemovals": []
+        }).encode("utf-8")
+        req = urllib.request.Request(url_graph, data=payload_hide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+            cid = data["id"]
+
+        # 2. Accept the candidate via /api/decide
+        url_decide = f"http://127.0.0.1:{port}/api/decide"
+        payload_decide = json.dumps({"id": cid, "decision": "accept"}).encode("utf-8")
+        req = urllib.request.Request(url_decide, data=payload_decide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+
+        # 3. Verify /api/state returns hidden: True
+        url_state = f"http://127.0.0.1:{port}/api/state"
+        with urllib.request.urlopen(url_state) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            g = next(proj for proj in data["graphs"] if proj["slug"] == slug)
+            eff = next(e for e in g["efforts"] if e["id"] == "launch-prep")
+            assert eff["hidden"] is True
+
+        # 4. Propose unhiding via /api/graph
+        payload_unhide = json.dumps({
+            "slug": slug,
+            "documents": [],
+            "removals": [],
+            "efforts": [{"id": "launch-prep", "name": "Launch prep", "hidden": False}],
+            "effortRemovals": []
+        }).encode("utf-8")
+        req = urllib.request.Request(url_graph, data=payload_unhide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+            cid2 = data["id"]
+
+        # 5. Accept the unhide candidate
+        payload_decide2 = json.dumps({"id": cid2, "decision": "accept"}).encode("utf-8")
+        req = urllib.request.Request(url_decide, data=payload_decide2, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+
+        # 6. Verify /api/state returns hidden: False
+        with urllib.request.urlopen(url_state) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            g = next(proj for proj in data["graphs"] if proj["slug"] == slug)
+            eff = next(e for e in g["efforts"] if e["id"] == "launch-prep")
+            assert eff["hidden"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 

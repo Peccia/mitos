@@ -2433,6 +2433,7 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
     id: x.id, name: x.name, description: x.description || "",
     goal: x.goal || "",
     orgDomain: x.orgDomain || "",
+    hidden: !!x.hidden,
     deliverables: x.deliverables || [],
     requirementsCoverage: x.requirementsCoverage || [] }));
   const effortRemovals = Object.keys(d.effortRemove);
