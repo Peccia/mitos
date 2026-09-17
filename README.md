@@ -2,10 +2,24 @@
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
 
-### ⚡ Mitos in 60 Seconds
-* **Author Once:** Define your identity, custom skills, prompt playbooks, and project context in plain Markdown and YAML under `registry/`.
-* **Deploy Everywhere:** Mitos compiles that **single source of truth** into the native formats of Claude Code, Antigravity (IDE & CLI), Claude Desktop, and Mitos Agent across your machines.
-* **Two-Way Sync:** When you or an AI tool refine a deployed skill or rule in your editor, Mitos detects the change, captures it into an approval queue (`inbox/`), and folds it back into your registry without losing work.
+### ⚡ Mitos in 60 seconds
+
+You use more than one coding harness, and each one wants its context in its own format. So you
+write the same project background into a `CLAUDE.md`, an `AGENTS.md` and a chat window, and
+three days later they disagree.
+
+Mitos keeps one copy and compiles it into all of them.
+
+* **Write it once.** Your skills, prompt playbooks, project background and personal details live
+  as plain Markdown and YAML under `registry/`.
+* **Every harness gets it.** One `deploy` writes the native format each tool expects — Claude
+  Code, Antigravity (IDE & CLI), and the Claude app (web + Desktop) — on every machine you own.
+* **Edits find their way home.** When you or a tool improves a deployed file in place, Mitos
+  notices, captures the change into a review queue (`inbox/`), and folds it back into the
+  registry once you accept it. Nothing is silently overwritten and nothing is silently kept.
+* **Your documents, indexed.** Point Mitos at a project's folder in Google Drive (or any MCP
+  document store — the standard way a tool reaches an outside service) and it builds a map of
+  what is in there, which every harness then reads as ordinary context.
 
 The registry is your **single source of truth**: the accumulated, compounding asset of *your* agent capabilities. Execution engines are rented — when a better tool ships, you write one adapter, not a migration.
 
@@ -14,7 +28,6 @@ flowchart TB
     subgraph MOAT["🧵 Your knowledge — single source of truth (registry/)"]
         direction LR
         SKILLS["Skills"]
-        AGENTS["Subagents"]
         PROMPTS["Personas / Prompts"]
         GRAPH["RDF knowledge graph<br/>(schema.org index of your docs)"]
     end
@@ -23,11 +36,11 @@ flowchart TB
 
     COMPILE --> CC["Claude Code"]
     COMPILE --> AG["Antigravity"]
-    COMPILE --> HE["Mitos Agent"]
+    COMPILE --> CA2["Claude app"]
 
-    CC --> HARNESS["Any agentic harness<br/>your setup, deployed everywhere"]
+    CC --> HARNESS["Every harness you use<br/>same context, native format"]
     AG --> HARNESS
-    HE --> HARNESS
+    CA2 --> HARNESS
 
     subgraph WS["Your workspace (via connectors)"]
         direction LR
@@ -42,7 +55,7 @@ flowchart TB
 
 ## What stays public, what stays yours
 
-Mitos ships a **generic public core** — the engine, neutral default identity, example projects, skills, and org templates. Everything personal lives in a **gitignored overlay** at `registry/local/`, loaded *on top of* the core with a documented **last-layer-wins** rule. The same repo is safe to fork in the open without leaking a single private detail.
+Mitos ships a **generic public core** — the engine, a neutral default identity, and example projects and skills. Everything personal lives in a **gitignored overlay** at `registry/local/`, loaded *on top of* the core with a documented **last-layer-wins** rule. The same repo is safe to fork in the open without leaking a single private detail.
 
 ```mermaid
 flowchart LR
@@ -53,8 +66,8 @@ flowchart LR
 
 A local file with the same logical name as a core file **replaces** it; new local files are **added**; untouched core files **remain**. Run `python build/mitos.py init` to set up your overlay — it offers three paths and **never overwrites files you already have**:
 
-1. **Scaffold a fresh one** — name, an org template (`software-firm`, `design-firm`,
-   `marketing-firm`), and a workspace backend.
+1. **Scaffold a fresh one** — your name, which harnesses this box runs, and (optionally) a
+   document store to connect.
 2. **Pull one you already keep on a git hub** — onboard a second machine from your
    `mitos-local` repo (clones your real files instead of generating new ones).
 3. **Use files already in `registry/local/`** — finish the install around custom data you
@@ -136,32 +149,22 @@ For indexing documents and setting up external document stores (like Google Work
 
 ## Choosing your setup
 
-`python build/mitos.py init` asks how you'll run Mitos on this box and writes
+`python build/mitos.py init` asks which harnesses this box runs and writes
 `registry/local/machines/<name>.yaml` for you — the file that actually decides what `deploy`
-materializes. The first question is the one that matters:
+materializes.
 
-| Role | `targets:` | What deploys | Orgs? |
-|---|---|---|---|
-| **Coding harnesses** | any subset of `[claude-code, antigravity, claude-app]` | Skills + prompts inside the editors you already use. No agentic tree. | No |
-| **Mitos Agent — the planning harness** | `[mitos-agent, agents-md]` | The standalone agentic harness: `SOUL.md`, the operating tree (`assistant_root`), and the org-domain routing model. | **Yes** |
+| `targets:` | What deploys |
+|---|---|
+| `claude-code` | Per-project `CLAUDE.md` + `AGENTS.md`, skills in `.claude/skills/`, and prompts as slash commands. |
+| `antigravity` | Native `AGENTS.md` context, MCP wiring, and global or project-scoped skills. Covers Antigravity IDE and CLI. |
+| `claude-app` | Skill `.zip`s staged for upload to your claude.ai account, plus an `npx mcp-remote` bridge for Claude Desktop. |
+| `agents-md` | The `AGENTS.md` context format itself — the shape the other targets read. Not a harness of its own. |
 
-Pick the coding role and init then asks **which** harnesses, as an independent multi-select
-— each is its own target with its own deploy paths, so any non-empty subset is a legal
-machine (Antigravity alone, Claude Desktop alone, all three). The `paths:` block is derived
-from whatever you pick. Three of those combinations ship as copyable templates:
-[`example-workstation.yaml`](machines/example-workstation.yaml) (`[claude-code]`),
-[`example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) (all three), and
-[`example-linux.yaml`](machines/example-linux.yaml) (the Mitos Agent shape).
-
-**Orgs (`org-software`/`org-design`/`org-marketing`) require `mitos-agent` literally in
-`targets:`.** They never deploy on a coding-harness machine — the three org skills declare
-`targets: [mitos-agent]` only, and the org-domain table + per-effort routing lines render
-exclusively on the mitos-agent/agents-md tree. `agents-md` by itself (e.g. a workstation using
-`agentic_context_root` or a project's `agentic_tree:` mount) is a context-format choice,
-not an org trigger — see [`docs/org-templates.md`](docs/org-templates.md). Mixing `mitos-agent`
-with a coding-harness target on one machine is rejected at compile time (see **machine**
-under [Core concepts](#core-concepts)) — the Mitos Agent role is a dedicated machine, not an
-add-on. `init` refuses the mix before it writes anything.
+The harness question is a multi-select: each target has its own deploy paths, so any non-empty
+subset is a legal machine (Antigravity alone, Claude Desktop alone, all three). The `paths:`
+block is derived from whatever you pick. Two combinations ship as copyable templates:
+[`example-workstation.yaml`](machines/example-workstation.yaml) (`[claude-code]`) and
+[`example-windows-secondary.yaml`](machines/example-windows-secondary.yaml) (all three).
 
 **Workspace connections are asked for, never assumed.** Init offers the servers defined in
 [`connections/servers.yaml`](connections/servers.yaml) plus **None** (the default), and
@@ -178,11 +181,10 @@ profile; both the wiring and the skill appear on the next deploy. See
 answers a term in the closed deliverables vocabulary an effort declares — `documentation`,
 `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt` —
 and each targets every harness, so a workstation gets all seven. The remaining core skills
-are narrower: the three org skills need `mitos-agent` literally in `targets:` (above), and
-`gws` stays off until you declare its connection. Beyond those, the skills lane is for
-*your* content: author one at
+are narrower: `gws` stays off until you declare its connection. Beyond those, the skills lane
+is for *your* content: author one at
 `registry/local/skills/<name>/SKILL.md` in your gitignored overlay, or from the console's
-**Skills & Orgs** tab (`python build/compile.py review` → **+ New skill**), which lands it
+**Skills** tab (`python build/compile.py review` → **+ New skill**), which lands it
 in the same place through the inbox. Set its `targets:` to the harnesses you picked, and
 `scope:` to `global` (every project on the machine) or `project` (only the projects naming
 it). See [How skills reach a tool](#how-skills-reach-a-tool) and
@@ -216,22 +218,21 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 
 | Term | What it is |
 |---|---|
-| **registry/** | Your single source of truth. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), project manifests (`projects/`), org templates (`templates/`). |
+| **registry/** | Your single source of truth. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), and project manifests (`projects/`). |
 | **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
 | **Skill resources** | A skill's supporting files — `registry/skills/<name>/examples/` (expected-output samples) and `.../scripts/` (executables Claude can run) — auto-discovered, deployed alongside `SKILL.md`, and bundled into claude.ai zips. Each file adopts/harvests back to its own path, never `SKILL.md`. |
-| **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. The Skills & Orgs tab's `+ Extend department` button scaffolds one. |
+| **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. |
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |
 | **connections/** | MCP server definitions + env templates. Wiring, not content — it deploys on its own `--lane connections`. |
 | **target** | An adapter (`targets/<tool>.yaml`): how one tool consumes the registry — what to emit and where. |
-| **machine** | A host (`machines/<name>.yaml`): which targets land there and its path keys. Roles are exclusive: `mitos-agent` (the agentic harness) cannot share a machine with a coding harness (`antigravity`/`claude-app`/`claude-code`) — an agentic machine is dedicated to that purpose. Rejected at compile time. `agents-md` itself is not a harness (it's the context format below), so it's never part of this exclusion. |
+| **machine** | A host (`machines/<name>.yaml`): which targets land there, and the path keys telling each target where to write. One machine can carry any mix of the coding harnesses. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy blocks to prevent overwriting), `harvest` (captured into `inbox/` as a review proposal), or `generated` (regenerated each deploy from the graph). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The human review queue. Proposals from self-improving tools land here as candidates; **only you** approve and merge them via the operator console. |
-| **Operating mount vs. reference mount** | Two context mounting options with distinct edit rules. An **operating tree** (`assistant_root`, or a project's `agentic_tree:` below) is the full interactive workspace (rules, skills, routing) with `drift_policy: protect` where local edits reconcile back via `adopt`. A **reference index** (`agentic_context_root` below) is a lightweight, read-only project and document index generated purely from `registry/graph/` (`drift_policy: generated`) where edits are overwritten on deploy. |
-| **assistant_root** | *(operating mount, machine-wide)* The folder (default `~/MitosAgent`) where your assistant's compiled context lives — the proven agentic combo. It includes `AGENTS.md` (the operating root for routing), `Assistant/AGENTS.md` (one-shot workspace tasks), `Projects/AGENTS.md` (a generated Project Roster — one bullet per deployed project from its manifest's `name:` + optional `description:` — plus the org-domain table), and any custom branches you add — see **dynamic branches** below. Only valid on an agentic (`mitos-agent`) machine. |
-| **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts the SAME operating tree `assistant_root` renders (identical shape: Navigation/Workflows/Skills, full roster, dynamic branches), but rooted at `<local_path>/<subdir>/` inside that one project's own checkout instead of a whole machine. The workstation-side counterpart to `assistant_root`: lets a coding harness like Antigravity operate against a single project the way Mitos Agent operates against a dedicated machine. Workstation-only — a no-op on an agentic machine, which already has the tree at its machine root. |
+| **Operating mount vs. reference mount** | Two ways to mount context, with different edit rules. An **operating tree** (a project's `agentic_tree:` below) is a full working context — rules, skills, routing — with `drift_policy: protect`, so edits you make in place reconcile back via `adopt`. A **reference index** (`agentic_context_root` below) is a lightweight, read-only project and document index generated straight from `registry/graph/` (`drift_policy: generated`); edits there are overwritten on the next deploy. |
+| **agentic_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `agentic_tree: <subdir>` — that mounts a full operating tree (Navigation/Workflows/Skills, the project roster, dynamic branches) at `<local_path>/<subdir>/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with a complete, editable context tree rather than a flat `AGENTS.md`. |
 | **Dynamic branch** | A custom folder under an operating mount's root (e.g. `family/`) that you extend without forking `targets/agents-md.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. Applies identically to a machine mount or a project's `agentic_tree` mount. |
-| **agentic_context_root** | *(reference mount, machine-wide)* A workstation path key (`machines/<name>.yaml`) that materializes a lightweight, read-only doc map — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. No prose, no Workflows/Skills. Independent of `agents-md`/`mitos-agent` — a plain coding workstation can use it. |
-| **project checkouts** | Deployed files at each project's `local_path` directory. On **workstation machines** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` (inline doc index from the knowledge graph + project prose) plus a thin `CLAUDE.md` stub → `@AGENTS.md`. On **agentic machines** (agents-md also in targets), `CLAUDE.md` carries identity + repo context and the graph materializes separately in the Agentic Context tree. |
+| **agentic_context_root** | *(reference mount, machine-wide)* A workstation path key (`machines/<name>.yaml`) that materializes a lightweight, read-only doc map — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. No prose, no Workflows/Skills. Independent of `agents-md` — a plain coding workstation can use it. |
+| **project checkouts** | Deployed files at each project's `local_path` directory. On a **workstation** (claude-code without agents-md), Mitos writes a full-context `AGENTS.md` — the inline doc index from the knowledge graph plus the project's prose — and a thin `CLAUDE.md` stub pointing at it (`@AGENTS.md`). Where `agents-md` is also a target, `CLAUDE.md` carries identity and repo context and the graph materializes separately in the reference tree. |
 
 ## How skills reach a tool
 
@@ -243,9 +244,9 @@ the thing most worth understanding up front:
 | **Compatibility** | *Can* this skill run on tool X? | the skill's own `targets:` frontmatter |
 | **Scope** | Does it deploy everywhere, or only to specific projects? | the skill's own `scope: global \| project` frontmatter (default `global`) |
 
-**Why only Claude Code and Antigravity need the second axis:** Mitos Agent and claude.ai each have one
-*global* skills location only — a skill targeting either is simply available everywhere on it, no
-scoping possible, so one axis (compatibility) is enough there; they ignore `scope` entirely. Claude
+**Why only Claude Code and Antigravity need the second axis:** claude.ai has one *global* skills
+location only — a skill targeting it is simply available everywhere on your account, with no
+scoping possible, so one axis (compatibility) is enough there and `scope` is ignored. Claude
 Code and Antigravity each offer **two** surfaces — a personal/global directory
 (`~/.claude/skills/`, `~/.gemini/config/skills/`) and a per-project one
 (`<checkout>/.claude/skills/`, `<checkout>/.agents/skills/`) — so a skill's `scope` picks which one
@@ -254,9 +255,9 @@ it lands in on those two tools.
 `scope: project` skills reach a project's checkout via that project manifest's `skills:` list —
 **the skill must also list `claude-code` or `antigravity`** (whichever has the project-scoped
 surface you want) in its own `targets:`. The manifest decides *which projects*; the skill decides
-*which tools*. A Mitos-Agent-only skill (one calling an MCP server that isn't in a Claude Code checkout)
-lives globally on Mitos Agent and never appears in a project manifest — binding it there is a category
-error the compiler rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
+*which tools*. A skill that targets neither of those two has no project-scoped surface to land on,
+so it never appears in a project manifest — binding it there is a category error the compiler
+rejects. Full mechanics: [authoring-capabilities.md](docs/authoring-capabilities.md#skill-scope-global-vs-project).
 
 **claude.ai is a menu, not a deploy target.** `deploy` stages one zip per compatible skill and a
 human uploads the ones they want, so it takes no `include:`/`exclude:` curation (a curation block
@@ -286,16 +287,12 @@ warns when an effort declares a deliverable no skill on that machine knows how t
 effort starts with the deliverables its project declares, falling back to `default_deliverables` in
 `registry/user.yaml` — see [the overlay configuration reference](registry/README.md#default-deliverables).
 
-**This is the half most setups are missing, and it works by instruction, not extraction.** The
-usual approach scrapes a coding harness's transcript afterward and reconstructs what happened with
-a model, so the same run reads differently every time. Mitos already deploys skills *into* those
-harnesses, so the output is specified before the work starts. Each skill writes its record to
-`{{returns_root}}/<run>/` — a real directory resolved per machine — and
-[Mitos Agent](https://github.com/Peccia/mitos-agent) reads that folder back with `mitos-agent
-returns`, joined against the requirements it handed over.
-
-Two readers of one folder, neither writing the other's store: nothing in Mitos Agent goes near
-`registry/`, and nothing here writes its requirements record. Details in
+**This works by instruction, not extraction.** The usual approach scrapes a coding harness's
+transcript afterward and reconstructs what happened with a model, so the same run reads
+differently every time. Mitos already deploys skills *into* those harnesses, so the shape of the
+output is specified before the work starts. Each skill writes its record to
+`{{returns_root}}/<run>/` — a real directory resolved per machine — where you, or any tool you
+point at it, can read the run back. Details in
 [authoring capabilities](docs/authoring-capabilities.md#deliverable-producing-skills-delivers) and
 [the operator console](docs/operator-console.md).
 
@@ -313,7 +310,7 @@ frontmatter names the tools it's for:
 ---
 name: release-notes
 description: "Draft release notes from the git log"
-targets: [claude-code, mitos-agent]
+targets: [claude-code, antigravity]
 scope: project               # only the projects that bind it (global is the default)
 ---
 # ...your instructions...
@@ -452,11 +449,9 @@ Nothing writes the graph directly. Inspect any project with
 a concise added/changed/removed document summary first, full line diff behind a toggle, so
 re-running `connect` on a whole store doesn't bury what's new under unchanged lines),
 **Knowledge Graph** (propose
-document mappings and tag efforts with the org domain that governs them), **Skills & Orgs**
-(browse, create, and edit skills as cards — including supporting files under `examples/`/
-`scripts/` and org-role extensions via `extends_skill`/`extends_role`; each org-domain card
-expands into its role tree, Agent-MD folder view, and a `+ Extend department` button per role,
-plus `+ ORG` domain creation), and **Prompt Library** (browse, copy, and
+document mappings, and describe each effort's goal and expected deliverables), **Skills**
+(browse, create, and edit skills as cards, including their supporting files under `examples/`
+and `scripts/`), and **Prompt Library** (browse, copy, and
 compose your registry prose for one-shot use in any chat app — plus a Ctrl/⌘K command
 palette that searches all of it). It edits the working tree and never commits
 — `git status` shows you exactly what changed. A status bar can also trigger **Compile**
@@ -464,15 +459,14 @@ and **Deploy** directly from the sidebar, with a pre-deploy plan preview and a l
 drawer — `--force`/`--prune`/scoped `--lane`/`--target` deploys remain CLI-only. Full
 guide: [docs/operator-console.md](docs/operator-console.md).
 
-**Skills & Orgs and the Prompt Library open scoped to your machines.** Both default to
+**Skills and the Prompt Library open scoped to your machines.** Both default to
 showing only what a machine in your registry would actually deploy — asked of the same
 logic `deploy` uses, so a skill's `targets:` *and* its `requires_server:` connection gate
 both count. On a coding-harness box with no `document_store:` that means you see your own
-skills and nothing else: the shipped `org-*`, `new-session`, `graph-bootstrap`, and
-`project-update` all declare `targets: [mitos-agent]`, and `gws` stays out until you wire its
-server. Nothing is deleted or hidden permanently — the **All** chip shows the full registry,
-so the org skills remain readable as reference. A fresh clone with no machine profile yet
-shows everything, so the quick-start browse still works.
+skills and nothing else: the shipped `new-session`, `graph-bootstrap` and `project-update`
+target the planning harness, and `gws` stays out until you wire its server. Nothing is deleted —
+the **All** chip shows the full registry. A fresh clone with no machine profile yet shows
+everything, so the quick-start browse still works.
 
 ## Commands
 
@@ -508,7 +502,7 @@ Explore our comprehensive guides to mastering Mitos:
 ```
 registry/        # single source of truth — your authored content (+ local/ overlay, gitignored)
 connections/     # MCP server definitions + env templates
-targets/         # one adapter per tool (claude-code, mitos-agent, antigravity, agents-md, claude-app)
+targets/         # one adapter per tool (claude-code, antigravity, claude-app, agents-md)
 machines/        # per-host profiles (example-* templates; copy to registry/local/machines/)
 build/           # the compiler, loader, planner, connectors, and tests
 docs/            # guides — managing-state.md (deploy/drift), lan-sync.md (sync), connectors/

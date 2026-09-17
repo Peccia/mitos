@@ -1,5 +1,11 @@
 # The Implemented Document's identity fragment
 
+> This page documents a **cross-repo contract**, not a Mitos feature you configure. Mitos
+> Agent is a separate planning harness, still incubating; its console affordances in Mitos are
+> hidden behind `mitos_agent` in `registry/local/user.yaml`. What follows is the JSON-LD shape
+> both repos conform to, so that the side reading a document and the side writing it cannot
+> drift. Nothing here is required to use Mitos with a coding harness.
+
 **The contract.** When Mitos-Agent graduates a Work item, it publishes an Implemented Document —
 the evaluated record of what was actually built — into the project's watched store folder. That
 document carries a small, fenced JSON-LD block naming which Work item it reports on, in the same

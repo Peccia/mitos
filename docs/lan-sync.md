@@ -59,7 +59,7 @@ The key is resolved to an **absolute path**: a bare name like `id_github` is loo
 clear "ssh key not found at …" instead of a cryptic `Permission denied (publickey)`.
 
 This key resolution (`agentic.sshkey`) is shared with, but distinct from, a *project's* `repo_ssh_keys:`
-(see [`../docs/targets/mitos-agent.md`](targets/mitos-agent.md)): `sync.git.ssh_key` here authenticates
+(see [the overlay configuration reference](../registry/README.md)): `sync.git.ssh_key` here authenticates
 the **overlay repo** (`registry/local/`) against its hub; `repo_ssh_keys:` authenticates a **project's
 own cloned repos** against their own remotes. A box can need both at once — one key for the overlay
 hub, a different key per project repo.

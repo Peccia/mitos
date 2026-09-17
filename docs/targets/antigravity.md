@@ -63,7 +63,7 @@ paths:
   antigravity_config: "~/.gemini/config"
 ```
 
-> **Note on `assistant_root`:** The standalone `mitos-agent` planning harness owns the dedicated
+> **Note on `assistant_root`:** The `mitos-agent` target owns the dedicated
 > `assistant_root` operating tree on agentic machines. On coding workstations, Antigravity operates
 > within project workspaces (`projects_root`) and project-scoped agentic trees (`agentic_tree:`).
 

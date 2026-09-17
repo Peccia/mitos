@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Feature: `mitos_agent` in `registry/user.yaml` (default `false`, overridable in `registry/local/user.yaml`) decides whether the Mitos Agent planning harness is visible. Off, the operator console shows only the coding-harness surface — no org-domain skills under either scope, no `mitos-agent` target chip, no `+ New org` button or `Orgs only` filter, no `Org domain` field in the effort editor, and the nav reads **Skills** rather than **Skills & Orgs** — and `mitos init` stops advertising the agent use case on a fresh setup. The harness is an incubating work in progress and a product that presents it as finished teaches a new user the wrong thing. Nothing is retired: `targets/mitos-agent.yaml`, `machines/example-linux.yaml` and the `org-*` skills all stay in core, `mitos init` still honours a typed `2`, and turning the flag on restores every affordance unchanged.
+
+  **This is a display gate and nothing else.** The compiler never reads it — `deploys_org_content`, `hosts_assistant_tree` and `deploys_assistant_skills` stay keyed to a machine's declared `targets:` — so a fleet that includes a mitos-agent machine compiles and deploys byte-for-byte identically whatever the flag says. No migration, no redeploy required. The value is type-checked strictly at load: `"true"` and `1` raise `RegistryError` rather than reading as truthy, because a typo that silently revealed the harness would be worse than one that failed. It is also deliberately absent from the placeholder token list — `{{user_mitos_agent}}` is not a thing.
+
+  To work on the harness, add `mitos_agent: true` to `registry/local/user.yaml` and press **Reload from disk** in the console. Rationale and the rejected alternatives: `docs/decisions/004-presentation-facade-mitos-agent-flag.md`.
+
+### Changed
+- The public documentation now describes Mitos as what it is today: a context registry and compiler that keeps one canonical body of context — a knowledge graph, your personal details, and an MCP connection — in front of every third-party coding harness. `README.md` is rewritten around that loop; `docs/targets/mitos-agent.md` and `docs/org-templates.md` are removed, and the remaining reference-level mentions are scrubbed. The planning harness returns as documented product when it ships. Pages that document a genuine cross-repo contract (`docs/implemented-document-identity.md`) keep their mentions and now say up front that they describe a contract, not a feature you configure.
+
+### Removed
+- Internal: the dead Org-tab leftovers in `build/review_ui/app.js` (`renderOrg`, `loadOrgData`, and the `orgDomain`/`orgViewMode` module state). All three wrote to a `#view-org` element `index.html` lost when the Org tab merged into Skills in 0.1.2.
+
+### Fixed
+- The console's effort editor no longer dereferences the `Org domain` select unconditionally when saving. With the field hidden it carries the effort's stored `orgDomain` forward instead, so editing an effort with the harness off cannot propose its org tag away.
+
 ## [0.1.6] - 2026-09-02
 
 ### Added

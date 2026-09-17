@@ -295,8 +295,7 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 > agents-md` machine with no `mitos-agent` target (e.g. `machines/example-windows.yaml`) is
 > firmly in the "Agentic" row here, but never gets org content: the org skills, the
 > org-domain table, and per-effort org routing lines all require `mitos-agent` literally in
-> `targets:` (see [`docs/org-templates.md`](../docs/org-templates.md)). Don't infer "has
-> orgs" from this table.
+> `targets:`. Don't infer "has orgs" from this table.
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 

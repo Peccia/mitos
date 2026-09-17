@@ -5,8 +5,7 @@ The Mitos **Operator Console** is a local web application that serves as the hum
 Run the console to:
 1. Review and accept self-improvement proposals or drift from your tools (**Inbox**).
 2. Curate and map workspace files into your projects' knowledge graphs (**Knowledge Graph**).
-3. Browse, create, and edit skills — including supporting files and org-role extensions — and
-   visualize your simulated org structure (**Skills & Orgs**).
+3. Browse, create, and edit skills, including their supporting files (**Skills**).
 4. Search, compose, and copy-paste registry prompts for one-shot chat sessions (**Prompt Library**).
 5. Compile the registry and deploy to a machine directly, with a plan preview before you
    confirm and a live log of what ran (**Status bar**, above every tab).
@@ -148,10 +147,6 @@ surfaced it — presence anywhere always wins over absence from one scope. The s
 this before clearing anything, so a stale browser tab can never purge a document that's still
 live in some watch.
 
-### 🎭 Org domains on efforts
-
-One structured field in this tab drives the org model — the **effort `Org domain` select**: it tags an effort (Work grouping) with the org domain that governs it — e.g. a `Steam Launch` effort tagged `marketing` inside an otherwise software-heavy project. The tag compiles into an org routing line under that effort's heading in the generated files, which is how a session knows to load `org-marketing` for that work and `org-software` for the rest. **Projects themselves are never bound to one org** — the manifest has no `org:` field; the association lives on the work.
-
 ### Defaults, and the one warning the editor shows
 
 **`+ Work` starts with the project's default deliverables already ticked.** They resolve down a
@@ -208,19 +203,26 @@ renders no line.
 
 ---
 
-## 🧩 The Skills & Orgs Tab: Skill Cards + Org Structure
+## 🧩 The Skills Tab: Skill Cards
 
-The **Skills & Orgs** tab is a card grid over every skill in your registry — one card per skill,
-with its description, target chips (which tools it deploys to), and — for org-domain skills — an
-`org: <domain>` badge.
+The **Skills** tab is a card grid over every skill in your registry — one card per skill, with
+its description and target chips (which tools it deploys to).
 
 The grid opens **scoped to your machines**: only skills a machine in your registry would
 actually deploy. That is the same question `deploy` answers, so both gates apply — a skill's
 `targets:` *and* its `requires_server:` connection. On a coding-harness box with no
-`document_store:` the shipped core skills all drop out (`org-*`, `new-session`,
-`graph-bootstrap`, and `project-update` declare `targets: [mitos-agent]`; `gws` needs its server
-wired), leaving your own. Switch the **All** chip to browse the whole registry — nothing is
-hidden permanently, so the org skills stay readable as reference on any machine. The
+`document_store:` several shipped core skills drop out (`new-session`, `graph-bootstrap` and
+`project-update` target the planning harness; `gws` needs its server wired), leaving your own.
+Switch the **All** chip to browse the whole registry.
+
+**One category is hidden rather than scoped.** The `org-*` domain skills belong to the Mitos
+Agent planning harness, which is an incubating work in progress, so they do not appear under
+either scope and neither does the `mitos-agent` target chip. To work on them, set
+`mitos_agent: true` in `registry/local/user.yaml` and press **Reload from disk** — the org
+cards, the **Orgs only** filter, **+ New org**, the effort editor's **Org domain** field and the
+org panel in the skill drawer all come back, and the tab relabels itself **Skills & Orgs**. This
+is a display setting only: what a machine compiles and deploys is decided by its own `targets:`,
+never by this flag. The
 per-target chips beside it come from the targets your machines *declare*, not every adapter
 Mitos supports: a filter that can only ever empty the list isn't a filter. A fresh clone with
 no machine profile yet shows everything. The card face carries only what *distinguishes* one skill from another;
@@ -231,8 +233,7 @@ provenance, so they sit there as a single compact line rather than a grid of car
 - **Edit prompt →** (card or drawer): Opens the skill's body and its authoring metadata —
   description, version, category, and target checkboxes — in the Contextual Editor (Prompt
   Library). Saving proposes a `kind: drift` candidate into the Inbox. A skill's *structural*
-  placement — its supporting files and its org-role extension — is edited in the drawer (below),
-  not here.
+  placement — its supporting files — is edited in the drawer (below), not here.
 - **Supporting Files**: In the drawer, a skill's `examples/` and `scripts/` files
   (deployed alongside `SKILL.md` and bundled into claude.ai zips) are listed inline, each
   editable or deletable, with an **Upload file(s)** button that reads one or more UTF-8 text
@@ -245,32 +246,10 @@ provenance, so they sit there as a single compact line rather than a grid of car
   Contextual Editor for the body. Creating proposes a `kind: new` candidate; nothing is written to
   `registry/` until you Accept it in the Inbox, and it always lands in your private overlay
   (`registry/local/skills/<name>/SKILL.md`), never core.
-- **+ New org**: Scaffolds a brand-new domain as a single `kind: new` skill candidate (an
-  `org-<domain>` skill with `org_domain: <domain>` frontmatter). The domain becomes selectable
-  everywhere once accepted — domain discovery is dynamic, never a hardcoded table.
 - **Disable**: Not yet wired to a candidate — the console can't route a frontmatter-only change
   through the accept path today. Edit the skill's `targets:` list by hand in its `SKILL.md` to
   exclude a tool.
 - **Import from .zip**: A placeholder for a future release — no backend yet.
-
-### Org domains and the Agent-MD Folder View
-
-An org is a **domain playbook** — prose about what a market's work must elicit and produce.
-It is hand-authored and never edited structurally from here. **Orgs are global domain skills
-and are never attached to a project** — the only org edge in the graph is an effort's
-`Org domain` tag, set in the Knowledge Graph tab.
-
-- **Domain summary**: The skill carrying the domain and what it claims to be for, read from its
-  frontmatter. Nothing is parsed out of the body: a playbook's headings are prose the author
-  owns, so renaming one cannot break the console. Read or edit the playbook itself in the skill
-  drawer above, like any other skill.
-- **+ New org**: Seeds an `org-<domain>` skill with the section headings a domain playbook is
-  expected to fill — what it is for, how to turn a wish into something measurable, what closes
-  each coverage dimension, and what to surface unprompted. The substance is left to whoever
-  knows the market.
-- **Agent-MD Folder View**: The actual on-disk `AGENTS.md`/`AGENTS_DETAILS.md` tree a chosen
-  machine deploys — including any dynamically discovered branches under
-  `registry/context/<branch>/AGENTS.md` — reconstructed from the same plan `deploy` would use.
 
 ---
 

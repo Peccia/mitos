@@ -15,8 +15,8 @@ registry/local/skills/<name>/
 ├── SKILL.md                 ← Required: metadata + markdown instructions
 ├── scripts/                 ← Optional: helper scripts (Python, Bash, etc.)
 ├── examples/                ← Optional: reference inputs/outputs
-├── references/              ← Optional: additional documentation (Mitos Agent convention)
-├── templates/               ← Optional: fill-in templates (Mitos Agent convention)
+├── references/              ← Optional: additional documentation
+├── templates/               ← Optional: fill-in templates
 └── resources/               ← Optional: other supporting assets (Antigravity convention)
 ```
 
@@ -33,7 +33,7 @@ name: changelog              # Unique logical name of the skill
 description: "Drafts a release changelog from git logs" # Shown in rosters/commands
 targets:                     # List of compatible tools
   - claude-code
-  - mitos-agent
+  - antigravity
 category: development        # Optional: organizational category (default: general)
 scope: global                # Optional: global (default) | project — see below
 requires_server: gws         # Optional: only deploy where this connection exists — see below

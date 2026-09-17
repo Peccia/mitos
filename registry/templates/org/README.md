@@ -17,4 +17,4 @@ red-team protocols) now ship as first-class core skills — `org-software`, `org
 
 Available templates: `software-firm`, `design-firm`, `marketing-firm`. To add another,
 create a folder with an `session-protocol.md` and optionally a matching `registry/skills/org-<domain>/SKILL.md`
-in the core. See `docs/org-templates.md` for the full guide.
+in the core.
