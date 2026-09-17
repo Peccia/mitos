@@ -91,6 +91,19 @@ def _init_dispatch() -> int:
     return _init_scaffold_fresh(initmod, has_local)
 
 
+def _overlay_has_mitos_agent() -> bool:
+    """Does registry/local/user.yaml already turn the planning harness on? Read defensively
+    and by hand rather than through the loader — this runs before anything has validated the
+    overlay, and a half-written file must not stop `init` from getting the user set up."""
+    path = REPO_ROOT / "registry" / "local" / "user.yaml"
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return isinstance(data, dict) and data.get("mitos_agent") is True
+    except Exception:
+        return False
+
+
 def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     given = _ask("Given (first) name: ")
     family = _ask("Family (last) name: ")
@@ -104,10 +117,19 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     # use case (org skills declare targets: [mitos-agent] only — see MACHINE_USE_CASES), so
     # asking it unconditionally is what previously left claude-code/antigravity-only users
     # with a machine profile that never asked "do you even want orgs?" in the first place.
+    # The Mitos Agent option is not OFFERED on a fresh setup — the planning harness is an
+    # incubating work in progress, and a wizard that lists it as one of two equal choices
+    # tells a new user it is finished. Typing 2 still works: the path is unadvertised, not
+    # retired, so anyone already running the harness (or told to pick it) keeps it. An
+    # overlay that already carries `mitos_agent: true` is someone in exactly that position,
+    # so the option is printed back for them.
+    knows_agent = _overlay_has_mitos_agent()
     print("\nHow will you run Mitos on this machine?")
     print("  [1] Coding harnesses only (Claude Code / Antigravity / Claude Desktop) — skills")
-    print("      and prompts inside your existing editor. No org routing, no agentic tree.")
-    print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org routing).")
+    print("      and prompts inside your existing editor.")
+    if knows_agent:
+        print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org "
+              "routing).")
     use_choice = _ask("Choice [1]: ") or "1"
     is_agent = use_choice == "2"
 
@@ -134,7 +156,7 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,
                                            address=address, email=email,
                                            location=location, org_template=org,
-                                           backend=backend)
+                                           backend=backend, mitos_agent=is_agent)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

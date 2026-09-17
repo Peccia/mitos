@@ -952,3 +952,73 @@ def test_two_machines_deployed_in_sequence_keep_both_lock_sections():
     assert cmd_deploy(copy.deepcopy(treg), "rig2", dry_run=False, force=False) == 0
     machines = json.loads((tmp / ".deploy-lock.json").read_text(encoding="utf-8"))["machines"]
     assert {"rig", "rig2"} <= set(machines) and machines["rig"]["files"]
+
+
+# ── mitos init: the Mitos Agent option is unadvertised, not retired ───────────
+def _run_init_fresh(answers, monkeypatch):
+    """Drive `_init_scaffold_fresh` with canned answers, capturing what it printed.
+
+    The wizard is interactive by construction, so the only honest way to assert what it
+    OFFERS is to run it and read its output. `_ask` is stubbed rather than stdin so the
+    test states its answers instead of encoding the prompt order."""
+    import io
+    import contextlib
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    import mitos as mitoscli
+    from agentic import init as initmod
+
+    queue = list(answers)
+    monkeypatch.setattr(mitoscli, "_ask", lambda *a, **k: queue.pop(0) if queue else "")
+    monkeypatch.setattr(mitoscli, "_ask_document_store", lambda _m: None)
+    calls = {}
+
+    def _fake_scaffold_overlay(root, **kw):
+        calls["overlay"] = kw
+        return []
+
+    def _fake_scaffold_machine(root, name, **kw):
+        calls["machine"] = dict(kw, name=name)
+        return f"local/machines/{name}.yaml"
+
+    monkeypatch.setattr(initmod, "scaffold_overlay", _fake_scaffold_overlay)
+    monkeypatch.setattr(initmod, "scaffold_machine", _fake_scaffold_machine)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mitoscli._init_scaffold_fresh(initmod, False)
+    return buf.getvalue(), calls
+
+
+def test_init_fresh_does_not_offer_the_mitos_agent_use_case(monkeypatch):
+    """The planning harness is incubating. Listing it as one of two equal choices in the
+    onboarding wizard tells a new user it is finished — so a fresh setup never prints it."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: False)
+    out, calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "1", ""], monkeypatch)
+
+    assert "[1] Coding harnesses only" in out
+    assert "[2] Mitos Agent" not in out, "the agent use case must not be advertised"
+    assert calls["overlay"]["mitos_agent"] is False
+
+
+def test_init_fresh_still_honours_a_typed_agent_choice(monkeypatch):
+    """Unadvertised, not retired: anyone already running the harness, or told to pick it,
+    types 2 and gets exactly what they got before — org-template question included."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: False)
+    out, calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "2", ""], monkeypatch)
+
+    assert "Org routing (optional):" in out, "choosing 2 must still reach the org question"
+    assert calls["overlay"]["mitos_agent"] is True
+
+
+def test_init_fresh_offers_the_agent_option_to_someone_already_running_it(monkeypatch):
+    """An overlay that already says `mitos_agent: true` belongs to someone who chose the
+    harness — re-running init must not hide the option they are on."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: True)
+    out, _calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "1", ""], monkeypatch)
+
+    assert "[2] Mitos Agent" in out

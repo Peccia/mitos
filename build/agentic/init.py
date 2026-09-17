@@ -101,7 +101,8 @@ def org_templates(root: Path) -> list[str]:
 def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
                      address: str = "", email: str = "", location: str = "",
                      org_template: str | None = None,
-                     backend: str = "gws", overwrite: bool = False) -> list[str]:
+                     backend: str = "gws", mitos_agent: bool = False,
+                     overwrite: bool = False) -> list[str]:
     """Create registry/local/ and seed it: the optional org template seed, a starter identity
     partial from the user's answers, and the empty trees the user fills in. **Non-destructive by
     default** — a seed file is skipped when the user already has one (so this can finish an
@@ -116,7 +117,12 @@ def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
     `address` is how the assistant should refer to the user (a given name like "Sam", a
     family form like "Dr. Lee", or any preferred handle); it defaults to the given name. It
     lands in the overlay identity so every tool addresses the user the same way — skills stay
-    neutral ("the owner") and read the name from this always-on identity partial."""
+    neutral ("the owner") and read the name from this always-on identity partial.
+
+    `mitos_agent` records that the user chose the planning harness, so the console shows its
+    affordances. It is written ONLY when true: the core registry/user.yaml already ships
+    `mitos_agent: false`, and an overlay that restates a default is noise in a file the user
+    reads to see what is theirs."""
     templates = org_templates(root)
     if org_template is not None and org_template not in templates:
         raise ValueError(f"unknown org template {org_template!r}; available: {templates}")
@@ -156,14 +162,14 @@ def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
     # 2b. user.yaml — the personalization config every tool's deployed context expands
     #     placeholders from (render.expand_placeholders). Skipped (no file written) when
     #     the caller supplied no answers at all, exactly like the other conditional seeds.
-    user_yaml = _user_yaml(given_name, family_name, email, location)
+    user_yaml = _user_yaml(given_name, family_name, email, location, mitos_agent)
     if user_yaml:
         _seed("user.yaml", text=user_yaml)
 
     # 3. A README marking the overlay private + recording the chosen backend. It lives at the
     #    overlay root (not under identity/context/skills) so the loader never treats it as
     #    content.
-    _seed("README.md", text=_overlay_readme(backend))
+    _seed("README.md", text=_overlay_readme(backend, mitos_agent))
     return written
 
 
@@ -182,7 +188,8 @@ def _who_md(given_name: str, family_name: str, address: str) -> str:
             f"over politeness. Address me as \"{addr}\".\n")
 
 
-def _user_yaml(given_name: str, family_name: str, email: str, location: str) -> str:
+def _user_yaml(given_name: str, family_name: str, email: str, location: str,
+               mitos_agent: bool = False) -> str:
     """The personalization config (registry/local/user.yaml) — every deployed context
     file's {{user_*}} placeholders expand from this. Only fields the user actually
     supplied are written; unset ones fall back to the core registry/user.yaml defaults."""
@@ -196,12 +203,16 @@ def _user_yaml(given_name: str, family_name: str, email: str, location: str) -> 
         data["email"] = email.strip()
     if location.strip():
         data["location"] = location.strip()
+    # Omitted when false — the core file already says so, and an overlay key that only
+    # restates a default reads as a setting someone chose.
+    if mitos_agent:
+        data["mitos_agent"] = True
     if not data:
         return ""
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
-def _overlay_readme(backend: str) -> str:
+def _overlay_readme(backend: str, mitos_agent: bool = False) -> str:
     """`backend` is the document store chosen at init, or "none" — it is a NOTE here, not
     the wiring. The live setting is the machine profile's `document_store:`, which is what
     gates every connection-bound output; this file only records the answer for a reader."""
@@ -212,14 +223,23 @@ def _overlay_readme(backend: str) -> str:
         if backend in ("", "none") else
         f"Workspace connection: `{backend}` — see the connector docs to connect it, then "
         f"`python build/mitos.py connect --project <slug>`.\n")
+    # The flag is a file edit, deliberately — it is set once, if ever, and a settings dialog
+    # for one boolean is machinery the answer does not need.
+    agent_note = (
+        "Mitos Agent: on (`mitos_agent: true` in `user.yaml` here). The console shows the "
+        "planning harness — org skills, the `mitos-agent` target, an effort's Org domain.\n\n"
+        if mitos_agent else
+        "Mitos Agent: off. The planning harness is an incubating work in progress and its "
+        "console affordances are hidden. To see them, add `mitos_agent: true` to `user.yaml` "
+        "here and reload the console.\n\n")
     return ("# Personal overlay (private)\n\n"
             "This tree is your Mitos personalization. It is **gitignored** — never committed "
             "to the public repo. It overrides the core registry by last-layer-wins: a file "
             "here with the same logical path/name as a core file replaces it; new files are "
             "added; core-only files remain.\n\n"
             "Your own skills live in `skills/<name>/SKILL.md` here — author them by hand or "
-            "from the console's Skills & Orgs tab (`python build/compile.py review`).\n\n"
-            + store_note)
+            "from the console's Skills tab (`python build/compile.py review`).\n\n"
+            + agent_note + store_note)
 
 
 def resolve_targets(*, use_case: str | None = None,

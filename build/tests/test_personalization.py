@@ -574,6 +574,36 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
 
+def test_scaffold_overlay_writes_mitos_agent_only_when_chosen():
+    """The flag is written ONLY for the user who picked the planning harness. An overlay
+    that restated the core default would read as a setting someone chose, in the one file
+    a user opens to see what is theirs."""
+    from agentic import init as initmod
+
+    _treg, tmp = _temp_registry()
+    initmod.scaffold_overlay(tmp, given_name="Sam", backend="mock", mitos_agent=True)
+    data = yaml.safe_load((tmp / "registry/local/user.yaml").read_text(encoding="utf-8"))
+    assert data["mitos_agent"] is True
+    assert loader.load(tmp).user["mitos_agent"] is True
+
+    _treg2, tmp2 = _temp_registry()
+    initmod.scaffold_overlay(tmp2, given_name="Sam", backend="mock")
+    data2 = yaml.safe_load((tmp2 / "registry/local/user.yaml").read_text(encoding="utf-8"))
+    assert "mitos_agent" not in data2
+    # …and the default still lands, from core
+    assert loader.load(tmp2).user["mitos_agent"] is False
+
+
+def test_overlay_readme_tells_the_owner_how_to_reveal_the_harness():
+    """The flag has no settings dialog on purpose — so the one file that explains the
+    overlay has to say where it lives and what turning it on does."""
+    from agentic import init as initmod
+
+    off = initmod._overlay_readme("none", False)
+    assert "mitos_agent: true" in off and "user.yaml" in off
+    on = initmod._overlay_readme("none", True)
+    assert "Mitos Agent: on" in on
+
 
 # ── {{returns_container}} (the store folder those records are published INTO) ─
 _RET_SERVERS = {"servers": {
