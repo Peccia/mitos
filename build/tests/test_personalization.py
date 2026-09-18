@@ -25,11 +25,44 @@ def test_user_defaults_when_no_user_yaml_overlay():
     DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
     a change to one group cannot be waved through as a change to the other."""
     treg, tmp = _temp_registry()
-    identity = {k: v for k, v in treg.user.items() if k != "default_deliverables"}
+    non_identity = {"default_deliverables", "mitos_agent"}
+    identity = {k: v for k, v in treg.user.items() if k not in non_identity}
     assert identity == {"given_name": "User", "full_name": "Mitos User",
                         "email": "user@example.com", "location": "Your City, State"}
     # documentation + tests: the two every kind of work owes regardless of shape
     assert treg.user["default_deliverables"] == ["documentation", "tests"]
+    # FEATURES: the planning harness is off until an overlay turns it on
+    assert treg.user["mitos_agent"] is False
+
+
+def test_user_yaml_mitos_agent_overlay_wins():
+    """The flag follows the same last-layer-wins merge as identity — the public core
+    ships it off, a maintainer's untracked overlay turns it on."""
+    _treg, tmp = _temp_registry()
+    local = tmp / "registry" / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
+    assert loader.load(tmp).user["mitos_agent"] is True
+
+
+def test_user_yaml_rejects_non_bool_mitos_agent():
+    """A typo must fail at load, not read as truthy and silently reveal the harness."""
+    _treg, tmp = _temp_registry()
+    for bad in ("'true'", "1", "0", "null", "[true]"):
+        (tmp / "registry" / "user.yaml").write_text(
+            f"mitos_agent: {bad}\n", encoding="utf-8")
+        try:
+            loader.load(tmp)
+            raise AssertionError(f"expected RegistryError for mitos_agent: {bad}")
+        except loader.RegistryError as e:
+            assert "mitos_agent" in str(e)
+
+
+def test_mitos_agent_is_not_a_placeholder_token():
+    """FEATURES keys never reach render's token map — {{user_mitos_agent}} must not be
+    a thing."""
+    toks = render.user_token_map(_FakeReg({"given_name": "X", "mitos_agent": True}))
+    assert not any("mitos_agent" in t for t in toks)
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()
@@ -77,12 +110,12 @@ def test_machine_document_store_validated_like_project():
 
 # ── expand_placeholders ───────────────────────────────────────────────────────
 def test_expand_substitutes_all_five_tokens():
-    user = {"given_name": "Paul", "full_name": "Paul Peccia",
+    user = {"given_name": "Example", "full_name": "Example User",
             "email": "example@domain.com", "location": "Your City, State"}
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
     out = render.expand_placeholders(_FakeReg(user), text)
-    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Your City, State"
+    assert out == "Example / Example's / Example User / example@domain.com / Your City, State"
 
 def test_expand_possessive_trailing_s_uses_bare_apostrophe():
     user = {"given_name": "Chris", "full_name": "", "email": "", "location": ""}
@@ -106,11 +139,11 @@ def test_user_token_map_resolves_configured_tokens_only():
     """The console auto-substitutes these on copy (never asking the operator to type their
     own name) and treats every OTHER {{token}} as a fillable input. An unset token is
     omitted — it stays literal on copy, exactly as expand_placeholders leaves it."""
-    user = {"given_name": "Paul", "full_name": "Paul Peccia",
+    user = {"given_name": "Example", "full_name": "Example User",
             "email": "example@domain.com", "location": ""}
     out = render.user_token_map(_FakeReg(user))
-    assert out == {"user_given_name": "Paul", "users_given_name": "Paul's",
-                   "user_full_name": "Paul Peccia", "user_email": "example@domain.com"}
+    assert out == {"user_given_name": "Example", "users_given_name": "Example's",
+                   "user_full_name": "Example User", "user_email": "example@domain.com"}
     assert "user_location" not in out       # unset → omitted → literal
 
 
@@ -334,12 +367,12 @@ def test_reverse_expand_round_trips_a_simple_edit():
     assert out == "Hello {{user_given_name}}, welcome. EXTRA SENTENCE."
 
 def test_reverse_expand_longest_value_first():
-    # user_full_name's expansion ("Paul Peccia") contains user_given_name's ("Paul") as a
-    # prefix — reversing the shorter one first would strand " Peccia" instead of
+    # user_full_name's expansion contains user_given_name's as a
+    # prefix — reversing the shorter one first would strand " User" instead of
     # restoring {{user_full_name}} whole.
-    user = {"given_name": "Paul", "full_name": "Paul Peccia", "email": "", "location": ""}
+    user = {"given_name": "Example", "full_name": "Example User", "email": "", "location": ""}
     original = "{{user_full_name}} says hi. {{user_given_name}} agrees."
-    live = "Paul Peccia says hi. Paul agrees."
+    live = "Example User says hi. Example agrees."
     out = render.reverse_expand_placeholders(_FakeReg(user), original, live)
     assert out == original
 
@@ -540,6 +573,36 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     written = initmod.scaffold_overlay(tmp, given_name="", backend="mock")
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
+
+def test_scaffold_overlay_writes_mitos_agent_only_when_chosen():
+    """The flag is written ONLY for the user who picked the planning harness. An overlay
+    that restated the core default would read as a setting someone chose, in the one file
+    a user opens to see what is theirs."""
+    from agentic import init as initmod
+
+    _treg, tmp = _temp_registry()
+    initmod.scaffold_overlay(tmp, given_name="Sam", backend="mock", mitos_agent=True)
+    data = yaml.safe_load((tmp / "registry/local/user.yaml").read_text(encoding="utf-8"))
+    assert data["mitos_agent"] is True
+    assert loader.load(tmp).user["mitos_agent"] is True
+
+    _treg2, tmp2 = _temp_registry()
+    initmod.scaffold_overlay(tmp2, given_name="Sam", backend="mock")
+    data2 = yaml.safe_load((tmp2 / "registry/local/user.yaml").read_text(encoding="utf-8"))
+    assert "mitos_agent" not in data2
+    # …and the default still lands, from core
+    assert loader.load(tmp2).user["mitos_agent"] is False
+
+
+def test_overlay_readme_tells_the_owner_how_to_reveal_the_harness():
+    """The flag has no settings dialog on purpose — so the one file that explains the
+    overlay has to say where it lives and what turning it on does."""
+    from agentic import init as initmod
+
+    off = initmod._overlay_readme("none", False)
+    assert "mitos_agent: true" in off and "user.yaml" in off
+    on = initmod._overlay_readme("none", True)
+    assert "Mitos Agent: on" in on
 
 
 # ── {{returns_container}} (the store folder those records are published INTO) ─

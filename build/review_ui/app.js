@@ -62,6 +62,11 @@ let openEditor = null;     // { where:"registry"|"staged", vals:{id,name,descrip
 let projectEditOpen = false;   // is the Project panel's identity/repo editor open, for graphSlug
 let projectEditVals = null;    // { name, description, stage, repos:[{url,description}] } while editing
 let projectConfigOpen = false; // is the Project panel's read-only "View config" detail expanded
+let newProjectOpen = false;       // is the new project creation form open in Knowledge Graph tab
+let newProjectDraft = { slug: "", name: "", document_store: "none" };
+function resetNewProjectDraft() {
+  newProjectDraft = { slug: "", name: "", document_store: "none" };
+}
 let selectedCandidateId = null;  // which inbox candidate is shown in the detail pane
 // graphDrafts[slug] = {
 //   add:{id:doc}, edit:{id:doc}, remove:{id:{id,name}},
@@ -73,6 +78,8 @@ let graphDrafts = store.get(LS.graphDrafts, {});
 let expandedSkillName = null;   // slug of the currently expanded skill row, or null
 let skillFilterText = "";       // client-side search text
 let skillFilterTarget = "";     // filter by target slug, "" = all
+let skillFilterTargetMode = "show"; // "show" (match target) | "hide" (hide target(s))
+let skillHiddenTargets = [];    // targets to hide when in hide mode
 let skillFilterOrg = false;     // filter to only org-domain skills
 // Default view = only what this registry's machines would actually deploy (the server's
 // per-item `deploys_here`). A coding-harness box therefore opens on its own skills instead
@@ -221,10 +228,14 @@ async function refresh(pre) {
   // orgData feeds both the Graph tab's effort editor and the Skills tab's org expansion.
   // Load eagerly on every refresh if not yet cached so the Skills tab doesn't need a
   // separate trigger; fall back to empty object so joins against it are always safe.
-  if (!orgData) {
+  // Skipped entirely when the Mitos Agent flag is off: every surface that would read it
+  // is hidden, so the fetch is loopback I/O nobody looks at. Note what does NOT depend on
+  // this: which skills the card grid shows is decided by static predicates
+  // (isSkillVisible), never by a join against orgData — so a skipped or failed fetch can
+  // never leak an org skill into view.
+  if (!orgData && hasMitosAgent()) {
     try { orgData = await (await fetch("/api/org")).json(); }
     catch (e) { orgData = {}; }
-    if (orgData && !orgDomain) orgDomain = Object.keys(orgData)[0] || null;
   }
   const rootEl = $("root");
   if (rootEl) { rootEl.textContent = STATE.root; rootEl.title = STATE.root; }
@@ -663,7 +674,16 @@ function renderGraph() {
   view.replaceChildren();
   const graphs = (STATE && STATE.graphs) || [];
   if (!graphs.length) {
-    view.append(el("div", "empty-state", "No projects in the registry."));
+    if (newProjectOpen) {
+      view.append(buildNewProjectWorkspace());
+    } else {
+      const empty = el("div", "empty-state");
+      empty.append(el("p", "", "No projects in the registry."));
+      const btn = el("button", "accept tiny", "+ New project");
+      btn.onclick = () => { newProjectOpen = true; renderGraph(); };
+      empty.append(btn);
+      view.append(empty);
+    }
     updateGraphDock();
     return;
   }
@@ -671,7 +691,7 @@ function renderGraph() {
   const g = graphs.find((x) => x.slug === graphSlug);
 
   const split = el("div"); split.id = "graph-split";
-  split.append(buildGraphSidebar(graphs), buildGraphWorkspace(g));
+  split.append(buildGraphSidebar(graphs), newProjectOpen ? buildNewProjectWorkspace() : buildGraphWorkspace(g));
   view.append(split);
   updateGraphDock();
 }
@@ -679,7 +699,14 @@ function renderGraph() {
 // ── left: searchable project sidebar (scales to 100s–1000s of projects) ───────
 function buildGraphSidebar(graphs) {
   const aside = el("aside"); aside.id = "graph-sidebar";
-  aside.append(el("h2", "sr-only", "Projects"));
+  const head = el("div", "graph-sidebar-head");
+  head.append(el("span", "graph-sidebar-title", "Projects"));
+  const newBtn = el("button", "tiny accept", "+ New");
+  newBtn.title = "Create a new project (Stage 1)";
+  newBtn.onclick = () => { newProjectOpen = true; renderGraph(); };
+  head.append(newBtn);
+  aside.append(head);
+
   const search = el("input", "field graph-proj-search");
   search.setAttribute("aria-label", "Filter projects");
   search.type = "search"; search.placeholder = "Filter projects…"; search.value = graphProjFilter;
@@ -702,7 +729,7 @@ function renderProjRows() {
   list.replaceChildren();
   if (!matches.length) { list.append(el("div", "muted graph-proj-empty", "No projects match.")); return; }
   for (const g of matches) {
-    const row = el("div", "graph-proj-row" + (g.slug === graphSlug ? " active" : ""));
+    const row = el("div", "graph-proj-row" + (!newProjectOpen && g.slug === graphSlug ? " active" : ""));
     const dot = el("span", "graph-proj-dot " + (g.has_graph ? "mapped" : "empty"));
     dot.title = g.has_graph ? "Has document mappings" : "No graph yet";
     const col = el("div", "graph-proj-col");
@@ -720,8 +747,9 @@ function renderProjRows() {
 }
 
 function selectProject(slug) {
-  if (slug === graphSlug) return;
+  if (slug === graphSlug && !newProjectOpen) return;
   graphSlug = slug;
+  newProjectOpen = false;
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
@@ -772,6 +800,7 @@ function buildProjectPanel(container, g) {
   editBtn.onclick = () => {
     projectEditVals = {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
+      document_store: g.document_store || "none",
       hidden: !!g.hidden,
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
       // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
@@ -792,6 +821,7 @@ function buildProjectPanel(container, g) {
   if (projectConfigOpen) {
     const detail = el("div", "project-config-detail");
     if (g.description) detail.append(el("p", "card-note muted", g.description));
+    detail.append(el("p", "card-note muted", `Document store: ${g.document_store || "none"}`));
     if (repoCount) {
       const list = el("div", "card-note project-repo-list");
       for (const url of g.repo) {
@@ -852,6 +882,23 @@ function projectEditorCard(g) {
     stageSel.append(opt);
   }
   stageWrap.append(stageSel); card.append(stageWrap); inputs.stage = stageSel;
+
+  const storeWrap = el("div", "graph-field");
+  storeWrap.append(el("label", "", "Document Store"));
+  const storeSel = el("select", "graph-select");
+  const noneOpt = el("option", "", "none (no document store)");
+  noneOpt.value = "none";
+  if (!vals.document_store || vals.document_store === "none") noneOpt.selected = true;
+  storeSel.append(noneOpt);
+  for (const s of (STATE.known_stores || [])) {
+    const opt = el("option", "", s);
+    opt.value = s;
+    if (vals.document_store === s) opt.selected = true;
+    storeSel.append(opt);
+  }
+  storeWrap.append(storeSel);
+  card.append(storeWrap);
+  inputs.document_store = storeSel;
 
   // Hidden — keeps a finished/parked project out of every deployed tree (no tree node, no
   // roster entry, no clone, no per-project AGENTS.md/CLAUDE.md) without touching the
@@ -941,6 +988,7 @@ function projectEditorCard(g) {
     for (const r of repos) if (r.description) repoNotes[repoBasename(r.url)] = r.description;
     const fields = {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
+      document_store: inputs.document_store.value,
       hidden: inputs.hidden.checked,
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
@@ -973,6 +1021,138 @@ function projectEditorCard(g) {
   card.append(actions);
   scrollCardIntoView(card);
   return card;
+}
+
+function buildNewProjectWorkspace() {
+  const ws = el("section"); ws.id = "graph-workspace";
+  const wrap = el("div", "new-project-wrap");
+  const panel = el("div", "new-project-panel");
+
+  const head = el("div", "new-project-head");
+  head.append(el("h1", "new-project-title", "New project"));
+  head.append(el("p", "new-project-desc",
+    "Scaffold a new project manifest in your private overlay (registry/local/projects/<slug>.yaml) "
+    + "via the CLI (Stage 1 of the Knowledge Graph pipeline)."));
+  panel.append(head);
+
+  const body = el("div", "new-project-body");
+
+  // Slug
+  const slugField = el("div", "new-project-field");
+  slugField.append(el("label", "new-project-label", "Slug (identifier) *"));
+  const slugInput = el("input", "new-project-input mono");
+  slugInput.type = "text";
+  slugInput.placeholder = "e.g. acme-web";
+  slugInput.value = newProjectDraft.slug || "";
+  slugInput.addEventListener("input", () => { newProjectDraft.slug = slugInput.value; });
+  slugField.append(slugInput);
+  slugField.append(el("span", "new-project-hint",
+    "Unique identifier used in filesystem paths and CLI arguments."));
+  body.append(slugField);
+
+  // Name
+  const nameField = el("div", "new-project-field");
+  nameField.append(el("label", "new-project-label", "Display name"));
+  const nameInput = el("input", "new-project-input");
+  nameInput.type = "text";
+  nameInput.placeholder = "e.g. Acme Web (defaults to slug)";
+  nameInput.value = newProjectDraft.name || "";
+  nameInput.addEventListener("input", () => { newProjectDraft.name = nameInput.value; });
+  nameField.append(nameInput);
+  nameField.append(el("span", "new-project-hint",
+    "Human-readable label shown in navigation and reports."));
+  body.append(nameField);
+
+  // Document store
+  const storeField = el("div", "new-project-field");
+  storeField.append(el("label", "new-project-label", "Document store"));
+  const storeSel = el("select", "new-project-select");
+  const noneOpt = el("option", "", "none (unmapped / local-file fallback)");
+  noneOpt.value = "none";
+  storeSel.append(noneOpt);
+
+  const stores = (STATE && STATE.known_stores) ? STATE.known_stores : [];
+  for (const s of stores) {
+    const opt = el("option", "", s);
+    opt.value = s;
+    if (newProjectDraft.document_store === s) opt.selected = true;
+    storeSel.append(opt);
+  }
+  if (!newProjectDraft.document_store || newProjectDraft.document_store === "none") {
+    noneOpt.selected = true;
+  }
+  storeSel.addEventListener("change", () => { newProjectDraft.document_store = storeSel.value; });
+  storeField.append(storeSel);
+  storeField.append(el("span", "new-project-hint",
+    "The MCP server backing graph init (mitos connect), or 'none' if unmapped."));
+  body.append(storeField);
+
+  panel.append(body);
+
+  const footer = el("div", "new-project-footer");
+  const cancelBtn = el("button", "ghost", "Cancel");
+  const submitBtn = el("button", "accept", "Create project");
+
+  // Enter in slug moves to name; Enter in name triggers submit
+  slugInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); nameInput.focus(); }
+  });
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitBtn.click(); }
+  });
+
+  submitBtn.onclick = async () => {
+    const rawSlug = slugInput.value.trim();
+    if (!rawSlug) { toast("Project slug is required."); slugInput.focus(); return; }
+    if (!/^[A-Za-z0-9_-]+$/.test(rawSlug)) {
+      toast("Invalid slug — use letters, digits, '-' or '_'.");
+      slugInput.focus();
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating…";
+    try {
+      const res = await fetch("/api/project/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: rawSlug,
+          name: nameInput.value.trim(),
+          document_store: storeSel.value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast(data.error || "Failed to create project.");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Create project";
+        return;
+      }
+      if (data.state) STATE = data.state;
+      newProjectOpen = false;
+      resetNewProjectDraft();
+      toast(`Created project "${data.slug}" in overlay.`);
+      selectProject(data.slug);
+    } catch (e) {
+      toast("Request failed: " + e.message);
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Create project";
+    }
+  };
+
+  cancelBtn.onclick = () => {
+    newProjectOpen = false;
+    resetNewProjectDraft();
+    renderGraph();
+  };
+
+  footer.append(cancelBtn, submitBtn);
+  panel.append(footer);
+  wrap.append(panel);
+  ws.append(wrap);
+
+  setTimeout(() => slugInput.focus(), 0);
+  return ws;
 }
 
 // ── right: workspace = Discovery/Recovery tabs (left) | Registry pane (right) ──
@@ -1651,7 +1831,7 @@ function buildRegistryPane(container, g) {
     // g.defaultDeliverables, so the client never reimplements the chain and can never drift
     // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "",
+                   vals: { id: "", name: "", description: "", hidden: false,
                            deliverables: (g.defaultDeliverables || []).slice() } };
     renderRegistryRows(g);
   };
@@ -1733,6 +1913,11 @@ function renderRegistryRows(g) {
                          " · coverage: " + effort.requirementsCoverage.length));
     }
     head.append(nameSpan);
+    if (effort.hidden) {
+      const badge = el("span", "badge", "hidden");
+      badge.title = "Kept out of deployed AGENTS.md — the effort and its documents remain in the graph.";
+      head.append(badge);
+    }
     if (status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
       head.append(el("span", "badge draft", label));
@@ -1744,6 +1929,13 @@ function renderRegistryRows(g) {
       actions.append(undo);
     }
     if (status !== "remove") {
+      const visBtn = el("button", "ghost tiny", effort.hidden ? "Unhide" : "Hide");
+      visBtn.title = effort.hidden ? "Restore to deployed AGENTS.md" : "Hide from deployed AGENTS.md";
+      visBtn.onclick = () => {
+        effortDraftUpsert(g.slug, { ...effort, hidden: !effort.hidden }, status === "add");
+        renderGraph();
+      };
+      actions.append(visBtn);
       const edit = el("button", "ghost tiny", "Edit");
       edit.onclick = () => {
         openEditor = { where: "registry", lockId: true, kind: "effort",
@@ -1751,7 +1943,8 @@ function renderRegistryRows(g) {
                                goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "",
                                deliverables: (effort.deliverables || []).slice(),
-                               requirementsCoverage: (effort.requirementsCoverage || []).slice() } };
+                               requirementsCoverage: (effort.requirementsCoverage || []).slice(),
+                               hidden: !!effort.hidden } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -2024,7 +2217,13 @@ function effortEditorCard(g) {
 
   // Org domain — the routing tag: work in this effort loads the matching org-* skill.
   // Optional; untagged efforts route by the nature of the request. Domains come from
-  // the same dynamic discovery the Org tab uses (skills with org_domain frontmatter).
+  // dynamic discovery (skills with org_domain frontmatter).
+  // Hidden entirely when the Mitos Agent flag is off — there are no org skills on screen
+  // to route to. `inputs.orgDomain` stays null and the save handler falls back to the
+  // effort's EXISTING tag, so hiding the control never wipes a value the owner set while
+  // it was on (see the save handler below).
+  inputs.orgDomain = null;
+  if (hasMitosAgent()) {
   const domWrap = el("div", "graph-field");
   domWrap.append(el("label", "", "Org domain"));
   const domSel = el("select", "graph-select");
@@ -2043,6 +2242,7 @@ function effortEditorCard(g) {
   }
   domSel.value = vals.orgDomain || "";
   domWrap.append(domSel); card.append(domWrap); inputs.orgDomain = domSel;
+  }
 
   // Expected deliverables — the forward contract: the artifacts every implementation of this
   // effort must yield. A checkbox group over the registry's controlled vocabulary (a free-text
@@ -2123,6 +2323,16 @@ function effortEditorCard(g) {
   syncReceiptWarn();
   card.append(receiptWarn);
 
+  // Hidden — keeps this effort and its documents out of deployed context (AGENTS.md,
+  // CLAUDE.md) without touching the graph, which still loads and queries fine.
+  const hiddenWrap = el("div", "graph-field");
+  const hiddenBox = el("input"); hiddenBox.type = "checkbox"; hiddenBox.checked = !!vals.hidden;
+  const hiddenLbl = el("label", "target-check");
+  hiddenLbl.append(hiddenBox, document.createTextNode(
+    " Hidden — keep out of deployed AGENTS.md"));
+  hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
+  inputs.hidden = hiddenBox;
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -2132,7 +2342,11 @@ function effortEditorCard(g) {
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
                      goal: inputs.goal.value.trim(),
-                     orgDomain: inputs.orgDomain.value,
+                     // null when the field was not rendered — carry the stored tag
+                     // forward rather than proposing it away
+                     orgDomain: inputs.orgDomain ? inputs.orgDomain.value
+                                                 : (vals.orgDomain || ""),
+                     hidden: inputs.hidden.checked,
                      deliverables: (STATE.known_deliverables || [])
                        .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
                      requirementsCoverage: (STATE.known_coverage || [])
@@ -2233,6 +2447,7 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
     id: x.id, name: x.name, description: x.description || "",
     goal: x.goal || "",
     orgDomain: x.orgDomain || "",
+    hidden: !!x.hidden,
     deliverables: x.deliverables || [],
     requirementsCoverage: x.requirementsCoverage || [] }));
   const effortRemovals = Object.keys(d.effortRemove);
@@ -2368,7 +2583,7 @@ function newPromptForm() {
   reason.placeholder = "Reason (optional — logged on accept)";
   const create = el("button", "accept", "Create prompt");
   create.onclick = async () => {
-    const targets = (STATE.known_targets || []).filter((t) => targetBoxes[t].checked);
+    const targets = Object.keys(targetBoxes).filter((t) => targetBoxes[t].checked);
     const fm = { description: descInput.value.trim(), version: verInput.value.trim(), category: catInput.value.trim(), targets };
     const res = await fetch("/api/prompts/new", {
       method: "POST",
@@ -2945,90 +3160,16 @@ function buildContextualEditor(opts) {
   return { root, textarea: ta, refreshStatus };
 }
 
-// ── extends_skill/extends_role selects — parsed client-side from each candidate
 // parent skill's raw body (mirrors review.py's _ORG_ROLE_HEADING_RE parsing) so the
 // dropdown works without depending on orgData, which only covers org_domain skills and
 // may not be fetched yet when a skill is opened from the Prompt Library. ────────────
 const EXT_ROLE_HEADING_RE = /^###\s+(.+?)\s+—\s+.+$/;
 
-function extendableSkills() {
-  return (STATE.prompts.skills || []).filter((s) =>
-    !s.extends_skill && s.body.includes("## Extended C-suite Roles"));
-}
-
-function getRolesForSkill(skillName) {
-  const skill = (STATE.prompts.skills || []).find((s) => s.name === skillName);
-  if (!skill) return [];
-  const roles = [];
-  let inExtended = false;
-  for (const raw of skill.body.split("\n")) {
-    const line = raw.trim();
-    if (!inExtended) {
-      if (line === "## Extended C-suite Roles") inExtended = true;
-      continue;
-    }
-    if (line.startsWith("## ") && !line.startsWith("### ")) break;
-    const m = line.match(EXT_ROLE_HEADING_RE);
-    if (m) roles.push(m[1].trim());
-  }
-  return roles;
-}
-
-// Builds the linked extends_skill/extends_role <select> pair. `onChange(skillVal,
 // roleVal)` fires after any user change (including the automatic role reset when the
 // parent skill changes) — callers use it to persist drafts or refresh dependent UI
 // (e.g. the New Skill form's target checkboxes). Preselects `currentSkill`/`currentRole`
 // even if they no longer resolve (stale registry state), injecting them as an extra
 // option rather than silently discarding the saved value.
-function buildExtensionSelects(currentSkill, currentRole, onChange) {
-  const skillSelect = document.createElement("select");
-  skillSelect.className = "graph-select";
-  const roleSelect = document.createElement("select");
-  roleSelect.className = "graph-select";
-
-  function populateSkillOptions() {
-    skillSelect.replaceChildren();
-    skillSelect.append(new Option("— none (regular skill) —", ""));
-    const eligible = extendableSkills();
-    for (const s of eligible) skillSelect.append(new Option(s.name, s.name));
-    if (currentSkill && !eligible.some((s) => s.name === currentSkill)) {
-      skillSelect.append(new Option(`${currentSkill} (saved value, not currently extendable)`, currentSkill));
-    }
-    skillSelect.value = currentSkill || "";
-  }
-
-  function populateRoleOptions(wantRole) {
-    roleSelect.replaceChildren();
-    const parent = skillSelect.value;
-    if (!parent) {
-      roleSelect.append(new Option("— select a skill first —", ""));
-      roleSelect.disabled = true;
-      return;
-    }
-    roleSelect.disabled = false;
-    const roles = getRolesForSkill(parent);
-    roleSelect.append(new Option("— none —", ""));
-    for (const r of roles) roleSelect.append(new Option(r, r));
-    if (wantRole && !roles.includes(wantRole)) {
-      roleSelect.append(new Option(`${wantRole} (saved value, not found in parent body)`, wantRole));
-    }
-    roleSelect.value = wantRole || "";
-  }
-
-  populateSkillOptions();
-  populateRoleOptions(currentRole);
-
-  skillSelect.onchange = () => {
-    populateRoleOptions("");
-    if (onChange) onChange(skillSelect.value, roleSelect.value);
-  };
-  roleSelect.onchange = () => {
-    if (onChange) onChange(skillSelect.value, roleSelect.value);
-  };
-
-  return { skillSelect, roleSelect };
-}
-
 function fieldWrap(label, node) {
   const f = el("div", "graph-field");
   f.append(el("label", "", label));
@@ -3077,7 +3218,6 @@ function buildMetaPanel(p) {
   grid.append(textField("version", "Version", "1.0.0"));
   grid.append(textField("category", "Category", "general"));
   wrap.append(grid);
-  // extends_skill/extends_role live in the Skills & Orgs tab (renderSkillExtensionSection)
   // — not here, to avoid the same two-tabs-edit-the-same-thing problem Supporting Files had.
 
   const targetsWrap = el("div", "graph-field");
@@ -3409,6 +3549,34 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n).trimEnd() + "…" : s;
 }
 
+// ── The Mitos Agent presentation gate ───────────────────────────────────────────
+// registry/user.yaml's `mitos_agent` (surfaced by review.state()) decides whether the
+// console shows the incubating planning harness at all: org-domain skills, the
+// `mitos-agent` target chip, the effort editor's Org domain field, "+ New org".
+// DISPLAY ONLY — a machine whose profile names `mitos-agent` still compiles and deploys
+// it byte-for-byte. That is why isTargetVisible drops the chip even though
+// STATE.machine_targets legitimately contains it on a fresh clone (example-linux.yaml).
+//
+// The two item predicates are deliberately STATIC — they read properties every skill
+// already carries in /api/state. The obvious alternative, joining against orgData, is
+// asynchronous: skipped or failed, the join comes back empty and every org skill leaks
+// into the grid. A predicate that fails open is not a gate.
+//
+// The org test is `org_domain` (a read-only field on every skill in /api/state) and ONLY
+// that. Two near-miss tests were tried and are wrong:
+//   - the `org-` name PREFIX: core org skills happen to carry it, but the converse does not
+//     hold, and a user skill named `org-software-implementation-plan` is an ordinary
+//     coding-harness skill whose card its author needs.
+//   - `targets` containing `mitos-agent`: the seven `delivers:` skills and `gws` list it
+//     ALONGSIDE the coding harnesses, so that test hides exactly the skills a coding
+//     workstation is told it gets on its first deploy.
+// Skills that target the harness and nothing else (`new-session`, `graph-bootstrap`,
+// `project-update`) are left to `deploys_here` — the pre-existing scope chip already answers
+// "would any machine of mine receive this", and that is not the flag's question.
+const hasMitosAgent = () => !!STATE.mitos_agent;
+const isTargetVisible = (t) => t !== "agents-md" && (hasMitosAgent() || t !== "mitos-agent");
+const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
+
 
 function renderSkills() {
 
@@ -3469,25 +3637,71 @@ function renderSkills() {
   // Target filter chips — in the scoped view they come from the targets this registry's
   // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `mitos-agent` as
   // a filter on a coding-harness box is a control that can only ever empty the list.
-  const targetOpts = skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []);
+  // Note: agents-md never deploys skills, so it is always filtered out of skill target
+  // filters — that, plus the mitos-agent gate, is what isTargetVisible holds.
+  const targetOpts = (skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []))
+    .filter(isTargetVisible);
   // Drop a narrow left over from the other scope BEFORE rendering — e.g. `mitos-agent` picked
   // under All, then back to My machines. Without this the list empties with no active chip
   // on screen to explain why, which reads as a bug rather than a filter.
   if (skillFilterTarget && !targetOpts.includes(skillFilterTarget)) skillFilterTarget = "";
+  skillHiddenTargets = skillHiddenTargets.filter((t) => targetOpts.includes(t));
   if (targetOpts.length > 1) {          // nothing to narrow between when there's only one
-    for (const t of ["any", ...targetOpts]) {
-      const active = (t === "any" ? "" : t) === skillFilterTarget;
-      const b = el("button", "pool-opt" + (active ? " active" : ""), t === "any" ? "Any target" : t);
+    const modeToggle = el("div", "pool-toggle");
+    for (const [id, label, title] of [
+      ["show", "Show", "Show skills matching a specific target"],
+      ["hide", "Hide", "Hide all skills associated with selected target(s)"],
+    ]) {
+      const active = skillFilterTargetMode === id;
+      const b = el("button", "pool-opt" + (active ? " active" : ""), label);
+      b.title = title;
       b.setAttribute("aria-pressed", String(active));
-      b.onclick = () => { skillFilterTarget = t === "any" ? "" : t; renderSkills(); };
-      chipRow.append(b);
+      b.onclick = () => { skillFilterTargetMode = id; renderSkills(); };
+      modeToggle.append(b);
     }
+    chipRow.append(modeToggle);
+
+    if (skillFilterTargetMode === "show") {
+      for (const t of ["any", ...targetOpts]) {
+        const active = (t === "any" ? "" : t) === skillFilterTarget;
+        const b = el("button", "pool-opt" + (active ? " active" : ""), t === "any" ? "Any target" : t);
+        b.setAttribute("aria-pressed", String(active));
+        b.onclick = () => {
+          skillFilterTarget = (skillFilterTarget === t || t === "any") ? "" : t;
+          renderSkills();
+        };
+        chipRow.append(b);
+      }
+    } else {
+      const noneActive = skillHiddenTargets.length === 0;
+      const bNone = el("button", "pool-opt" + (noneActive ? " active" : ""), "Hide none");
+      bNone.setAttribute("aria-pressed", String(noneActive));
+      bNone.onclick = () => { skillHiddenTargets = []; renderSkills(); };
+      chipRow.append(bNone);
+
+      for (const t of targetOpts) {
+        const isHidden = skillHiddenTargets.includes(t);
+        const b = el("button", "pool-opt" + (isHidden ? " active hide-active" : ""), (isHidden ? "✕ " : "") + t);
+        b.title = isHidden ? `Click to unhide ${t}` : `Hide skills associated with ${t}`;
+        b.setAttribute("aria-pressed", String(isHidden));
+        b.onclick = () => {
+          if (skillHiddenTargets.includes(t)) {
+            skillHiddenTargets = skillHiddenTargets.filter((x) => x !== t);
+          } else {
+            skillHiddenTargets.push(t);
+          }
+          renderSkills();
+        };
+        chipRow.append(b);
+      }
+    }
+    chipRow.append(el("span", "chip-sep"));
   }
   // Same rule for "Orgs only": omit it when the active scope holds no org-domain skill, so
   // it can't sit there as the one chip guaranteed to yield nothing on a coding-harness box.
   const scopedSkills = (STATE.prompts.skills || [])
-    .filter((s) => skillShowAll || s.deploys_here !== false);
-  if (scopedSkills.some((s) => orgDomainBySkill[s.name])) {
+    .filter((s) => isSkillVisible(s) && (skillShowAll || s.deploys_here !== false));
+  if (hasMitosAgent() && scopedSkills.some((s) => orgDomainBySkill[s.name])) {
     const orgChip = el("button", "pool-opt" + (skillFilterOrg ? " active" : ""), "Orgs only");
     orgChip.setAttribute("aria-pressed", String(skillFilterOrg));
     orgChip.onclick = () => { skillFilterOrg = !skillFilterOrg; renderSkills(); };
@@ -3501,20 +3715,27 @@ function renderSkills() {
   const btnGroup = el("div", "skill-toolbar-btns");
   const newSkillBtn = el("button", "accept", "+ New skill");
   newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
-  const newOrgBtn = el("button", "", "+ New org");
-  newOrgBtn.title = "Scaffold a new org domain skill";
-  newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
-  btnGroup.append(newSkillBtn, newOrgBtn);
+  btnGroup.append(newSkillBtn);
+  if (hasMitosAgent()) {
+    const newOrgBtn = el("button", "", "+ New org");
+    newOrgBtn.title = "Scaffold a new org domain skill";
+    newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
+    btnGroup.append(newOrgBtn);
+  }
   toolbar.append(btnGroup);
   box.append(toolbar);
 
   // ── filter ───────────────────────────────────────────────────────────────
   const q = skillFilterText.trim().toLowerCase();
-  const skills = (STATE.prompts.skills || []);
+  const skills = (STATE.prompts.skills || []).filter(isSkillVisible);
   const visible = skills.filter(s => {
     if (!skillShowAll && s.deploys_here === false) return false;
     if (skillFilterOrg && !orgDomainBySkill[s.name]) return false;
-    if (skillFilterTarget && !(s.targets || []).includes(skillFilterTarget)) return false;
+    if (skillFilterTargetMode === "show") {
+      if (skillFilterTarget && !(s.targets || []).includes(skillFilterTarget)) return false;
+    } else if (skillFilterTargetMode === "hide") {
+      if (skillHiddenTargets.length && (s.targets || []).some((t) => skillHiddenTargets.includes(t))) return false;
+    }
     if (q && !s.name.includes(q) && !(s.description || "").toLowerCase().includes(q)) return false;
     return true;
   });
@@ -3648,7 +3869,7 @@ function renderSkillDrawer(s, domain) {
   body.append(metaLine);
 
   const actBar = el("div", "skill-actions-bar");
-  const editBtn = el("button", "", "Edit prompt →");
+  const editBtn = el("button", "ghost tiny", "Edit prompt →");
   editBtn.title = "Open in Prompt Library to edit body and metadata";
   editBtn.onclick = () =>
     openContextualEditor({ kind: "skill", ident: s.name, returnTab: "skills" });
@@ -3656,11 +3877,11 @@ function renderSkillDrawer(s, domain) {
   body.append(actBar);
 
   body.append(renderSkillFilesSection(s));
-  body.append(renderSkillExtensionSection(s));
   body.append(renderSkillScopeSection(s));
 
-  // Org structure panel — only for org-domain skills
-  if (domain && orgData && orgData[domain]) {
+  // Org structure panel — only for org-domain skills, and only when the harness is on
+  // (with it off orgData is never fetched, but the gate is stated rather than inferred)
+  if (hasMitosAgent() && domain && orgData && orgData[domain]) {
     body.append(renderSkillOrgSection(s.name, domain));
   }
 
@@ -3686,7 +3907,7 @@ function renderSkillFilesSection(s) {
     "Deployed alongside SKILL.md and bundled into claude.ai zips."));
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save files to inbox");
@@ -3716,86 +3937,23 @@ function renderSkillFilesSection(s) {
     saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
   };
   revert.onclick = () => { delete resourceDrafts[key]; renderSkills(); };
-  actions.append(reason, save, revert);
+  const btns = el("div", "action-group");
+  btns.append(save, revert);
+  actions.append(reason, btns);
   section.append(actions);
   return section;
 }
 
-// ── skill-row extension assignment: extends_skill/extends_role, moved here from the
 // Prompt Library metadata panel for the same reason as Supporting Files — it's a
 // structural choice about where this skill sits in an org, not part of authoring its
 // body. Shares metaDrafts (only the two extension keys) and saveDraft with the Prompt
 // Library, same `skill:<name>` key, so a draft either surface starts is visible from
 // both and Prompt Library's "Revert" still discards it as part of a full reset. ────
-function renderSkillExtensionSection(s) {
-  const key = `skill:${s.name}`;
-  const section = el("div", "skill-extension-section");
-
-  const header = el("div", "resources-panel-header");
-  header.append(el("h4", "", "Extension"));
-  const badge = el("span", "meta-modified-badge hidden", "● extension modified");
-  header.append(badge);
-  section.append(header);
-  section.append(el("div", "muted resources-hint",
-    "Both fields together turn this skill into an extension — its body splices into the "
-    + "named parent skill's matching role section at render time; it never deploys "
-    + "standalone. Leave both blank for a regular skill."));
-
-  const actions = el("div", "detail-actions");
-  const reason = el("input");
-  reason.type = "text";
-  reason.placeholder = "Reason (optional — logged on accept)";
-  const save = el("button", "accept tiny", "Save extension to inbox");
-  save.title = "Propose this skill's extension assignment as an inbox candidate";
-  const revert = el("button", "reject tiny", "Revert extension");
-  revert.title = "Discard the local extends_skill/extends_role edit for this skill";
-
-  function refreshActionState() {
-    const d = metaDrafts[key];
-    const hasDraft = !!d && (("extends_skill" in d) || ("extends_role" in d));
-    save.disabled = !hasDraft;
-    revert.disabled = !hasDraft;
-    badge.classList.toggle("hidden", !hasDraft);
-  }
-
-  const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
-  const { skillSelect, roleSelect } = buildExtensionSelects(
-    current.extends_skill, current.extends_role,
-    (skillVal, roleVal) => {
-      metaDrafts[key] = metaDrafts[key] || {};
-      metaDrafts[key].extends_skill = skillVal;
-      metaDrafts[key].extends_role = roleVal;
-      refreshActionState();
-    });
-  const extGrid = el("div", "meta-grid");
-  extGrid.append(fieldWrap("Extends skill", skillSelect));
-  extGrid.append(fieldWrap("Extends role", roleSelect));
-  section.append(extGrid);
-  refreshActionState();
-
-  save.onclick = () => {
-    const body = drafts[key] != null ? drafts[key] : s.body;
-    saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
-  };
-  revert.onclick = () => {
-    const d = metaDrafts[key];
-    if (d) {
-      delete d.extends_skill;
-      delete d.extends_role;
-      if (!Object.keys(d).length) delete metaDrafts[key];
-    }
-    renderSkills();
-  };
-  actions.append(reason, save, revert);
-  section.append(actions);
-  return section;
-}
-
 // ── skill-row scope assignment: global (default, deploys to every shared/global
 // directory a target offers — the antigravity_skills dir, the personal
 // claude_code_skills dir, mitos-agent, claude-app) vs project (deploys ONLY to the
 // projects that name this skill in their manifest's `skills:` list, on whichever of
-// claude-code/antigravity it targets). Mirrors renderSkillExtensionSection's pattern —
+// claude-code/antigravity it targets). Mirrors the Supporting Files panel's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
 // projects itself is read-only here: the console doesn't write project manifests
 // (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
@@ -3835,7 +3993,7 @@ function renderSkillScopeSection(s) {
 
   const current = { ...(s.frontmatter || {}), ...(metaDrafts[key] || {}) };
   const scopeRow = el("div", "meta-grid");
-  const scopeSelect = el("select");
+  const scopeSelect = el("select", "graph-select");
   for (const [val, label] of [
     ["global", "Global"],
     ["project", hasProjects ? "Project" : "Project (configure in a project manifest first)"],
@@ -3852,7 +4010,7 @@ function renderSkillScopeSection(s) {
     refreshActionState();
     renderSkills();
   };
-  scopeRow.append(fieldWrap("Scope", scopeSelect));
+  scopeRow.append(scopeSelect);
   section.append(scopeRow);
 
   if ((current.scope || "global") === "project") {
@@ -3871,7 +4029,7 @@ function renderSkillScopeSection(s) {
   }
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
   const save = el("button", "accept tiny", "Save scope to inbox");
@@ -3889,7 +4047,9 @@ function renderSkillScopeSection(s) {
     }
     renderSkills();
   };
-  actions.append(reason, save, revert);
+  const btns = el("div", "action-group");
+  btns.append(save, revert);
+  actions.append(reason, btns);
   section.append(actions);
   refreshActionState();
   return section;
@@ -3897,7 +4057,7 @@ function renderSkillScopeSection(s) {
 
 // ── renderSkillOrgSection: org role tree / Agent-MD folder view ──────────────
 // Embedded within the expanded body of an org-domain skill row. Uses the same
-// renderRoleTree / renderAgentsMdPicker / renderAgentsMdTree functions the old
+// renderDomainSummary / renderAgentsMdPicker / renderAgentsMdTree functions the old
 // Org tab used — they are unchanged; only the container changes.
 function renderSkillOrgSection(skillName, domain) {
   const section = el("div", "skill-org-section");
@@ -3921,7 +4081,7 @@ function renderSkillOrgSection(skillName, domain) {
   section.append(viewToggle);
 
   if (mode === "role") {
-    section.append(renderRoleTree(orgData[domain]));
+    section.append(renderDomainSummary(orgData[domain]));
   } else {
     section.append(renderAgentsMdPicker());
     section.append(renderAgentsMdTree());
@@ -3935,8 +4095,6 @@ function renderSkillOrgSection(skillName, domain) {
 let newSkillOpen = false;
 let newSkillDraftBody = "# Instructions\n\n";
 let newSkillPrefillName = "";         // set by the Org tab's "Edit playbook" before jumping here
-let newSkillPrefillExtendsSkill = ""; // set by a role card's "+ Extend department" button
-let newSkillPrefillExtendsRole = "";
 // Everything the operator types survives a re-render while the form is open (e.g. an
 // unrelated refresh() firing elsewhere, or loadOrgTree()'s renderSkills() call landing
 // mid-edit) — without this, any such render rebuilds the form from scratch: prefills
@@ -3956,8 +4114,7 @@ function resetNewSkillDraft() {
 
 function newSkillForm() {
   const wrap = el("div", "new-skill-form");
-  const isExtension = !!newSkillPrefillExtendsSkill;
-  wrap.append(el("h3", "", isExtension ? "New department extension" : "New skill"));
+  wrap.append(el("h3", "", "New skill"));
 
   const inputs = {};
   const field = (key, label, ph) => {
@@ -3989,23 +4146,22 @@ function newSkillForm() {
   nameInput.addEventListener("keydown", focusNext(descInput));
   descInput.addEventListener("keydown", focusNext(catInput));
 
-  const prefillExtSkill = newSkillPrefillExtendsSkill;
-  const prefillExtRole = newSkillPrefillExtendsRole;
-  newSkillPrefillExtendsSkill = "";
-  newSkillPrefillExtendsRole = "";
-
   const targetsWrap = el("div", "graph-field");
   targetsWrap.append(el("label", "", "Targets"));
   const targetsRow = el("div", "target-checks");
   const targetBoxes = {};
-  for (const t of (STATE.known_targets || [])) {
+  // agents-md deploys no skills, and mitos-agent is gated behind the flag —
+  // isTargetVisible holds both rules. Only the NEW-skill form filters: the
+  // metadata editor for an existing skill must keep showing what it declares,
+  // or saving it would quietly drop the target.
+  for (const t of (STATE.known_targets || []).filter(isTargetVisible)) {
     const label = el("label", "target-check");
     const cb = el("input");
     cb.type = "checkbox";
     cb.value = t;
     if (newSkillFieldDraft.targets) cb.checked = newSkillFieldDraft.targets.includes(t);
     cb.onchange = () => {
-      newSkillFieldDraft.targets = (STATE.known_targets || []).filter((tt) => targetBoxes[tt].checked);
+      newSkillFieldDraft.targets = Object.keys(targetBoxes).filter((tt) => targetBoxes[tt].checked);
     };
     label.append(cb, document.createTextNode(" " + t));
     targetsRow.append(label);
@@ -4016,28 +4172,6 @@ function newSkillForm() {
   // an extension defaults to its parent's targets — it never deploys standalone, but
   // targets is still required shape (schema uniformity), so save the operator a click.
   // Re-applied live whenever the parent select changes, not just on initial prefill.
-  function applyParentTargets(parentName) {
-    const parentTargets = new Set(
-      (STATE.prompts.skills || []).find((s) => s.name === parentName)?.targets || []);
-    for (const t of (STATE.known_targets || [])) targetBoxes[t].checked = parentTargets.has(t);
-    newSkillFieldDraft.targets = [...parentTargets];
-  }
-
-  const { skillSelect: extSkillSelect, roleSelect: extRoleSelect } = buildExtensionSelects(
-    prefillExtSkill, prefillExtRole,
-    (skillVal) => { if (skillVal) applyParentTargets(skillVal); });
-  // Skip the auto-populate once the operator has touched targets (draft.targets set) —
-  // a re-render mid-edit (see the draft-state note above) must not clobber their choice.
-  if (isExtension && !newSkillFieldDraft.targets) applyParentTargets(prefillExtSkill);
-
-  const extGrid = el("div", "meta-grid");
-  extGrid.append(fieldWrap("Extends skill (leave blank for a regular skill)", extSkillSelect));
-  extGrid.append(fieldWrap("Extends role", extRoleSelect));
-  wrap.append(extGrid);
-  wrap.append(el("div", "muted extension-hint",
-    "Both fields together turn this into an extension — it splices into the named "
-    + "parent skill's matching role section at render time and never deploys standalone."));
-
   wrap.append(targetsWrap);
 
   const editor = buildContextualEditor({
@@ -4054,15 +4188,13 @@ function newSkillForm() {
   wrap.append(resWrap);
 
   const actions = el("div", "detail-actions");
-  const reason = el("input");
+  const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
-  const create = el("button", "accept", isExtension ? "Create extension" : "Create skill");
+  const create = el("button", "accept", "Create skill");
   create.onclick = async () => {
-    const targets = (STATE.known_targets || []).filter((t) => targetBoxes[t].checked);
+    const targets = Object.keys(targetBoxes).filter((t) => targetBoxes[t].checked);
     const fm = { description: descInput.value.trim(), category: catInput.value.trim(), targets };
-    if (extSkillSelect.value.trim()) fm.extends_skill = extSkillSelect.value.trim();
-    if (extRoleSelect.value.trim()) fm.extends_role = extRoleSelect.value.trim();
     const res = await fetch("/api/skills/new", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4086,7 +4218,9 @@ function newSkillForm() {
   };
   const cancel = el("button", "ghost", "Cancel");
   cancel.onclick = () => { newSkillOpen = false; resetNewSkillDraft(); renderSkills(); };
-  actions.append(reason, create, cancel);
+  const btns = el("div", "action-group");
+  btns.append(create, cancel);
+  actions.append(reason, btns);
   wrap.append(actions);
   return wrap;
 }
@@ -4101,76 +4235,13 @@ function newSkillForm() {
 // ───────────────────────────────────────────────────────────────────────────────────
 let orgData = null;          // /api/org response, fetched once and cached
 let orgTreeCache = {};       // machine -> /api/org/tree response, cached per machine
-let orgDomain = null;        // selected domain key, e.g. "software"
-let orgViewMode = "role";    // "role" | "agentsmd"
 let orgMachine = null;       // selected machine for the Agent-MD folder view
 let newOrgDomainOpen = false; // "+ ORG" inline dialog toggle
-
-async function loadOrgData() {
-  if (!orgData) {
-    const res = await fetch("/api/org");
-    orgData = await res.json();
-    if (!orgDomain) orgDomain = Object.keys(orgData)[0] || null;
-  }
-  renderSkills();
-}
 
 async function loadOrgTree(machine) {
   const res = await fetch(`/api/org/tree?machine=${encodeURIComponent(machine)}`);
   orgTreeCache[machine] = await res.json();
   renderSkills();
-}
-
-function renderOrg() {
-  const box = $("view-org");
-  box.replaceChildren();
-  if (!orgData) { box.append(el("div", "empty-state", "Loading…")); return; }
-  if (newOrgDomainOpen) { box.append(newOrgDomainForm()); return; }
-
-  const toolbar = el("div", "org-toolbar");
-  const newOrgBtn = el("button", "accept tiny", "+ ORG");
-  newOrgBtn.title = "Create a new domain org template (e.g. finance)";
-  newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderOrg(); };
-  toolbar.append(newOrgBtn);
-
-  const domains = Object.keys(orgData);
-  if (!domains.length) {
-    box.append(toolbar);
-    box.append(el("div", "empty-state", "No org domains found — click + ORG above to create one."));
-    return;
-  }
-  if (!orgDomain || !orgData[orgDomain]) orgDomain = domains[0];
-
-  const switcher = el("div", "pool-toggle org-switcher");
-  for (const d of domains) {
-    const b = el("button", "pool-opt" + (d === orgDomain ? " active" : ""),
-                 d.charAt(0).toUpperCase() + d.slice(1));
-    b.setAttribute("aria-pressed", String(d === orgDomain));
-    b.onclick = () => { orgDomain = d; renderOrg(); };
-    switcher.append(b);
-  }
-  toolbar.append(switcher);
-
-  const viewToggle = el("div", "pool-toggle");
-  for (const [id, label] of [["role", "Role Tree"], ["agentsmd", "Agent-MD Folder View"]]) {
-    const b = el("button", "pool-opt" + (orgViewMode === id ? " active" : ""), label);
-    b.setAttribute("aria-pressed", String(orgViewMode === id));
-    b.onclick = () => {
-      orgViewMode = id;
-      if (id === "agentsmd" && orgMachine && !orgTreeCache[orgMachine]) loadOrgTree(orgMachine);
-      else renderOrg();
-    };
-    viewToggle.append(b);
-  }
-  toolbar.append(viewToggle);
-  box.append(toolbar);
-
-  if (orgViewMode === "role") {
-    box.append(renderRoleTree(orgData[orgDomain]));
-  } else {
-    box.append(renderAgentsMdPicker());
-    box.append(renderAgentsMdTree());
-  }
 }
 
 // "+ ORG": scaffolds a new domain-template skill (org-<domain>) via /api/org/new-domain —
@@ -4216,75 +4287,18 @@ function newOrgDomainForm() {
   return wrap;
 }
 
-function renderRoleTree(data) {
+function renderDomainSummary(data) {
+  // A domain playbook is prose about a market's function and output, not a structure to
+  // draw. The old role tree visualized a C-suite that no longer exists; what is useful is
+  // which skill carries the domain and what it claims to be for.
   const wrap = el("div", "org-tree");
-  const chainWrap = el("div", "org-chain");
-  chainWrap.append(el("h4", "", "Primary chain"));
-  if (data.primaryChain.length) {
-    const list = el("ol", "org-chain-list");
-    for (const step of data.primaryChain) {
-      const li = el("li");
-      li.append(el("strong", "", step.title), document.createTextNode(" — " + step.subtitle));
-      list.append(li);
-    }
-    chainWrap.append(list);
-  } else {
-    chainWrap.append(el("div", "muted", data.primaryChainSummary || "No primary chain parsed."));
-  }
-  wrap.append(chainWrap);
-
-  if (data.extendedRoles.length) {
-    const rolesWrap = el("div", "org-roles");
-    rolesWrap.append(el("h4", "", "Extended C-suite"));
-    for (const role of data.extendedRoles) rolesWrap.append(roleCard(role, data.skill));
-    wrap.append(rolesWrap);
-  }
+  if (!data) return wrap;
+  wrap.append(el("h4", "", data.skill || "domain playbook"));
+  if (data.description) wrap.append(el("div", "muted", data.description));
+  wrap.append(el("div", "muted", "Open the skill above to read or edit the playbook."));
   return wrap;
 }
 
-function roleCard(role, parentSkill) {
-  const field = (label, text) => {
-    const f = el("div", "role-field");
-    f.append(el("strong", "", label + ": "), document.createTextNode(text));
-    return f;
-  };
-  const details = el("details", "org-node-group role-card");
-  details.append(el("summary", "", `${role.title} — ${role.subtitle}`));
-  const body = el("div", "role-card-body");
-  if (role.lens) body.append(field("Lens", role.lens));
-  if (role.team) body.append(field("Team", role.team));
-  if (role.vocabulary) body.append(field("Vocabulary", role.vocabulary));
-  if (role.trigger) body.append(field("Trigger", role.trigger));
-
-  const exts = role.activeExtensions || [];
-  if (exts.length) {
-    const extWrap = el("div", "role-extensions");
-    extWrap.append(el("strong", "", "Active extensions: "));
-    for (const e of exts) {
-      const badge = el("span", "extension-badge", e.name);
-      if (e.description) badge.title = e.description;
-      extWrap.append(badge);
-    }
-    body.append(extWrap);
-  }
-
-  if (parentSkill) {
-    const extendBtn = el("button", "ghost tiny", "+ Extend department");
-    extendBtn.title = `Add a custom skill that extends ${parentSkill}'s ${role.title} role`;
-    extendBtn.onclick = (ev) => {
-      ev.preventDefault();   // don't toggle the <details> disclosure
-      newSkillPrefillExtendsSkill = parentSkill;
-      newSkillPrefillExtendsRole = role.title;
-      newSkillPrefillName = `${parentSkill}-${role.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-      newSkillOpen = true;
-      renderSkills();
-    };
-    body.append(extendBtn);
-  }
-
-  details.append(body);
-  return details;
-}
 
 function renderAgentsMdPicker() {
   const machines = STATE.agents_md_machines || [];
@@ -4583,6 +4597,13 @@ document.addEventListener("keydown", (e) => {
     closeDeployConfirm();
     return;
   }
+  if (e.key === "Escape" && newProjectOpen) {
+    e.preventDefault();
+    newProjectOpen = false;
+    resetNewProjectDraft();
+    renderGraph();
+    return;
+  }
   // Prompt-library shortcuts only apply when that view is active
   if ($("view-prompts").hidden) return;
   const t = e.target;
@@ -4835,4 +4856,11 @@ $("compose-rebuild").onclick = () => {
 };
 
 showTab("inbox");  // set initial active nav + title before data loads
-refresh().catch((e) => toast(`Failed to load state: ${e}`, 6000));
+refresh().then(() => {
+  // The nav ships labelled "Skills" — the honest name with the harness off. Orgs only
+  // appear on that tab when mitos_agent is on, so the label follows the flag.
+  if (hasMitosAgent()) {
+    const nav = $("nav-skills");
+    if (nav) { nav.title = "Skills & Orgs"; nav.setAttribute("aria-label", "Skills & Orgs"); }
+  }
+}).catch((e) => toast(`Failed to load state: ${e}`, 6000));

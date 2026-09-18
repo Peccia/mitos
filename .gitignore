@@ -4,6 +4,7 @@ dist/
 
 # Per-machine deploy state (content hashes for drift detection)
 .deploy-lock.json
+.deploy-lock.json.lock
 
 # Local secrets overlay — merged into env templates at deploy time
 .local/

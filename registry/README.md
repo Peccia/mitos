@@ -48,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Two groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) and registry-wide defaults (`default_deliverables`) | field key |
+| `user.yaml` | Three groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`), registry-wide defaults (`default_deliverables`), and the `mitos_agent` display flag | field key |
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
@@ -73,22 +73,26 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping in **two groups** — identity, and registry-wide defaults:
+A flat mapping in **three groups** — identity, registry-wide defaults, and a display flag:
 
 ```yaml
 # IDENTITY — the personalization placeholders
-given_name: Paul
-full_name: Paul Peccia
+given_name: Example
+full_name: Example User
 email: example@domain.com
 location: Your City, State
 
 # DEFAULTS — what a new effort inherits when it names none of its own
 default_deliverables: [documentation, tests]
+
+# DISPLAY — show the incubating Mitos Agent planning harness
+mitos_agent: true
 ```
 
 Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`, `default_deliverables: [documentation, tests]`). Any key
+`location: Your City, State`, `default_deliverables: [documentation, tests]`,
+`mitos_agent: false`). Any key
 outside this exact set is a hard error at compile time — the schema is intentionally
 closed (`loader.KNOWN_USER_KEYS`).
 
@@ -98,12 +102,19 @@ key here that is, validated against the closed deliverables vocabulary
 *copied* onto real efforts and a typo would otherwise mint invalid ones from a file
 nobody looks at twice. See [Default deliverables](#default-deliverables) below.
 
+`mitos_agent` is a **boolean**; only YAML `true`/`false` is accepted (`"true"` and `1` fail at
+load). On, the operator console shows the Mitos Agent surfaces — org-domain skills, the
+`mitos-agent` target chip, **+ New org**, the effort editor's **Org domain** field — and relabels
+the Skills tab **Skills & Orgs**; `mitos init` also lists the Mitos Agent setup option. It is
+display only: what a machine compiles and deploys is decided by its `targets:`. See
+[ADR-004](../docs/decisions/004-presentation-facade-mitos-agent-flag.md).
+
 **Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
 token list rather than this file's keys, so a defaults key can never leak into placeholder
 expansion as `{{user_default_deliverables}}`.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
-context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Paul's`,
+context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Example's`,
 or `Chris'` when the name ends in *s*), `{{user_full_name}}`, `{{user_email}}`,
 `{{user_location}}`. They expand at deploy time (`render.expand_placeholders`, applied to
 every text/skill-zip output — never to a tool's own merged config or an env template) and
@@ -295,8 +306,7 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 > agents-md` machine with no `mitos-agent` target (e.g. `machines/example-windows.yaml`) is
 > firmly in the "Agentic" row here, but never gets org content: the org skills, the
 > org-domain table, and per-effort org routing lines all require `mitos-agent` literally in
-> `targets:` (see [`docs/org-templates.md`](../docs/org-templates.md)). Don't infer "has
-> orgs" from this table.
+> `targets:`. Don't infer "has orgs" from this table.
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 

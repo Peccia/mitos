@@ -7,15 +7,17 @@ Secrets in `.local/` are never synced.
 
 ## Running these commands — what `mitos` means
 
-Until the packaged CLI is installed, **`mitos` is shorthand** for your venv interpreter + the
-script:
+**`mitos` is the repo-root shim** — run it from the repo root as `./mitos` (Linux / macOS) or
+`.\mitos` (Windows PowerShell), or put the repo root on your `PATH` to type a bare `mitos`. It
+picks the venv interpreter and routes `sync` to `build/mitos.py`, so it equals calling the script
+directly:
 
-| Platform | `mitos` = |
-|---|---|
-| Windows (PowerShell) | `build\.venv\Scripts\python.exe build\mitos.py` |
-| Linux / macOS | `build/.venv/bin/python build/mitos.py` |
+| Platform | Shim | Direct equivalent |
+|---|---|---|
+| Windows (PowerShell) | `.\mitos` | `build\.venv\Scripts\python.exe build\mitos.py` |
+| Linux / macOS | `./mitos` | `build/.venv/bin/python build/mitos.py` |
 
-So `mitos sync --machine main` is `build/.venv/bin/python build/mitos.py sync --machine main`.
+So `mitos sync --machine main` is `./mitos sync --machine main`.
 
 ## What `mitos sync` does
 
@@ -59,7 +61,7 @@ The key is resolved to an **absolute path**: a bare name like `id_github` is loo
 clear "ssh key not found at …" instead of a cryptic `Permission denied (publickey)`.
 
 This key resolution (`agentic.sshkey`) is shared with, but distinct from, a *project's* `repo_ssh_keys:`
-(see [`../docs/targets/mitos-agent.md`](targets/mitos-agent.md)): `sync.git.ssh_key` here authenticates
+(see [the overlay configuration reference](../registry/README.md)): `sync.git.ssh_key` here authenticates
 the **overlay repo** (`registry/local/`) against its hub; `repo_ssh_keys:` authenticates a **project's
 own cloned repos** against their own remotes. A box can need both at once — one key for the overlay
 hub, a different key per project repo.

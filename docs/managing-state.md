@@ -21,6 +21,7 @@ each one.
 - [The reconciliation toolbox](#the-reconciliation-toolbox)
 - [Safety rails](#safety-rails)
 - [State across machines](#state-across-machines)
+- [Automating an update](#automating-an-update)
 
 ---
 
@@ -80,7 +81,7 @@ Each line of a `deploy`/`diff` plan is `[state]  <path> — <detail>  <flag>`. T
 | `drift` | File was edited in place; registry unchanged. | Depends on **policy** (below): capture+overwrite, or block. |
 | `conflict` | Either edited-in-place **and** registry-changed, **or** an untracked existing file that differs. | Depends on **policy**: capture+overwrite, or block. |
 | `resolved` | Live already matches the registry but the lock was stale (e.g. right after `adopt`). | Re-locks; **never** needs `--force`. |
-| `merge` | A tool-owned config file (Antigravity `config.json`, Antigravity/Claude-Desktop `config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
+| `merge` | A tool-owned config file (Antigravity `config.json`, Claude Desktop `claude_desktop_config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
 | `orphan` | Previously deployed by Mitos, no longer in the plan (a deselected skill, a retired project). | Kept on disk until you `--prune`. |
 | `clone` | A project repo to check out beside its project node. | Clones if absent; fast-forwards an existing clean checkout on its manifest branch; never resets, stashes, re-checks-out, or deletes one (a dirty/detached/diverged checkout is skipped and reported). |
 
@@ -262,3 +263,33 @@ it, so drift candidates and staged document listings move to your review PC via 
 
 > Capture → review → accept → commit → sync → deploy elsewhere. That loop — drift surfaced on any
 > machine, gated by you, folded back into the one source of truth — *is* the project.
+
+---
+
+## Automating an update
+
+`mitos update --machine M --json` is the unattended form of `sync pull`, for a caller that
+reads data instead of prose (MitosAgent's updater). It runs **core pull → overlay pull →
+deploy**, stops at the first failure, and prints exactly one `schema: 1` JSON object on stdout
+(all deploy prose goes to stderr). The exit code is 0 only when the outcome's `ok` is true; 2
+means an unknown machine.
+
+It never passes `--force` or `--prune`, never pushes, and never adopts:
+
+- **Core pull** is `git pull --ff-only`. With tracked edits in the core checkout it skips the
+  pull (`core.skipped_reason: "dirty"`) and still deploys. A `--scheduled` run with a dirty core
+  does nothing (`skipped: "core dirty (scheduled)"`). When the pull moves `HEAD`, the rest runs
+  in a fresh interpreter so the new compiler code does the deploy. If `build/requirements.txt`
+  changed, it stops before deploying: reinstall the venv, then re-run.
+- **Overlay pull** is the same `pull --rebase` as `mitos sync`. A dirty overlay (for example an
+  uncommitted `inbox/` capture) skips the pull and deploys the working tree
+  (`overlay.skipped_reason: "dirty"`). A leftover rebase or a pull conflict stops the run for
+  you to resolve by hand.
+- **Deploy** refuses on protected drift exactly as `deploy` does, and reports the paths under
+  `deploy.blocked`. One protected drift freezes every later update for that machine until you
+  `adopt` or `harvest` it.
+
+Deploys are serialized per repo by `.deploy-lock.json.lock`, since every machine's section
+shares one `.deploy-lock.json`. A second deploy waits up to 10 s, then fails with
+`deploy in progress (pid …)`. A lock older than 15 minutes is treated as stale and broken.
+Previews (`--dry-run`) never take the lock.

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "ok": false,
+  "machine": "m",
+  "scheduled": false,
+  "started": "2026-09-16T10:00:00Z",
+  "finished": "2026-09-16T10:00:00Z",
+  "skipped": null,
+  "error": "git pull --rebase hit a conflict",
+  "core": {
+    "branch": "v0.1.7",
+    "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pulled": false,
+    "skipped_reason": null,
+    "requirements_changed": false
+  },
+  "overlay": {
+    "before": "cccccccccccccccccccccccccccccccccccccccc",
+    "after": "cccccccccccccccccccccccccccccccccccccccc",
+    "pulled": false,
+    "skipped_reason": null,
+    "conflict": true
+  },
+  "deploy": null
+}

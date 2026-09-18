@@ -789,6 +789,10 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                                           f"{', '.join(graphmod.KNOWN_COVERAGE)}"}
         try:
             eid = str(e_dict["id"]).strip()
+            prev_hidden = effective_efforts[eid].hidden if eid in effective_efforts else False
+            hidden_val = bool(e_dict["hidden"]) if "hidden" in e_dict else prev_hidden
+            prev_kw = effective_efforts[eid].keywords if eid in effective_efforts else ""
+            kw_val = str(e_dict.get("keywords", prev_kw)).strip()
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
@@ -796,7 +800,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 org_domain=str(e_dict.get("orgDomain", "")).strip(),
                 goal=str(e_dict.get("goal", "")).strip(),
                 deliverables=_deliv,
-                requirements_coverage=_cover)
+                requirements_coverage=_cover,
+                keywords=kw_val,
+                hidden=hidden_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -858,7 +864,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables", "hidden"}
+                            "default_deliverables", "hidden", "document_store"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -951,6 +957,16 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["repo_notes"] = notes
         else:
             updated.pop("repo_notes", None)
+    if "document_store" in fields:
+        raw_ds = fields["document_store"]
+        if raw_ds is None or raw_ds == "" or raw_ds == "none":
+            updated["document_store"] = "none"
+        elif isinstance(raw_ds, str):
+            updated["document_store"] = raw_ds.strip()
+        elif isinstance(raw_ds, list):
+            updated["document_store"] = [str(s).strip() for s in raw_ds if str(s).strip()]
+        else:
+            return {"ok": False, "error": "document_store must be a string or list of strings"}
 
     import copy
     trial = copy.deepcopy(reg)
@@ -980,6 +996,47 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
         meta["reason"] = reason
     cid = _write_candidate(reg, f"project-{slug}", meta, f"{slug}.yaml", payload)
     return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
+def create_project(reg: Registry, slug: str, name: str = "", document_store: str = "",
+                   timeout: int = 30) -> dict:
+    """Create a new project manifest in the overlay by delegating to the CLI:
+    `python build/mitos.py project add <slug> [--name <name>] [--document-store <store>] [--root <root>]`.
+
+    Invariant #11 holds by construction: this shells out to the separate `build/mitos.py`
+    entrypoint. The reach lives in a child process, mirroring refresh_staging and
+    peek_identity_effort.
+    """
+    slug = (slug or "").strip()
+    if not slug or not all(c.isalnum() or c in "-_" for c in slug):
+        return {"ok": False, "error": f"invalid slug {slug!r} — use letters, digits, '-' or '_'"}
+
+    cmd = [sys.executable, str(Path(__file__).resolve().parents[1] / "mitos.py"),
+           "project", "add", slug,
+           "--document-store", (document_store or "none").strip()]
+    if name and name.strip():
+        cmd.extend(["--name", name.strip()])
+    if reg.root:
+        cmd.extend(["--root", str(reg.root)])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(reg.root if reg.root else Path(__file__).resolve().parents[2]),
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return {"ok": False, "error": f"project creation failed: {e}"}
+
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        if err.startswith("error: "):
+            err = err[len("error: "):]
+        return {"ok": False, "error": err}
+
+    return {"ok": True, "slug": slug}
 
 
 # ── propose (a console prompt-library edit → inbox candidate) ─────────────────
@@ -1050,7 +1107,7 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "extends_skill", "extends_role", "scope",
+                         "targets", "category", "scope",
                          "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
 
@@ -1144,9 +1201,6 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         if bind_err:
             return {"ok": False, "error": bind_err}
     if kind == "skill":
-        ext_err = loader.validate_skill_extension(reg, ident, new_fm)
-        if ext_err:
-            return {"ok": False, "error": ext_err}
         scope_err = loader.validate_skill_scope(ident, new_fm)
         if scope_err:
             return {"ok": False, "error": scope_err}
@@ -1215,9 +1269,6 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         bind_err = _check_target_binding(reg, skill.name, [str(t) for t in targets])
         if bind_err:
             return bind_err
-        ext_err = loader.validate_skill_extension(reg, skill.name, fm)
-        if ext_err:
-            return ext_err
         scope_err = loader.validate_skill_scope(skill.name, fm)
         if scope_err:
             return scope_err
@@ -1250,9 +1301,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
 
     `org_domain`, when set, is stamped into the frontmatter as-is — it marks this skill
     as a domain-template org (see loader.known_org_domains / org_index); propose_new_org_
-    domain is the only caller that passes it. `frontmatter_fields` may also carry
-    `extends_skill`/`extends_role` (the Org tab's "+ Extend department" button) —
-    validated the same way a metadata edit is. `resources` seeds examples/*, scripts/*
+    domain is the only caller that passes it. `resources` seeds examples/*, scripts/*
     files alongside the new SKILL.md (optional).
     Returns {ok, id, registry_path} or {ok: False, error}."""
     name = str(name).strip()
@@ -1283,15 +1332,6 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     }
     if org_domain:
         meta_fm["org_domain"] = org_domain
-    ext_skill = str(frontmatter_fields.get("extends_skill", "") or "").strip()
-    ext_role = str(frontmatter_fields.get("extends_role", "") or "").strip()
-    if ext_skill:
-        meta_fm["extends_skill"] = ext_skill
-    if ext_role:
-        meta_fm["extends_role"] = ext_role
-    ext_err = loader.validate_skill_extension(reg, name, meta_fm)
-    if ext_err:
-        return {"ok": False, "error": ext_err}
     registry_path = f"local/skills/{name}/SKILL.md"
     payload = ("---\n" + yaml.safe_dump(meta_fm, sort_keys=False, allow_unicode=True)
               + "---\n\n" + str(body).rstrip("\n") + "\n")
@@ -1318,13 +1358,16 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
 
 
 def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict:
-    """Propose a brand-new org domain (the console's `+ ORG` button): a single `kind:
-    new` skill candidate at registry/local/skills/org-<domain>/SKILL.md carrying
-    `org_domain: <domain>` in its frontmatter plus a CEO/VP/Assistant template body (the
-    same numbered-heading shape _parse_org_skill expects). Once accepted, the domain is
-    immediately valid for a project's `org:` field (loader.known_org_domains) and
-    appears in the console's Org tab domain switcher (org_index) — no separate routing
-    table edit required, since domain discovery reads the skill's own frontmatter.
+    """Propose a brand-new org domain (the console's `+ ORG` button): a single `kind: new`
+    skill candidate at registry/local/skills/org-<domain>/SKILL.md carrying
+    `org_domain: <domain>` in its frontmatter, seeded with the section headings a domain
+    playbook is expected to fill.
+
+    The seed is a PROMPT TO THE AUTHOR, not a structure to simulate. What a domain skill
+    contributes is expertise — what to ask, what to measure, what to refuse — so the
+    template names those sections and leaves the substance to whoever knows the market.
+    Once accepted the domain is immediately valid (loader.known_org_domains) and appears in
+    the console's domain switcher (org_index); no routing table to edit.
     Returns {ok, id, registry_path} or {ok: False, error}."""
     domain = str(domain).strip().lower()
     if not domain:
@@ -1337,22 +1380,27 @@ def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict
     name = f"org-{domain}"
     title = domain.replace("-", " ").title()
     body = (
-        "# Instructions\n\n"
-        "Use this when a project request needs real planning or multi-step execution — "
-        f"not a quick lookup. Handle it as the owner's {title} organization. Truth over "
-        "politeness: if the request is unsound, mis-scoped, or would incur unacceptable "
-        "risk, say so as the CEO before anything is built.\n\n"
-        "## 1. CEO — intent and objectives\n"
-        "- Restate the request as concrete objectives and a clear definition of "
-        "\"done\".\n\n"
-        "## 2. VP — plan\n"
-        "- Turn objectives into a concrete plan grounded in real project context.\n\n"
-        "## 3. Assistant — execution\n"
-        "- Execute the plan: gather context, draft, and report back.\n"
+        f"# {title} Domain\n\n"
+        "## What this is for\n\n"
+        f"You are the {title.lower()} expert on this Work item. Your output is a "
+        "requirements specification another harness plans and builds from — what must be "
+        "true, and how each is checked. Truth over politeness: if the ask is unsound or "
+        "mis-scoped, say so before a requirement is written, and propose the cheaper "
+        "version.\n\n"
+        "## Turn a wish into something measurable\n\n"
+        f"The words this domain's owners use loosely, the question that pins each one "
+        "down, and the requirement it becomes. Never invent the number — ask for it.\n\n"
+        "## Close a coverage dimension\n\n"
+        "The questions that actually close each dimension this Work item declares. Naming "
+        "a dimension is not closing it.\n\n"
+        "## Surface these unprompted\n\n"
+        "What an owner in this domain will not think to mention and will be unhappy about "
+        "later.\n"
     )
     fields = {
-        "description": f"Run a substantive request through the simulated {title} "
-                       f"organization — CEO (intent), VP (plan), Assistant (execution).",
+        "description": f"{title} domain expertise for requirements gathering — turns an "
+                       f"owner's ask into requirements another harness can plan and build "
+                       f"from.",
         "category": "productivity",
         "targets": ["mitos-agent"],
     }
@@ -1543,12 +1591,17 @@ def prompt_index(reg: Registry) -> dict:
         "description": s.frontmatter.get("description", ""),
         "category": s.category,
         "targets": s.targets,
+        # READ-ONLY, and deliberately a sibling of `frontmatter` rather than a member of
+        # _SKILL_META_WHITELIST: a domain's identity is fixed by propose_new_org_domain, so
+        # widening the editable set would make it editable as a side effect. The console
+        # needs it only to ANSWER "is this an org-domain skill" — the `org-` name prefix is
+        # not that answer (a user skill may be called org-software-implementation-plan and
+        # have nothing to do with the org model).
+        "org_domain": s.frontmatter.get("org_domain", "") or "",
         "body": s.body,
         "frontmatter": _meta_dict(s.frontmatter, _SKILL_META_WHITELIST),
         "favorited": s.name in favorites,
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
-        "extends_skill": s.frontmatter.get("extends_skill", ""),
-        "extends_role": s.frontmatter.get("extends_role", ""),
         # projects whose manifest `skills:` list names this skill — the read-only
         # "where does scope: project actually apply" view (renderSkillScopeSection).
         # Editing this list happens in the project manifest YAML directly; the console
@@ -2101,6 +2154,7 @@ def graph_index(reg: Registry) -> list[dict]:
             # everything else). is_local flags where an accepted edit will land.
             "description": proj.get("description") or "",
             "stage": proj.get("stage") or "",
+            "document_store": proj.get("document_store") or "none",
             "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
             "repo": _project_repos(proj),
@@ -2121,7 +2175,8 @@ def graph_index(reg: Registry) -> list[dict]:
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
                          "orgDomain": e.org_domain, "goal": e.goal,
                          "deliverables": list(e.deliverables),
-                         "requirementsCoverage": list(e.requirements_coverage)}
+                         "requirementsCoverage": list(e.requirements_coverage),
+                         "hidden": bool(e.hidden)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
@@ -2140,118 +2195,21 @@ def graph_index(reg: Registry) -> list[dict]:
 # so `+ ORG` can add a domain purely by proposing a new skill candidate.
 # Orgs are GLOBAL domain skills — nothing org-shaped is stored per project; the only
 # org edge in the graph is an effort's orgDomain tag (see graph.ORG_DOMAIN_PRED). ──
-_ORG_NUMBERED_HEADING_RE = re.compile(r"^##\s+\d+\.\s+(.+?)\s+—\s+(.+)$")
-_ORG_ROLE_HEADING_RE = re.compile(r"^###\s+(.+?)\s+—\s+(.+)$")
-_ORG_LENS_RE = re.compile(r"^-\s+\*\*Lens\*\*:\s*(.+)$")
-_ORG_TEAM_RE = re.compile(r"^-\s+\*\*Team\*\*:\s*(.+)$")
-_ORG_VOCAB_RE = re.compile(r"^-\s+\*\*Vocabulary\*\*:\s*(.+)$")
-_ORG_TRIGGER_RE = re.compile(r"^-\s+Trigger:\s*(.+)$")
-
-
-def _parse_org_skill(reg: Registry, skill_name: str) -> dict:
-    """Walk one org-<domain>/SKILL.md: the numbered primary-chain headings, then the
-    Extended C-suite Roles block (### headings + Lens/Team/optional Vocabulary/Trigger).
-    Best-effort — an unexpected heading shape just yields fewer parsed roles; this only
-    ever degrades the visualization, never registry data (nothing here is written back)."""
-    skill = reg.skills.get(skill_name)
-    if skill is None:
-        return {"skill": skill_name, "primaryChain": [], "extendedRoles": []}
-    primary_chain: list[dict] = []
-    extended_roles: list[dict] = []
-    in_extended = False
-    role: dict | None = None
-    last_attr: str | None = None    # bullet a wrapped continuation line should extend
-    for raw in skill.body.splitlines():
-        line = raw.strip()
-        if not in_extended:
-            m = _ORG_NUMBERED_HEADING_RE.match(line)
-            if m:
-                primary_chain.append({"title": m.group(1).strip(), "subtitle": m.group(2).strip()})
-                continue
-            if line == "## Extended C-suite Roles":
-                in_extended = True
-            continue
-        role_m = _ORG_ROLE_HEADING_RE.match(line)
-        if role_m:
-            if role:
-                extended_roles.append(role)
-            role = {"title": role_m.group(1).strip(), "subtitle": role_m.group(2).strip(),
-                    "lens": "", "team": "", "vocabulary": "", "trigger": ""}
-            last_attr = None
-            continue
-        if line.startswith("## ") and not line.startswith("### "):
-            # a non-role "##" heading (e.g. "## Red-Team Protocols") ends the block
-            if role:
-                extended_roles.append(role)
-                role = None
-            in_extended = False
-            last_attr = None
-            continue
-        if role is None:
-            continue
-        matched = False
-        for attr, pat in (("lens", _ORG_LENS_RE), ("team", _ORG_TEAM_RE),
-                          ("vocabulary", _ORG_VOCAB_RE), ("trigger", _ORG_TRIGGER_RE)):
-            m = pat.match(line)
-            if m:
-                role[attr] = m.group(1).strip()
-                last_attr, matched = attr, True
-                break
-        if matched:
-            continue
-        # a wrapped continuation of the previous bullet (indented in the source, not a
-        # new bullet/heading) — append rather than drop, so long Lens/Trigger text isn't
-        # silently truncated mid-sentence
-        if last_attr and line and raw[:1] in (" ", "\t"):
-            role[last_attr] = f"{role[last_attr]} {line}".strip()
-        else:
-            last_attr = None
-    if role:
-        extended_roles.append(role)
-    return {"skill": skill_name, "primaryChain": primary_chain, "extendedRoles": extended_roles}
-
-
-def _extensions_by_target(reg: Registry) -> dict[str, list]:
-    """parent skill name -> [extension Skill, ...] (sorted by name), from every skill
-    that declares `extends_skill`. Used to surface active extensions on the role card
-    they target, without re-deriving this on every _parse_org_skill call."""
-    out: dict[str, list] = {}
-    for s in reg.skills.values():
-        parent = s.frontmatter.get("extends_skill")
-        if parent:
-            out.setdefault(parent, []).append(s)
-    for lst in out.values():
-        lst.sort(key=lambda s: s.name)
-    return out
-
-
 def org_index(reg: Registry) -> dict:
     """Every org domain, discovered dynamically from skills carrying an `org_domain`
-    frontmatter key (see loader.known_org_domains) — combined with each domain's parsed
-    role structure. Role TREE reading stays READ-ONLY here; role structure lives in
-    hand-authored prose and is never edited through this endpoint (extensions are the
-    one write path onto a role — see propose_new_skill's extends_skill/extends_role)."""
-    extensions_by_target = _extensions_by_target(reg)
+    frontmatter key (see loader.known_org_domains).
+
+    READ-ONLY, and deliberately thin: a domain playbook is prose about a market's function
+    and output, not a structure to visualize. The console lists the domains and points at
+    the skill; the playbook itself is read where every other skill is read."""
     out: dict[str, dict] = {}
     for skill in sorted(reg.skills.values(), key=lambda s: s.name):
         domain = skill.frontmatter.get("org_domain")
         if not domain:
             continue
-        parsed = _parse_org_skill(reg, skill.name)
-        summary = " → ".join(step["title"] for step in parsed["primaryChain"])
-        exts = extensions_by_target.get(skill.name, [])
-        for role in parsed["extendedRoles"]:
-            role["activeExtensions"] = [
-                {"name": e.name, "description": e.frontmatter.get("description", "")}
-                for e in exts
-                if (e.frontmatter.get("extends_role") or "").strip().lower()
-                == role["title"].strip().lower()
-            ]
         out[domain] = {
             "skill": skill.name,
-            "primaryChainSummary": summary,
-            "primaryChain": parsed["primaryChain"],
-            "extendedRoles": parsed["extendedRoles"],
+            "description": skill.frontmatter.get("description", ""),
         }
     return out
 
@@ -2306,6 +2264,8 @@ def state(reg: Registry) -> dict:
         "candidates": load_candidates(reg),
         "prompts": prompt_index(reg),
         "graphs": graph_index(reg),
+        # Available document stores (servers defined in connections/servers.yaml and overlay)
+        "known_stores": sorted((reg.servers.get("servers") or {}).keys()),
         # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
         "known_targets": sorted(loader.KNOWN_TARGETS),
@@ -2326,6 +2286,12 @@ def state(reg: Registry) -> dict:
         # one rarely-changed key would be more machinery than the edit is worth (invariant #10).
         "registry_default_deliverables": list(
             graphmod.order_deliverables(reg.user.get("default_deliverables") or [])),
+        # The Mitos Agent presentation gate (registry/user.yaml's FEATURES group). A DISPLAY
+        # flag, deliberately NOT a sibling of `machine_targets`: what a machine compiles is
+        # decided by its own `targets:`, so a fleet with a mitos-agent machine keeps compiling
+        # it byte-for-byte while the console hides the harness's affordances. The client reads
+        # it through one predicate (`hasMitosAgent`) — see build/review_ui/app.js.
+        "mitos_agent": bool(reg.user.get("mitos_agent")),
         # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
         # checkbox group reads this the same way, for the same reason.
         "known_coverage": list(graphmod.KNOWN_COVERAGE),
@@ -2510,7 +2476,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/graph/purge", "/api/graph/refresh",
                                   "/api/graph/peek-identity",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
-                                  "/api/project/edit",
+                                  "/api/project/edit", "/api/project/new",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/org/new-domain", "/api/ops/compile",
@@ -2628,6 +2594,16 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     holder["reg"], str(body.get("slug", "")),
                     fields if isinstance(fields, dict) else {},
                     str(body.get("reason", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/project/new":
+                # create a new project via the CLI (Stage 1 of graph init)
+                slug = str(body.get("slug", "")).strip()
+                name = str(body.get("name", "")).strip()
+                store = str(body.get("document_store", "") or "").strip()
+                result = create_project(holder["reg"], slug, name=name, document_store=store)
+                if result.get("ok"):
+                    holder["reg"] = loader.load(holder["reg"].root)
+                    result["state"] = state(holder["reg"])
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/dismiss":
                 # Discovery's manual Dismiss action — moves doc(s) to Recovery

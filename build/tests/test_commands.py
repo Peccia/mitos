@@ -883,3 +883,142 @@ def test_compute_deploy_plan_matches_cmd_deploy_dry_run_output():
         assert f"[warn     ] {w}" in printed
     assert len(plan.blocked) == printed.count("<-- protected, blocked")
 
+
+def test_run_deploy_outcome_reports_written_blocked_and_captured():
+    from agentic.commands import run_deploy
+    treg, tmp = _temp_registry()
+    first = run_deploy(treg, "rig", dry_run=False, force=False)
+    assert first.rc == 0 and first.error is None and not first.blocked
+    assert any(p.endswith("SOUL.md") for p in first.written)
+    assert sum(first.counts.values()) == len(first.written)
+    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue\n", encoding="utf-8")
+    preview = run_deploy(treg, "rig", dry_run=True, force=False)
+    assert preview.rc == 0 and preview.written == []
+    assert [p for p in preview.blocked if p.endswith("SOUL.md")]
+    refused = run_deploy(treg, "rig", dry_run=False, force=False)
+    assert refused.rc == 1 and refused.written == [] and refused.blocked
+    forced = run_deploy(treg, "rig", dry_run=False, force=True)
+    assert forced.rc == 0 and forced.captured and forced.blocked == []
+
+def test_deploy_lock_busy_refuses_and_leaves_the_lockfile_untouched():
+    import time
+    from agentic import lockfile
+    from agentic.commands import cmd_deploy, run_deploy
+    treg, tmp = _temp_registry()
+    assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
+    before = (tmp / ".deploy-lock.json").read_bytes()
+    with lockfile.deploy_lock(tmp):
+        start = time.monotonic()
+        real = lockfile.deploy_lock
+        lockfile.deploy_lock = lambda base: real(base, wait=0.3)
+        try:
+            out = run_deploy(treg, "rig", dry_run=False, force=False)
+            # a preview never takes the lock, so it is not blocked by one
+            assert run_deploy(treg, "rig", dry_run=True, force=False).rc == 0
+        finally:
+            lockfile.deploy_lock = real
+        assert time.monotonic() - start < 5
+    assert out.rc == 1 and out.error.startswith("error: deploy in progress (pid")
+    assert (tmp / ".deploy-lock.json").read_bytes() == before
+    assert not (tmp / ".deploy-lock.json.lock").exists()     # released on exit
+
+def test_stale_deploy_lock_is_broken_by_age():
+    import os
+    import time
+    from agentic.commands import run_deploy
+    treg, tmp = _temp_registry()
+    lock = tmp / ".deploy-lock.json.lock"
+    lock.write_text('{"pid": 1, "started": "long ago"}', encoding="utf-8")
+    old = time.time() - 16 * 60
+    os.utime(lock, (old, old))
+    assert run_deploy(treg, "rig", dry_run=False, force=False).rc == 0
+    assert not lock.exists()
+
+def test_two_machines_deployed_in_sequence_keep_both_lock_sections():
+    """A2 regression: one .deploy-lock.json carries a section per machine."""
+    import copy
+    import json
+
+    import yaml as _y
+    from agentic.commands import cmd_deploy
+    treg, tmp = _temp_registry()
+    profile = _y.safe_load((tmp / "machines" / "rig.yaml").read_text(encoding="utf-8"))
+    profile["name"] = "rig2"
+    profile["paths"] = {k: v.replace("/home/", "/home2/") for k, v in profile["paths"].items()}
+    (tmp / "machines" / "rig2.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
+    treg = loader.load(tmp)
+    assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
+    assert cmd_deploy(copy.deepcopy(treg), "rig2", dry_run=False, force=False) == 0
+    machines = json.loads((tmp / ".deploy-lock.json").read_text(encoding="utf-8"))["machines"]
+    assert {"rig", "rig2"} <= set(machines) and machines["rig"]["files"]
+
+
+# ── mitos init: the Mitos Agent option is unadvertised, not retired ───────────
+def _run_init_fresh(answers, monkeypatch):
+    """Drive `_init_scaffold_fresh` with canned answers, capturing what it printed.
+
+    The wizard is interactive by construction, so the only honest way to assert what it
+    OFFERS is to run it and read its output. `_ask` is stubbed rather than stdin so the
+    test states its answers instead of encoding the prompt order."""
+    import io
+    import contextlib
+    sys.path.insert(0, str(REPO_ROOT / "build"))
+    import mitos as mitoscli
+    from agentic import init as initmod
+
+    queue = list(answers)
+    monkeypatch.setattr(mitoscli, "_ask", lambda *a, **k: queue.pop(0) if queue else "")
+    monkeypatch.setattr(mitoscli, "_ask_document_store", lambda _m: None)
+    calls = {}
+
+    def _fake_scaffold_overlay(root, **kw):
+        calls["overlay"] = kw
+        return []
+
+    def _fake_scaffold_machine(root, name, **kw):
+        calls["machine"] = dict(kw, name=name)
+        return f"local/machines/{name}.yaml"
+
+    monkeypatch.setattr(initmod, "scaffold_overlay", _fake_scaffold_overlay)
+    monkeypatch.setattr(initmod, "scaffold_machine", _fake_scaffold_machine)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mitoscli._init_scaffold_fresh(initmod, False)
+    return buf.getvalue(), calls
+
+
+def test_init_fresh_does_not_offer_the_mitos_agent_use_case(monkeypatch):
+    """The planning harness is incubating. Listing it as one of two equal choices in the
+    onboarding wizard tells a new user it is finished — so a fresh setup never prints it."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: False)
+    out, calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "1", ""], monkeypatch)
+
+    assert "[1] Coding harnesses only" in out
+    assert "[2] Mitos Agent" not in out, "the agent use case must not be advertised"
+    assert calls["overlay"]["mitos_agent"] is False
+
+
+def test_init_fresh_still_honours_a_typed_agent_choice(monkeypatch):
+    """Unadvertised, not retired: anyone already running the harness, or told to pick it,
+    types 2 and gets exactly what they got before — org-template question included."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: False)
+    out, calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "2", ""], monkeypatch)
+
+    assert "Org routing (optional):" in out, "choosing 2 must still reach the org question"
+    assert calls["overlay"]["mitos_agent"] is True
+
+
+def test_init_fresh_offers_the_agent_option_to_someone_already_running_it(monkeypatch):
+    """An overlay that already says `mitos_agent: true` belongs to someone who chose the
+    harness — re-running init must not hide the option they are on."""
+    import mitos as mitoscli
+    monkeypatch.setattr(mitoscli, "_overlay_has_mitos_agent", lambda: True)
+    out, _calls = _run_init_fresh(
+        ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "1", ""], monkeypatch)
+
+    assert "[2] Mitos Agent" in out

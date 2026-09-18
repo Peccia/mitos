@@ -8,6 +8,7 @@ Deploy-safety invariants (Phase 4a):
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import os
@@ -531,29 +532,76 @@ def compute_deploy_plan(reg: Registry, machine: str, root: Path | None = None,
                       lock_base=lock_base, prior=prior)
 
 
+@dataclass
+class DeployOutcome:
+    """What a deploy did, as data — `cmd_deploy` prints, `mitos update` reports this."""
+    rc: int
+    dry_run: bool
+    counts: dict[str, int]       # state -> n, from plan.statuses
+    written: list[str]           # deploy_path of every file actually written
+    blocked: list[str]           # deploy_path of protected drift that stopped the deploy
+    captured: list[str]          # inbox folders written by _capture_to_inbox
+    orphans: list[str]
+    error: str | None = None     # refusal / LockBusy text
+
+
 def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
                root: Path | None = None, lane: str = "all",
                prune: bool = False, target: str | None = None) -> int:
+    return run_deploy(reg, machine, dry_run, force, root=root, lane=lane, prune=prune,
+                      target=target).rc
+
+
+def run_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
+               root: Path | None = None, lane: str = "all",
+               prune: bool = False, target: str | None = None) -> DeployOutcome:
+    def refused(rc: int, msg: str) -> DeployOutcome:
+        print(msg)
+        return DeployOutcome(rc, dry_run, {}, [], [], [], [], error=msg)
+
     if machine not in reg.machines:
-        print(f"error: unknown machine {machine!r}")
-        return 2
+        return refused(2, f"error: unknown machine {machine!r}")
     # Example machines are templates: previewing (--dry-run) or sandboxing (--root) is fine,
     # but refuse a real deploy to live paths — copy it into registry/local/machines/ first.
     if reg.machines[machine].get("example") and not dry_run and root is None:
-        print(deploy_apply_refusal(reg, machine))
-        return 2
+        return refused(2, deploy_apply_refusal(reg, machine))
     if target and target not in reg.targets and target != "env":
-        print(f"error: unknown target {target!r}")
-        return 2
+        return refused(2, f"error: unknown target {target!r}")
     machine_os = reg.machines[machine].get("os")
     if root is None and machine_os and machine_os != _local_os():
-        print(deploy_apply_refusal(reg, machine))
-        return 2
+        return refused(2, deploy_apply_refusal(reg, machine))
 
+    # Only an apply takes the cross-process lock (previews never block). It spans loading the
+    # lockfile through saving it, which closes the lost-update race between two machines'
+    # deploys sharing one .deploy-lock.json.
+    guard = contextlib.ExitStack()
+    if not dry_run:
+        try:
+            guard.enter_context(lockfile.deploy_lock(root if root is not None else reg.root))
+        except lockfile.LockBusy as e:
+            return refused(1, f"error: {e}")
+    with guard:
+        return _run_deploy_locked(reg, machine, dry_run, force, root, lane, prune, target,
+                                  machine_os, guard)
+
+
+def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
+                       root: Path | None, lane: str, prune: bool, target: str | None,
+                       machine_os: str | None, guard: contextlib.ExitStack) -> DeployOutcome:
     plan = compute_deploy_plan(reg, machine, root=root, lane=lane, target=target)
     lock, lock_base, prior = plan.lock, plan.lock_base, plan.prior
     outputs, statuses, orphans, blocked = plan.outputs, plan.statuses, plan.orphans, plan.blocked
     clones, skill_warnings = plan.clones, plan.skill_warnings
+    counts: dict[str, int] = {}
+    for s in statuses:
+        counts[s.state] = counts.get(s.state, 0) + 1
+    written_paths: list[str] = []
+    captured_paths: list[str] = []
+
+    def result(rc: int) -> DeployOutcome:
+        return DeployOutcome(rc, dry_run, counts, written_paths,
+                             [] if force else [s.output.deploy_path for s in blocked],
+                             captured_paths, list(orphans))
 
     sandbox = f", sandbox root {root}" if root is not None else ""
     lane_note = f", lane {lane}" if lane != "all" else ""
@@ -594,10 +642,10 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         if dry_run:
             pass  # still allow showing the plan
         else:
-            return 1
+            return result(1)
     if dry_run:
         print("\n(dry-run: nothing written)")
-        return 0
+        return result(0)
 
     # everything not deployed in this run keeps its lock entry: the other lane's
     # files, and orphans (so a later --prune can still find and delete them)
@@ -630,7 +678,8 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
                         folder = _capture_to_inbox(reg, machine, Status(fake, "orphan"),
                                                    lock, root)
                         captured += 1
-                        print(f"  captured -> {folder.relative_to(lock_base).as_posix()}")
+                        captured_paths.append(folder.relative_to(lock_base).as_posix())
+                        print(f"  captured -> {captured_paths[-1]}")
                     except UnicodeDecodeError:
                         print(f"  (binary orphan not captured: {p})")
                 dest.unlink()
@@ -655,12 +704,14 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
             # route an edit back to — they are regenerated from registry/graph/).
             folder = _capture_to_inbox(reg, machine, s, lock, root)
             captured += 1
-            print(f"  captured -> {folder.relative_to(lock_base).as_posix()}")
+            captured_paths.append(folder.relative_to(lock_base).as_posix())
+            print(f"  captured -> {captured_paths[-1]}")
         if o.kind in ("yaml_merge", "json_merge"):
             ok = (_apply_yaml_merge(o, root) if o.kind == "yaml_merge"
                   else _apply_json_merge(o, root))
             if ok:
                 written += 1
+                written_paths.append(o.deploy_path)
             continue
         payload = _payload(o)
         if o.kind == "zip":
@@ -674,6 +725,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
                 except OSError:
                     pass
         written += 1
+        written_paths.append(o.deploy_path)
         h = sha256(payload)
         entry = {
             "source_hash": h, "deployed_hash": h,
@@ -686,6 +738,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
         files_record[o.deploy_path] = entry
     lockfile.record(lock, machine, _now(), files_record)
     lockfile.save(lock_base, lock)
+    guard.close()   # lockfile saved; the clones below can be slow and touch no shared state
     # clone repos AFTER files land. NON-destructive (design rule #8): an absent checkout is
     # cloned (onto its manifest branch); an existing one is fast-forwarded only — never reset,
     # stashed, re-checked-out, or deleted. A clone failure (e.g. a private repo without ambient
@@ -720,7 +773,7 @@ def cmd_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
     tail += f"; {pull_skipped} pull(s) skipped" if pull_skipped else ""
     tail += f"; {clone_failed} clone/pull(s) failed (reported)" if clone_failed else ""
     print(f"\ndeployed {written} file(s); updated {lockfile.LOCK_NAME}{tail}")
-    return 0
+    return result(0)
 
 
 # ── graph ────────────────────────────────────────────────────────────────────

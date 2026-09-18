@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "ok": true,
+  "machine": "m",
+  "scheduled": true,
+  "started": "2026-09-16T10:00:00Z",
+  "finished": "2026-09-16T10:00:00Z",
+  "skipped": "core dirty (scheduled)",
+  "error": null,
+  "core": {
+    "branch": "v0.1.7",
+    "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pulled": false,
+    "skipped_reason": null,
+    "requirements_changed": false
+  },
+  "overlay": null,
+  "deploy": null
+}

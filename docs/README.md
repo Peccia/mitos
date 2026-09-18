@@ -1,6 +1,6 @@
 # Mitos Documentation Hub
 
-Welcome to the Mitos documentation. Mitos is a registry and compiler for your personal agent organization, allowing you to author your capabilities once and deploy them seamlessly across all your AI tools and machines.
+Mitos keeps one canonical body of context — your projects and their documents, your personal details, your skills and prompts — and compiles it into the native format of every coding harness you use. Write a skill once and Claude Code, Antigravity and the Claude app all get it. Map a project's documents once and every harness sees the same map.
 
 Use this Documentation Map to navigate the guides and references:
 
@@ -24,7 +24,6 @@ Guides for configuring Mitos to deploy custom context, skills, and prompts into 
 - **[Claude Code target](targets/claude-code.md)** — Integrating per-project `CLAUDE.md`, skills, and slash-command prompts.
 - **[Antigravity target](targets/antigravity.md)** — MCP server access, tool permissions, native `AGENTS.md` context, and global/project-scoped skill delivery (`antigravity` target — covers Antigravity IDE + CLI, and Gemini CLI until it retires 2026-06-18; see [the legacy Gemini CLI note](targets/gemini-cli.md)).
 - **[Claude app target](targets/claude-app.md)** — The claude.ai account surface (web + Desktop): staging skill zips for manual upload, and the `npx mcp-remote` bridge for LAN/HTTP MCP servers on Desktop.
-- **[Mitos Agent target](targets/mitos-agent.md)** — The first-party agentic planning harness (`mitos-agent`): `SOUL.md`, a skills tree, and a whole-file `mcp.json`, deployed into `assistant_root` alongside the `agents-md` tree — one install root the harness reads. Includes the end-to-end install→deploy→run sequence.
 
 ---
 
@@ -40,20 +39,19 @@ How to index your workspace documents into the Mitos knowledge graph so your age
 
 ## 💻 Operations and customization
 
-Take control of your registry, author custom capabilities, and select organizational archetypes:
+Take control of your registry and author your own skills and prompts:
 
-- **[Operator console](operator-console.md)** — Running the local `review` console to reconcile proposals, curate knowledge graphs, and use the Prompt Library.
+- **[Operator console](operator-console.md)** — Running the local `review` console to reconcile proposals, curate knowledge graphs, author skills, and use the Prompt Library.
 - **[Authoring custom capabilities](authoring-capabilities.md)** — A guide to writing and binding custom Skills, Subagents, and Prompts in Mitos.
-- **[Organization templates](org-templates.md)** — Selecting and customizing default C-suite delegation models (Solo Assistant, Software Firm, Design Firm).
-- **[The Implemented Document's identity fragment](implemented-document-identity.md)** — The shared JSON-LD contract Mitos-Agent embeds in a graduated Work item's Implemented Document, and how the console's map-to-effort flow reads it as a hint.
+- **[The Implemented Document's identity fragment](implemented-document-identity.md)** — The shared JSON-LD contract that lets a planning tool stamp a finished piece of work, and how the console's map-to-effort flow reads that stamp as a hint.
 
 ---
 
-## 🔁 Design and implementation plans
+## 🧭 Decision records
 
-Cross-repo design records for work in flight. These describe intent and sequencing, not shipped behaviour — check the code before relying on one:
+Why the code is shaped the way it is, written when the choice was made:
 
-- **[Closing the loop](concepts/closing-the-loop-implementation-plan.md)** — Carrying an implementation's own documents back into the shared store and the knowledge graph: deliverable skills publishing to the connection, export planning statistics, grounded-reference curation, the evaluation summary, and the Implemented Document written on graduation.
+- **[ADR-004 — Presentation facade for the Mitos Agent flag](decisions/004-presentation-facade-mitos-agent-flag.md)** — why the incubating planning harness is hidden by one display flag rather than retired, and why the compiler never reads that flag.
 
 ---
 

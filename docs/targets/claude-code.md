@@ -29,8 +29,8 @@ A skill's `scope:` frontmatter key picks which one Mitos deploys to (mirrors the
 `mitos-agent` and `claude-app` have no project-scoped skill surface at all — they ignore `scope`
 entirely and always deploy globally, regardless of the value set.
 
-Set/edit `scope` via the Operator Console's Skills & Orgs tab (each skill card's **Scope**
-section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
+Set/edit `scope` via the Operator Console's Skills tab (**Skills & Orgs** when
+`mitos_agent: true`; each skill card's **Scope** section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
 `scope: project` skill is controlled by editing each project's manifest `skills:` list — the
 console shows the current bindings read-only but does not write project manifests.
 

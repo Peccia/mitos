@@ -1341,3 +1341,77 @@ def test_a_project_with_neither_documents_nor_efforts_still_says_so():
     from agentic import graph
     pg = graph.ProjectGraph(slug="p", name="P", description="", documents=[], efforts=[])
     assert "_No documents mapped yet._" in graph.project_index_markdown(pg)
+
+
+def test_creativework_hidden_round_trips_canonical_jsonld():
+    """CreativeWork hidden: true serializes with peccia:hidden and parses back cleanly."""
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    hidden_eff = graph.CreativeWork(id="parked", name="Parked Work", description="old",
+                                    is_part_of=proj_iri, hidden=True)
+    visible_eff = graph.CreativeWork(id="active", name="Active Work", description="now",
+                                     is_part_of=proj_iri, hidden=False)
+    pg = graph.ProjectGraph(slug="p", name="P", description="", documents=[],
+                            efforts=[hidden_eff, visible_eff])
+    jsonld = graph.canonical_jsonld(pg)
+    assert f'"{graph.HIDDEN_PRED}": true' in jsonld
+    # visible effort omits peccia:hidden entirely (omit-when-absent)
+    assert jsonld.count(f'"{graph.HIDDEN_PRED}":') == 1
+
+    p = _write_graph(jsonld)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == jsonld
+        e_hidden = next(e for e in reloaded.efforts if e.id == "parked")
+        e_visible = next(e for e in reloaded.efforts if e.id == "active")
+        assert e_hidden.hidden is True
+        assert e_visible.hidden is False
+    finally:
+        p.unlink()
+
+
+def test_hidden_effort_and_its_documents_are_suppressed_from_rendered_markdown():
+    """A hidden effort and its mapped documents are omitted from compiled Markdown,
+    while visible efforts and root documents are rendered normally."""
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    hidden_eff = graph.CreativeWork(id="parked", name="Parked Feature", description="d",
+                                    is_part_of=proj_iri, goal="parked goal", hidden=True)
+    visible_eff = graph.CreativeWork(id="active", name="Active Feature", description="d",
+                                     is_part_of=proj_iri, goal="active goal", hidden=False)
+    d_root = graph.Document(drive_id="d1", name="Root Doc", description="root",
+                            date_modified="2026-09-01", is_part_of="")
+    d_hidden = graph.Document(drive_id="d2", name="Secret Doc", description="hidden effort doc",
+                              date_modified="2026-09-01", is_part_of=hidden_eff.iri)
+    d_active = graph.Document(drive_id="d3", name="Active Doc", description="active effort doc",
+                              date_modified="2026-09-01", is_part_of=visible_eff.iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="",
+                            documents=[d_root, d_hidden, d_active],
+                            efforts=[hidden_eff, visible_eff])
+
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(pg)
+        assert "Active Feature (active)" in out
+        assert "Active Doc" in out
+        assert "Parked Feature (parked)" not in out
+        assert "Secret Doc" not in out
+        assert "parked goal" not in out
+
+
+def test_project_with_only_hidden_efforts_and_no_root_docs_emits_no_documents_yet():
+    """If all efforts in a project are hidden and no root documents exist, the markdown
+    honestly reports no documents mapped yet."""
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    hidden_eff = graph.CreativeWork(id="parked", name="Parked", description="d",
+                                    is_part_of=proj_iri, hidden=True)
+    d_hidden = graph.Document(drive_id="d1", name="Doc", description="",
+                              date_modified="2026-09-01", is_part_of=hidden_eff.iri)
+    pg = graph.ProjectGraph(slug="p", name="P", description="",
+                            documents=[d_hidden], efforts=[hidden_eff])
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(pg)
+        assert "_No documents mapped yet._" in out
+        assert "Parked" not in out

@@ -45,6 +45,12 @@ def is_manual_skill_target(tspec: dict) -> bool:
 #     `default_deliverables` is the first: the forward contract a new effort starts with.
 #     Widening this file beyond identity is deliberate and recorded here rather than left
 #     to be inferred; the alternative was a second registry-level config file for one key.
+#   FEATURES — presentation flags. `mitos_agent` is the first: it gates the console and
+#     `mitos init` affordances for the incubating planning harness (org skills, the
+#     mitos-agent target chip, the effort Org domain field, the init wizard's agent
+#     option). It gates presentation only — the compiler keys off machine `targets:`, so
+#     a machine that names mitos-agent compiles identically whatever this flag says.
+#     Deliberately absent from _USER_TOKENS: a feature flag is not a placeholder.
 #
 # Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
 # _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
@@ -53,9 +59,13 @@ def is_manual_skill_target(tspec: dict) -> bool:
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
 KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
-                   "default_deliverables"}
+                   "default_deliverables", "mitos_agent"}
 # The subset of KNOWN_USER_KEYS whose value is a list, not a string.
 _USER_LIST_KEYS = {"default_deliverables"}
+# The subset whose value is a bool. YAML's `true` is the only accepted spelling — the
+# string "true" and the int 1 are rejected, so a typo fails at load rather than reading
+# as truthy and quietly turning a surface on.
+_USER_BOOL_KEYS = {"mitos_agent"}
 # documentation + tests are the registry-wide default because they are the two every kind
 # of work owes regardless of shape, and a default inherited silently should fit everything
 # it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
@@ -64,13 +74,8 @@ _USER_LIST_KEYS = {"default_deliverables"}
 # surfaced as a warning where the declaration is made (see the console's effort editor).
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
                  "email": "user@example.com", "location": "Your City, State",
-                 "default_deliverables": ["documentation", "tests"]}
-
-# The structural anchor a skill extension splices under (render-time only — see
-# render.compose_skill_body). Fixed and order-independent: extensions land as new
-# subsections at the end of this section, never matched against a specific existing
-# role heading, so a role rename never orphans an extension (the R2 design decision).
-EXTENSION_ANCHOR = "## Extended C-suite Roles"
+                 "default_deliverables": ["documentation", "tests"],
+                 "mitos_agent": False}
 
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
@@ -280,6 +285,14 @@ def _load_user(dir_path: Path, label: str) -> dict:
         if k in _USER_LIST_KEYS:
             if not isinstance(v, list):
                 raise RegistryError(f"{label}: {k!r} must be a list")
+            continue
+        if k in _USER_BOOL_KEYS:
+            # `is bool` via isinstance is exact here: bool is the only type accepted, and
+            # Python's int/bool subclassing does not let 1 through because isinstance(1,
+            # bool) is False.
+            if not isinstance(v, bool):
+                raise RegistryError(f"{label}: {k!r} must be true or false, not "
+                                    f"{v!r}")
             continue
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")
@@ -568,34 +581,6 @@ def known_org_domains(reg: Registry) -> set[str]:
     return declared or {"software", "design", "marketing"}
 
 
-def validate_skill_extension(reg: "Registry", skill_name: str, frontmatter: dict) -> str | None:
-    """Cross-check an `extends_skill`/`extends_role` pair declared on `skill_name`'s
-    frontmatter. Returns an error string, or None when the pair is absent (not an
-    extension) or valid. Shared by `_validate` (compile-time) and the console's
-    propose/accept path (review._revalidate_verbatim, propose_meta_edit,
-    propose_new_skill) so a bad console edit is caught before it ever reaches the
-    registry — see R1/R2 in the extensions design."""
-    ext_skill = frontmatter.get("extends_skill")
-    ext_role = frontmatter.get("extends_role")
-    if not ext_skill and not ext_role:
-        return None
-    if bool(ext_skill) != bool(ext_role):
-        return (f"skill {skill_name!r}: 'extends_skill' and 'extends_role' must be "
-                f"specified together")
-    if ext_skill == skill_name:
-        return f"skill {skill_name!r}: cannot extend itself"
-    parent = reg.skills.get(ext_skill)
-    if parent is None:
-        return f"skill {skill_name!r}: extends_skill {ext_skill!r} is not a known skill"
-    if parent.frontmatter.get("extends_skill"):
-        return (f"skill {skill_name!r}: cannot extend {ext_skill!r} — it is itself an "
-                f"extension (chained extensions are not supported)")
-    if EXTENSION_ANCHOR not in parent.body:
-        return (f"skill {skill_name!r}: parent skill {ext_skill!r} has no "
-                f"{EXTENSION_ANCHOR!r} section to extend")
-    return None
-
-
 def document_stores(raw) -> list[str]:
     """Normalize an already-validated `document_store:` value (project or machine) to a list
     of server names for iteration. A single string (the common case) becomes a one-item
@@ -666,12 +651,6 @@ def _validate(reg: Registry) -> None:
         bad = set(s.targets) - KNOWN_TARGETS
         if bad:
             raise RegistryError(f"{s.rel}: unknown target(s) {sorted(bad)}")
-    # skill extensions (extends_skill/extends_role): pairing, parent existence, no
-    # chained extensions, and a real anchor section to splice into
-    for s in reg.skills.values():
-        err = validate_skill_extension(reg, s.name, s.frontmatter)
-        if err:
-            raise RegistryError(err)
     # scope: global (default) | project — see validate_skill_scope / Skill.scope
     for s in reg.skills.values():
         err = validate_skill_scope(s.name, s.frontmatter)
@@ -931,11 +910,6 @@ def _validate(reg: Registry) -> None:
                     f"project {slug}: bound skill {sname!r} does not target "
                     f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
                     f"takes effect on a target with a project-scoped skill surface")
-            if reg.skills[sname].frontmatter.get("extends_skill"):
-                raise RegistryError(
-                    f"project {slug}: skills binds {sname!r}, which is an extension "
-                    f"(extends_skill) — bind its parent skill instead; extensions "
-                    f"deploy only spliced into their parent, never standalone")
         for pname in (proj.get("prompts") or []):
             if pname not in reg.prompts:
                 raise RegistryError(

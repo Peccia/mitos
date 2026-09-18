@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "ok": true,
+  "machine": "m",
+  "scheduled": false,
+  "started": "2026-09-16T10:00:00Z",
+  "finished": "2026-09-16T10:00:00Z",
+  "skipped": null,
+  "error": null,
+  "core": {
+    "branch": "v0.1.7",
+    "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pulled": false,
+    "skipped_reason": null,
+    "requirements_changed": false
+  },
+  "overlay": {
+    "before": "cccccccccccccccccccccccccccccccccccccccc",
+    "after": "cccccccccccccccccccccccccccccccccccccccc",
+    "pulled": false,
+    "skipped_reason": "dirty",
+    "conflict": false
+  },
+  "deploy": {
+    "rc": 0,
+    "dry_run": false,
+    "counts": {
+      "ok": 3
+    },
+    "written": [
+      "<ROOT>/agent/SOUL.md"
+    ],
+    "blocked": [],
+    "captured": [
+      "registry/local/inbox/abc"
+    ],
+    "orphans": [],
+    "error": null
+  }
+}

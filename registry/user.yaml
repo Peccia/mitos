@@ -14,3 +14,9 @@ location: Your City, State
 # registry/projects/<slug>.yaml; an effort that declares its own set never reads either.
 # Valid terms are graph.KNOWN_DELIVERABLES; an unknown one fails the compile loudly.
 default_deliverables: [documentation, tests]
+
+# The Mitos Agent planning harness is an incubating work in progress. Off, the console
+# and `mitos init` show only the coding-harness surface; on, the org skills, the
+# mitos-agent target chip and the effort Org domain field come back. Presentation only —
+# what a machine compiles is decided by its `targets:`, never by this flag.
+mitos_agent: false

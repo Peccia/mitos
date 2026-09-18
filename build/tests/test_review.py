@@ -225,9 +225,9 @@ def test_propose_project_edit_rejects_unknown_field():
     from agentic.review import propose_project_edit
 
     treg, tmp = _temp_registry()
-    out = propose_project_edit(treg, "example-project", {"document_store": "gws"}, "")
+    out = propose_project_edit(treg, "example-project", {"unknown_custom_field": "val"}, "")
     assert not out["ok"]
-    assert "document_store" in out["error"]
+    assert "unknown_custom_field" in out["error"]
 
 
 def test_propose_project_edit_rejects_bad_repo_notes():
@@ -1185,7 +1185,7 @@ def test_propose_new_org_domain_creates_domain_skill_and_accepts_cleanly():
     idx = org_index(reloaded)
     assert "finance" in idx
     assert idx["finance"]["skill"] == "org-finance"
-    assert idx["finance"]["primaryChain"], "scaffolded body must parse into a primary chain"
+    assert idx["finance"]["skill"] == "org-finance"
 
 
 def test_propose_new_org_domain_rejects_existing_domain_and_bad_slug():
@@ -1203,25 +1203,20 @@ def test_propose_new_org_domain_rejects_existing_domain_and_bad_slug():
     assert not out["ok"]
 
 
-def test_org_index_parses_hierarchy_table_and_skill_roles():
+def test_org_index_lists_every_domain_and_the_skill_carrying_it():
+    """Domains are discovered from `org_domain` frontmatter, not a routing table. The index
+    is deliberately thin: a domain playbook is prose about a market's function and output,
+    so there is no structure to parse out of it and nothing to keep in sync with its
+    headings."""
     from agentic.review import org_index
 
     result = org_index(reg)
-    assert "software" in result
     assert result["software"]["skill"] == "org-software"
-    assert result["software"]["primaryChain"], "expected a non-empty primary chain"
-    cto = next((r for r in result["software"]["extendedRoles"] if r["title"] == "CTO"), None)
-    assert cto is not None
-    assert cto["lens"]
-    # a Lens/Trigger bullet that wraps onto an indented continuation line must not be
-    # truncated at the first physical line
-    assert "SEV0 post-mortems" in cto["trigger"]
-
-    # design and marketing share the same authored structure — same shape, no crash
+    assert result["software"]["description"]
     for domain in ("design", "marketing"):
-        assert domain in result
-        assert result[domain]["primaryChain"]
-        assert result[domain]["extendedRoles"]
+        assert result[domain]["skill"] == f"org-{domain}"
+    # No role structure is read out of the body — a heading rename cannot break the console.
+    assert set(result["software"]) == {"skill", "description"}
 
 
 def test_org_tree_reconstructs_agents_md_deploy_paths():
@@ -1350,6 +1345,30 @@ def test_propose_graph_change_valid_deliverables_reach_the_candidate():
     eff = next(e for e in merged.efforts if e.id == "eff-b")
     # stored in canonical vocabulary order, not the order proposed
     assert eff.deliverables == ("documentation", "tests")
+
+
+def test_propose_graph_change_updates_effort_visibility_and_surfaces_in_graph_index():
+    """Effort hidden status reaches the candidate, updates the graph on accept,
+    and surfaces in graph_index."""
+    from agentic.review import decide, graph_index, propose_graph_change
+    from agentic import graph, loader as loadermod
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = propose_graph_change(
+        treg, slug, documents=[],
+        efforts=[{"id": "eff-hide", "name": "Effort To Hide", "hidden": True}])
+    assert out["ok"], out
+    assert decide(loadermod.load(tmp), out["id"], "accept", "")["ok"]
+
+    reloaded_reg = loadermod.load(tmp)
+    merged = graph.load_project_graph(tmp / "registry" / "graph" / f"{slug}.jsonld")
+    eff = next(e for e in merged.efforts if e.id == "eff-hide")
+    assert eff.hidden is True
+
+    idx = next(g for g in graph_index(reloaded_reg) if g["slug"] == slug)
+    idx_eff = next(e for e in idx["efforts"] if e["id"] == "eff-hide")
+    assert idx_eff["hidden"] is True
 
 
 def test_prompt_index_frontmatter_whitelist_shape():
@@ -1497,72 +1516,6 @@ def test_propose_meta_edit_on_overlay_skill_routes_to_local():
     assert (tmp / "registry" / core_rel).read_text(encoding="utf-8") == core_text
 
 
-# ── skill extensions via the console (extends_skill/extends_role) — R1/R2 ──────
-def test_propose_new_skill_with_extension_fields_validates_and_accepts():
-    from agentic.review import decide, propose_new_skill
-
-    treg, tmp = _temp_registry()
-    assert "org-software" in treg.skills
-    out = propose_new_skill(
-        treg, "org-data-science",
-        {"description": "Data science CTO extension.", "targets": ["mitos-agent"],
-        "category": "productivity", "extends_skill": "org-software",
-        "extends_role": "CTO"},
-        "Extra CTO guidance for data science work.", "")
-    assert out["ok"], out
-
-    acc = decide(loader.load(tmp), out["id"], "accept", "")
-    assert acc["ok"], acc
-    written = (tmp / "registry" / "local" / "skills" / "org-data-science"
-              / "SKILL.md").read_text(encoding="utf-8")
-    assert "extends_skill: org-software" in written
-    assert "extends_role: CTO" in written
-
-    # the extension never deploys standalone; it only appears spliced into the parent
-    reloaded = loader.load(tmp)
-    from agentic import planner as plannermod
-    selected = plannermod._selected_skills(reloaded, {"include_target": "mitos-agent"})
-    assert "org-data-science" not in {s.name for s in selected}
-    parent = reloaded.skills["org-software"]
-    from agentic import render as rendermod
-    assert "Extra CTO guidance for data science work." in rendermod.compose_skill_body(
-        reloaded, parent)
-
-
-def test_propose_new_skill_rejects_extension_without_matching_role_field():
-    from agentic.review import propose_new_skill
-
-    treg, _tmp = _temp_registry()
-    out = propose_new_skill(
-        treg, "org-half-ext", {"targets": ["mitos-agent"], "extends_skill": "org-software"},
-        "body")
-    assert not out["ok"]
-    assert "must be specified together" in out["error"]
-
-
-def test_propose_new_skill_rejects_extension_of_unknown_parent():
-    from agentic.review import propose_new_skill
-
-    treg, _tmp = _temp_registry()
-    out = propose_new_skill(
-        treg, "org-bad-ext",
-        {"targets": ["mitos-agent"], "extends_skill": "no-such-org", "extends_role": "CTO"},
-        "body")
-    assert not out["ok"]
-    assert "is not a known skill" in out["error"]
-
-
-def test_propose_meta_edit_rejects_bad_extension_pair():
-    from agentic.review import propose_meta_edit
-
-    treg, _tmp = _temp_registry()
-    skill = next(iter(treg.skills.values()))
-    out = propose_meta_edit(treg, "skill", skill.name,
-                            {"extends_skill": "org-software"}, skill.body)
-    assert not out["ok"]
-    assert "must be specified together" in out["error"]
-
-
 # ── skill scope: global (default) | project — the Skills & Orgs Scope control ───
 def test_propose_meta_edit_accepts_valid_scope_and_it_survives_accept():
     from agentic.review import decide, propose_meta_edit
@@ -1588,7 +1541,7 @@ def test_propose_meta_edit_rejects_invalid_scope_value():
     assert "invalid scope" in out["error"]
 
 def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
-    """Unlike the extends_skill/target-binding checks, scope: project has no per-target
+    """Unlike the target-binding check, scope: project has no per-target
     incompatibility — mitos-agent/claude-app targets simply ignore it (see loader.
     validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
     from agentic.review import propose_meta_edit
@@ -2166,6 +2119,40 @@ def test_project_edit_hides_and_unhides_through_the_same_candidate_valve():
     assert "hidden" not in twice_reloaded.projects["example-project"]
 
 
+def test_project_edit_updates_document_store_through_candidate_valve():
+    """Updating a project's document_store from none -> gws (or another known store)
+    proposes a kind: project candidate, validates against servers.yaml, and applies cleanly."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, graph_index, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    assert treg.projects["example-project"]["document_store"] == "none"
+
+    # 1. Propose updating document_store to 'gws'
+    out = propose_project_edit(treg, "example-project", {"document_store": "gws"})
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"]["document_store"] == "gws"
+    idx = next(g for g in graph_index(reloaded) if g["slug"] == "example-project")
+    assert idx["document_store"] == "gws"
+
+    # 2. Reject an unknown document_store
+    out_bad = propose_project_edit(reloaded, "example-project", {"document_store": "unknown-server"})
+    assert not out_bad["ok"]
+    assert "unknown-server" in out_bad["error"]
+
+    # 3. Can revert back to 'none'
+    out_none = propose_project_edit(reloaded, "example-project", {"document_store": "none"})
+    assert out_none["ok"], out_none
+    result_none = decide(reloaded, out_none["id"], "accept", "")
+    assert result_none["ok"], result_none
+    reloaded_none = loadermod.load(tmp)
+    assert reloaded_none.projects["example-project"]["document_store"] == "none"
+
+
 def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
     """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
     Collapsing them would make "this project wants no defaults" unauthorable."""
@@ -2238,3 +2225,398 @@ def test_markdown_preview_loads_marked_and_still_sanitizes():
     assert not (review.UI_DIR / "snarkdown.js").exists()
     assert "window.marked.parse(" in app
     assert "window.DOMPurify.sanitize(html)" in app
+
+
+def test_create_project_rejects_invalid_slug():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    for bad in ("", "   ", "has space", "bad/slash", "bad\\slash", "bad.dot"):
+        out = review.create_project(treg, bad)
+        assert out["ok"] is False
+        assert "invalid slug" in out["error"]
+
+
+def test_create_project_shells_out_to_mitos_cli(monkeypatch):
+    import subprocess as _sp
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "created registry/local/projects/newproj.yaml"
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["cwd"] = kw.get("cwd")
+        return _Done()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.create_project(treg, "newproj", name="New Project", document_store="gws")
+    assert out["ok"] is True
+    assert out["slug"] == "newproj"
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("mitos.py")
+    assert cmd[2:4] == ["project", "add"]
+    assert cmd[4] == "newproj"
+    assert cmd[cmd.index("--name") + 1] == "New Project"
+    assert cmd[cmd.index("--document-store") + 1] == "gws"
+    assert cmd[cmd.index("--root") + 1] == str(treg.root)
+    assert seen["cwd"] == str(treg.root)
+
+
+def test_create_project_surfaces_cli_error(monkeypatch):
+    import subprocess as _sp
+    from agentic import review
+    treg, _tmp = _temp_registry()
+
+    class _Fail:
+        returncode = 2
+        stdout = ""
+        stderr = "error: a project named 'existing' already exists in the registry\n"
+
+    def _fake_run(cmd, **kw):
+        return _Fail()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    out = review.create_project(treg, "existing")
+    assert out["ok"] is False
+    assert out["error"] == "a project named 'existing' already exists in the registry"
+
+
+def test_create_project_end_to_end_scaffolds_manifest_in_overlay():
+    from agentic import loader, review
+    treg, tmp = _temp_registry()
+    out = review.create_project(treg, "alpha-demo", name="Alpha Demo", document_store="none")
+    assert out["ok"] is True, out
+    assert out["slug"] == "alpha-demo"
+    manifest = tmp / "registry" / loader.LOCAL_OVERLAY / "projects" / "alpha-demo.yaml"
+    assert manifest.exists()
+    graph_file = tmp / "registry" / loader.LOCAL_OVERLAY / "graph" / "alpha-demo.jsonld"
+    assert graph_file.exists()
+    reloaded = loader.load(tmp)
+    assert "alpha-demo" in reloaded.projects
+    assert "alpha-demo" in reloaded.graphs
+    pg = reloaded.graphs["alpha-demo"]
+    assert pg.name == "Alpha Demo"
+    assert pg.documents == []
+    assert pg.efforts == []
+    proj = reloaded.projects["alpha-demo"]
+    assert proj["name"] == "Alpha Demo"
+    assert proj["slug"] == "alpha-demo"
+    assert proj["document_store"] == "none"
+
+
+def test_state_exposes_known_stores():
+    from agentic import review
+    treg, _tmp = _temp_registry()
+    st = review.state(treg)
+    assert "known_stores" in st
+    assert isinstance(st["known_stores"], list)
+    assert "gws" in st["known_stores"]
+
+
+def test_api_project_new_endpoint():
+    import json
+    import threading
+    import urllib.request
+    from agentic import review
+    treg, tmp = _temp_registry()
+    server = review.make_server(treg, port=0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        port = server.server_address[1]
+        url = f"http://127.0.0.1:{port}/api/project/new"
+        payload = json.dumps({"slug": "beta-proj", "name": "Beta Proj", "document_store": "none"}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert data["ok"] is True
+            assert data["slug"] == "beta-proj"
+            assert "state" in data
+            assert any(g["slug"] == "beta-proj" for g in data["state"]["graphs"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
+    """Regression test: within the Skills & Org tab, the target filter chips must
+    not display 'agents-md' (as it never deploys skills), and operators must be able
+    to hide skills associated with a target via the hide mode."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
+
+    # agents-md must be excluded from targetOpts in Skills & Org. The rule now lives in
+    # the shared isTargetVisible predicate (which also carries the mitos_agent gate), so
+    # the chips read it rather than spelling the exclusion out a second time.
+    assert 'const isTargetVisible = (t) => t !== "agents-md"' in app
+    assert ".filter(isTargetVisible)" in app
+
+    # Target filter mode (show vs hide) and hidden targets tracking must exist
+    assert "skillFilterTargetMode" in app
+    assert "skillHiddenTargets" in app
+    assert 'skillFilterTargetMode === "hide"' in app
+
+    # CSS styling for active hidden chips must exist
+    assert ".pool-opt.active.hide-active" in css
+
+
+def test_app_js_propose_graph_draft_includes_hidden():
+    """Ensure app.js maps the hidden property in proposeGraphDraft so the UI
+    sends visibility state to /api/graph."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "hidden: !!x.hidden" in app
+
+
+def test_api_graph_effort_hidden_toggle_end_to_end():
+    """HTTP API test: toggle effort hidden on and off via /api/graph and /api/decide,
+    verifying it reflects in /api/state."""
+    import json
+    import threading
+    import urllib.request
+    from agentic import review
+    treg, tmp = _temp_registry()
+    server = review.make_server(treg, port=0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        port = server.server_address[1]
+        slug = next(iter(treg.projects))
+
+        # 1. Propose hiding an effort via /api/graph
+        url_graph = f"http://127.0.0.1:{port}/api/graph"
+        payload_hide = json.dumps({
+            "slug": slug,
+            "documents": [],
+            "removals": [],
+            "efforts": [{"id": "launch-prep", "name": "Launch prep", "hidden": True}],
+            "effortRemovals": []
+        }).encode("utf-8")
+        req = urllib.request.Request(url_graph, data=payload_hide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+            cid = data["id"]
+
+        # 2. Accept the candidate via /api/decide
+        url_decide = f"http://127.0.0.1:{port}/api/decide"
+        payload_decide = json.dumps({"id": cid, "decision": "accept"}).encode("utf-8")
+        req = urllib.request.Request(url_decide, data=payload_decide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+
+        # 3. Verify /api/state returns hidden: True
+        url_state = f"http://127.0.0.1:{port}/api/state"
+        with urllib.request.urlopen(url_state) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            g = next(proj for proj in data["graphs"] if proj["slug"] == slug)
+            eff = next(e for e in g["efforts"] if e["id"] == "launch-prep")
+            assert eff["hidden"] is True
+
+        # 4. Propose unhiding via /api/graph
+        payload_unhide = json.dumps({
+            "slug": slug,
+            "documents": [],
+            "removals": [],
+            "efforts": [{"id": "launch-prep", "name": "Launch prep", "hidden": False}],
+            "effortRemovals": []
+        }).encode("utf-8")
+        req = urllib.request.Request(url_graph, data=payload_unhide, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+            cid2 = data["id"]
+
+        # 5. Accept the unhide candidate
+        payload_decide2 = json.dumps({"id": cid2, "decision": "accept"}).encode("utf-8")
+        req = urllib.request.Request(url_decide, data=payload_decide2, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ok"] is True
+
+        # 6. Verify /api/state returns hidden: False
+        with urllib.request.urlopen(url_state) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            g = next(proj for proj in data["graphs"] if proj["slug"] == slug)
+            eff = next(e for e in g["efforts"] if e["id"] == "launch-prep")
+            assert eff["hidden"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+
+
+
+# ── The mitos_agent presentation gate ────────────────────────────────────────────
+def test_state_exposes_mitos_agent():
+    """The flag reaches the client as its own boolean. It is NOT derived from
+    machine_targets: a fresh clone's example machine legitimately targets mitos-agent and
+    must keep compiling it, while the console still hides the harness."""
+    from agentic.review import state
+
+    treg, tmp = _temp_registry()
+    assert state(treg)["mitos_agent"] is False
+
+    local = tmp / "registry" / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
+    assert state(loader.load(tmp))["mitos_agent"] is True
+
+
+def test_app_js_syntax_is_valid():
+    """app.js is 4,800+ lines of hand-written vanilla JS with no bundler — one stray
+    bracket takes the whole console down, and nothing else in the suite would notice.
+
+    Node is not a Mitos dependency, so its absence must not fail the suite: without it we
+    fall back to a cheap balance check and warn, which is what a minimal Python-only CI
+    container gets. Any normal developer box runs the real V8 parse."""
+    import shutil
+    import subprocess
+    import warnings
+    from agentic import review
+
+    path = review.UI_DIR / "app.js"
+    node = shutil.which("node")
+    if node:
+        out = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+        assert out.returncode == 0, f"node --check failed:\n{out.stderr}"
+        return
+    src = path.read_text(encoding="utf-8")
+    for open_c, close_c in (("{", "}"), ("(", ")"), ("[", "]")):
+        assert src.count(open_c) == src.count(close_c), f"unbalanced {open_c}{close_c}"
+    warnings.warn("node not found — app.js checked for bracket balance only, not syntax")
+
+
+def test_app_js_gates_every_org_surface_behind_the_flag():
+    """The six affordances the flag owns, plus the dead Org-tab code it replaced.
+
+    Asserted as source invariants because there is no DOM to drive here — the point is
+    that nobody reintroduces an ungated org control while the console has no test harness
+    that would render one."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    # the single source of the flag, and the two static item predicates
+    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
+    assert "const isTargetVisible = (t) =>" in app
+    assert "const isSkillVisible = (s) =>" in app
+    # static, never a join against the async /api/org response — a predicate that fails
+    # open is not a gate
+    assert "const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;" in app
+    assert 's.name.startsWith("org-")' not in app,         "the org- name prefix is not an identity test — see the regression tests below"
+
+    # 1 + 2: the "+ New org" button and the "Orgs only" chip
+    assert 'if (hasMitosAgent()) {\n    const newOrgBtn' in app
+    assert "if (hasMitosAgent() && scopedSkills.some(" in app
+    # 3: the drawer's org role-tree panel
+    assert "if (hasMitosAgent() && domain && orgData" in app
+    # 4 + 5: target filter chips and new-skill authoring checkboxes
+    assert app.count(".filter(isTargetVisible)") >= 2
+    # 6: the card grid
+    assert "(STATE.prompts.skills || []).filter(isSkillVisible)" in app
+    # the network call the gate makes pointless
+    assert "if (!orgData && hasMitosAgent()) {" in app
+
+    # dead Org-tab leftovers, pruned: both wrote to #view-org, which index.html lost when
+    # the tab merged into Skills
+    assert "function renderOrg(" not in app
+    assert "loadOrgData" not in app
+    assert "view-org" not in app
+
+
+def test_effort_editor_save_preserves_org_domain_when_field_is_hidden():
+    """Hiding a control must never propose its value away. With the flag off the Org
+    domain select is not rendered, so the save handler reads the effort's stored tag
+    instead of dereferencing a null input."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "inputs.orgDomain = null;" in app
+    assert 'orgDomain: inputs.orgDomain ? inputs.orgDomain.value' in app
+    assert "(vals.orgDomain || \"\")" in app
+
+
+def test_propose_graph_change_preserves_existing_org_domain():
+    """The round trip the guard above protects: re-proposing an effort with its stored
+    orgDomain must land that tag in the candidate, so accepting it is a no-op on the
+    org edge rather than a silent untagging."""
+    import json
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    dom = sorted(loader.known_org_domains(treg))[0]
+
+    # tag it, accept-shaped: propose once with a domain, then propose again carrying the
+    # value the editor would have read back out of STATE
+    review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch prep", "orgDomain": dom}])
+    cand = sorted((tmp / "registry" / "local" / "inbox").glob("*/*.jsonld"))[-1]
+    body = json.loads(cand.read_text(encoding="utf-8"))
+    tagged = [n for n in body["@graph"]
+              if str(n.get("@id", "")).endswith("launch-prep")]
+    assert tagged, "the effort node must be in the candidate"
+    assert any(dom in json.dumps(n) for n in tagged), \
+        "the orgDomain tag must survive into the proposed JSON-LD"
+
+
+def test_org_prefixed_user_skill_is_not_treated_as_an_org_domain_skill():
+    """`org-` is a naming convention the core org skills happen to follow, not an identity
+    test. A user skill called `org-software-implementation-plan` — no `org_domain:`, targeting
+    coding harnesses — is an ordinary skill, and gating the card grid on the name prefix would
+    delete it from the console of the very machines it deploys to.
+
+    The payload must therefore carry `org_domain` for the client to read, and carry it OUTSIDE
+    `frontmatter` so the metadata editor still cannot edit a domain's identity."""
+    import copy
+    from agentic.loader import Skill
+    from agentic.review import prompt_index
+
+    rig = copy.deepcopy(reg)
+    rig.skills["org-software-implementation-plan"] = Skill(
+        name="org-software-implementation-plan",
+        rel="skills/org-software-implementation-plan/SKILL.md",
+        frontmatter={"targets": ["antigravity", "claude-code"],
+                     "description": "Turn an export into a lean implementation plan"},
+        body="")
+    by_name = {s["name"]: s for s in prompt_index(rig)["skills"]}
+
+    impostor = by_name["org-software-implementation-plan"]
+    assert impostor["org_domain"] == "", "a skill with no org_domain: must report none"
+    assert "mitos-agent" not in impostor["targets"]
+
+    real = by_name["org-software"]
+    assert real["org_domain"] == "software", "a real org-domain skill must report its domain"
+    # read-only: the editor edits `frontmatter`, and a domain's identity is not editable
+    assert "org_domain" not in real["frontmatter"]
+
+
+def test_flag_never_hides_a_skill_a_coding_workstation_deploys():
+    """The gate hides ORG skills. It must not hide a skill that merely lists `mitos-agent`
+    among its targets — the seven `delivers:` skills and `gws` name it alongside every coding
+    harness, so a `targets`-based test would empty the console of exactly the skills the
+    README promises a coding workstation on its first deploy.
+
+    The check is the real registry, deliberately: the point is which skills actually declare
+    what, and a hand-built fixture would only assert the rule against itself."""
+    from agentic.review import prompt_index
+
+    by_name = {s["name"]: s for s in prompt_index(reg)["skills"]}
+    # isSkillVisible with the flag OFF, evaluated here exactly as app.js evaluates it
+    visible = lambda s: not s["org_domain"]
+
+    for name in ("documentation", "tests", "changelog", "deploy-book", "runbook",
+                 "migration-notes", "requirements-receipt", "gws"):
+        s = by_name[name]
+        assert "mitos-agent" in s["targets"], f"{name} no longer targets the harness — re-check"
+        assert visible(s), f"{name} must stay visible with the flag off"
+
+    for name in ("org-software", "org-design", "org-marketing"):
+        assert not visible(by_name[name]), f"{name} is an org skill and must be hidden"

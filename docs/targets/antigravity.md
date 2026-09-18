@@ -63,9 +63,11 @@ paths:
   antigravity_config: "~/.gemini/config"
 ```
 
-> **Note on `assistant_root`:** The standalone `mitos-agent` planning harness owns the dedicated
-> `assistant_root` operating tree on agentic machines. On coding workstations, Antigravity operates
-> within project workspaces (`projects_root`) and project-scoped agentic trees (`agentic_tree:`).
+> **Note on `assistant_root`:** `assistant_root` is an agentic-machine path. The assistant tree
+> below is rendered there by the `agents-md` target, only on a machine that lists `agents-md` in
+> `targets:` **and** sets `assistant_root` (the `mitos-agent` target, when present, installs its
+> home there too). On coding workstations, Antigravity operates within project workspaces
+> (`projects_root`) and project-scoped agentic trees (`agentic_tree:`).
 
 ---
 
@@ -73,7 +75,7 @@ paths:
 
 ### 1. Context delivery (`AGENTS.md`)
 Antigravity natively reads `AGENTS.md` files to understand identity and project background. Mitos writes context in two places:
-- **Assistant tree**: Deployed to `assistant_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster + org structure) with a `Projects/<project>/AGENTS.md` per project.
+- **Assistant tree** (agentic machines only — see the note above): Deployed to `assistant_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster + org structure) with a `Projects/<project>/AGENTS.md` per project.
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
 
 ### 2. Custom skills
@@ -81,8 +83,7 @@ Antigravity natively reads `AGENTS.md` files to understand identity and project 
 Each skill deploys as an Agent Skills standard folder: `<name>/SKILL.md` with `name` +
 `description` frontmatter (the description is what Antigravity's discovery matches against),
 plus any supporting files (`examples/`, `scripts/`, `references/`, `templates/`,
-`resources/`) alongside it. Extension skills (`extends_skill`) are spliced into the parent's
-body at render time, exactly as on mitos-agent/claude-code.
+`resources/`) alongside it.
 
 #### Skill scope: global vs. project
 Skills targeting `antigravity` deploy to one of two scopes (a skill's `scope:` frontmatter key —

@@ -8,11 +8,14 @@ imported by the compiler's deterministic verbs, and connector backend deps stay 
 
 Usage:
   python build/mitos.py init
-  python build/mitos.py project add SLUG [--name NAME] [--document-store SERVER]
+  python build/mitos.py project add SLUG [--name NAME] [--document-store SERVER] [--root DIR]
   python build/mitos.py connect --project SLUG [--folder-id ID [--recursive]] [--query TEXT] [--stage]
+                                [--store SERVER] [--backend NAME]
   python build/mitos.py connectors
+  python build/mitos.py peek --id ID [--store SERVER | --backend NAME]   (console-internal)
   python build/mitos.py sync --machine NAME init|clone --hub URL [--branch B] [--ssh-key PATH]
   python build/mitos.py sync --machine NAME [all|pull|push|refresh|status] [--dry-run]
+  python build/mitos.py update --machine NAME [--dry-run] [--json]
 """
 from __future__ import annotations
 
@@ -90,6 +93,19 @@ def _init_dispatch() -> int:
     return _init_scaffold_fresh(initmod, has_local)
 
 
+def _overlay_has_mitos_agent() -> bool:
+    """Does registry/local/user.yaml already turn the planning harness on? Read defensively
+    and by hand rather than through the loader — this runs before anything has validated the
+    overlay, and a half-written file must not stop `init` from getting the user set up."""
+    path = REPO_ROOT / "registry" / "local" / "user.yaml"
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return isinstance(data, dict) and data.get("mitos_agent") is True
+    except Exception:
+        return False
+
+
 def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     given = _ask("Given (first) name: ")
     family = _ask("Family (last) name: ")
@@ -103,10 +119,19 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     # use case (org skills declare targets: [mitos-agent] only — see MACHINE_USE_CASES), so
     # asking it unconditionally is what previously left claude-code/antigravity-only users
     # with a machine profile that never asked "do you even want orgs?" in the first place.
+    # The Mitos Agent option is not OFFERED on a fresh setup — the planning harness is an
+    # incubating work in progress, and a wizard that lists it as one of two equal choices
+    # tells a new user it is finished. Typing 2 still works: the path is unadvertised, not
+    # retired, so anyone already running the harness (or told to pick it) keeps it. An
+    # overlay that already carries `mitos_agent: true` is someone in exactly that position,
+    # so the option is printed back for them.
+    knows_agent = _overlay_has_mitos_agent()
     print("\nHow will you run Mitos on this machine?")
     print("  [1] Coding harnesses only (Claude Code / Antigravity / Claude Desktop) — skills")
-    print("      and prompts inside your existing editor. No org routing, no agentic tree.")
-    print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org routing).")
+    print("      and prompts inside your existing editor.")
+    if knows_agent:
+        print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org "
+              "routing).")
     use_choice = _ask("Choice [1]: ") or "1"
     is_agent = use_choice == "2"
 
@@ -133,7 +158,7 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,
                                            address=address, email=email,
                                            location=location, org_template=org,
-                                           backend=backend)
+                                           backend=backend, mitos_agent=is_agent)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -182,7 +207,7 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
               "(documentation, tests, changelog, deploy-book, runbook, migration-notes, "
               "requirements-receipt). You can add your own custom skills:")
         print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
-        print("  - the console's Skills & Orgs tab: python build/compile.py review")
+        print("  - the console's Skills tab: python build/compile.py review")
         print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "
               "set each skill's `targets:` to the harnesses you picked above.")
     print(f"\nThen: python build/compile.py compile && "
@@ -538,14 +563,15 @@ def _cmd_project(args) -> int:
         print(f"error: invalid slug {slug!r} — use letters, digits, '-' or '_'",
               file=sys.stderr)
         return 2
-    overlay = REPO_ROOT / "registry" / loader.LOCAL_OVERLAY
+    root = args.root.resolve() if getattr(args, "root", None) else REPO_ROOT
+    overlay = root / "registry" / loader.LOCAL_OVERLAY
     manifest = overlay / "projects" / f"{slug}.yaml"
     if manifest.exists():
         print(f"error: project {slug!r} already exists at "
               f"registry/{loader.LOCAL_OVERLAY}/projects/{slug}.yaml", file=sys.stderr)
         return 2
     try:
-        reg = loader.load(REPO_ROOT)
+        reg = loader.load(root)
         stores = sorted(reg.servers.get("servers") or {})
         if slug in reg.projects:
             print(f"error: a project named {slug!r} already exists in the registry",
@@ -574,11 +600,19 @@ def _cmd_project(args) -> int:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(_project_manifest_yaml(slug, name, store), encoding="utf-8")
     print(f"created registry/{loader.LOCAL_OVERLAY}/projects/{slug}.yaml")
+    graph_file = overlay / "graph" / f"{slug}.jsonld"
+    if not graph_file.exists():
+        from agentic.graph import ProjectGraph, canonical_jsonld
+        graph_file.parent.mkdir(parents=True, exist_ok=True)
+        pg = ProjectGraph(slug=slug, name=name, description="", documents=[], efforts=[], path=None)
+        graph_file.write_text(canonical_jsonld(pg), encoding="utf-8")
+        print(f"created registry/{loader.LOCAL_OVERLAY}/graph/{slug}.jsonld")
     if store != "none":
         print("\nNext: map its documents into the knowledge graph (Stage 3):")
         print(f"  python build/mitos.py connect --project {slug}")
     else:
-        print(f"\nSet `document_store:` in the manifest to a server, then "
+        print(f"\nProject initialized with minimal knowledge graph (no document store).")
+        print(f"To map documents later, set `document_store:` in the manifest, then "
               f"`python build/mitos.py connect --project {slug}`.")
     return 0
 
@@ -758,6 +792,41 @@ def _cmd_sync(args) -> int:
     return 0
 
 
+def _cmd_update(args) -> int:
+    """Core pull → overlay pull → deploy, unattended. With --json, stdout carries exactly one
+    schema-1 object and everything else (deploy prose, git noise) goes to stderr."""
+    import contextlib
+    import json
+
+    from agentic.update import run_update
+    with contextlib.redirect_stdout(sys.stderr):
+        result = run_update(REPO_ROOT, args.machine, scheduled=args.scheduled,
+                            skip_core_pull=args.skip_core_pull, dry_run=args.dry_run)
+    if args.json:
+        sys.__stdout__.write(json.dumps(result, ensure_ascii=True) + "\n")
+        sys.__stdout__.flush()
+    else:
+        d = result["deploy"] or {}
+        print(f"update {args.machine}: {'ok' if result['ok'] else 'NOT ok'}")
+        for label in ("skipped", "error"):
+            if result[label]:
+                print(f"  {label}: {result[label]}")
+        for block in ("core", "overlay"):
+            b = result[block]
+            if b:
+                why = f" ({b['skipped_reason']})" if b["skipped_reason"] else ""
+                print(f"  {block}: {'pulled' if b['pulled'] else 'not pulled'}{why}")
+        if d:
+            print(f"  deploy: rc {d['rc']}, {len(d['written'])} written, "
+                  f"{len(d['blocked'])} blocked, {len(d['captured'])} captured, "
+                  f"{len(d['orphans'])} orphan(s)")
+            for p in d["blocked"]:
+                print(f"    blocked {p} — resolve with `adopt` / `harvest`")
+    if result["ok"]:
+        return 0
+    return 2 if (result["error"] or "").startswith("unknown machine") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -773,6 +842,8 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--name", default=None, help="display name (defaults to the slug)")
     pp.add_argument("--document-store", default=None,
                     help="MCP server (connections/servers.yaml) backing graph init, or 'none'")
+    pp.add_argument("--root", type=Path, default=None,
+                    help="repo root (defaults to mitos checkout root)")
     pc = sub.add_parser("connect",
                         help="map a project's docs into its knowledge graph (Stage 3)")
     pc.add_argument("--project", default=None,
@@ -821,6 +892,18 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--remote", default=None,
                     help="git remote name, for `init`/`clone` (default: origin)")
     ps.add_argument("--dry-run", action="store_true")
+    pu = sub.add_parser("update",
+                        help="unattended core pull → overlay pull → deploy (never force, "
+                             "prune, or push)")
+    pu.add_argument("--machine", required=True)
+    pu.add_argument("--dry-run", action="store_true",
+                    help="no pulls; preview the deploy only")
+    pu.add_argument("--json", action="store_true",
+                    help="print exactly one schema-1 JSON object to stdout")
+    pu.add_argument("--skip-core-pull", action="store_true",
+                    help="internal: set by the re-exec after a core pull")
+    pu.add_argument("--scheduled", action="store_true",
+                    help="internal: a timer run — a dirty core skips the whole update")
     args = p.parse_args(argv)
     if args.cmd == "init":
         return _cmd_init(args)
@@ -834,6 +917,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_peek(args)
     if args.cmd == "sync":
         return _cmd_sync(args)
+    if args.cmd == "update":
+        return _cmd_update(args)
     return 1
 
 
