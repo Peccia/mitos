@@ -48,18 +48,22 @@ gitignored `registry/local/user.yaml`.
    ```javascript
    const hasMitosAgent = () => !!STATE.mitos_agent;
    const isTargetVisible = (t) => t !== "agents-md" && (hasMitosAgent() || t !== "mitos-agent");
-   const isSkillVisible = (s) => hasMitosAgent()
-     || (!s.name.startsWith("org-") && !(s.targets || []).includes("mitos-agent"));
+   const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
    ```
 
 ## Alternatives considered
 
 **Join against `/api/org` to decide which skills are org skills.** Rejected. That response is
 fetched asynchronously and may be skipped or fail; the join then comes back empty and every org
-skill renders. A predicate that fails open is not a gate. The `org-*` naming prefix is already a
-hard invariant across the loader and validator, so the static test is the stronger one.
+skill renders. A predicate that fails open is not a gate.
 
-**Expose `org_domain` through `_SKILL_META_WHITELIST` instead.** Rejected. That whitelist defines
+**Test the `org-` name prefix or a `mitos-agent` target.** Rejected after first ship (621be4a).
+Both have false positives in the real registry: an overlay skill named `org-software-…` is an
+ordinary coding-harness skill, and the `delivers:` skills and `gws` list `mitos-agent` alongside
+the coding harnesses. `review.state()` instead carries `org_domain` as a read-only sibling of
+`frontmatter`, and `isSkillVisible` reads only that.
+
+**Expose `org_domain` through `_SKILL_META_WHITELIST`.** Rejected. That whitelist defines
 which frontmatter fields the console's metadata editor lets you *edit*, and a domain's identity
 is fixed by `propose_new_org_domain`. Widening it to answer a display question would make the
 domain editable as a side effect.
