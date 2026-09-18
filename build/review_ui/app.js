@@ -3561,10 +3561,21 @@ function truncate(s, n) {
 // already carries in /api/state. The obvious alternative, joining against orgData, is
 // asynchronous: skipped or failed, the join comes back empty and every org skill leaks
 // into the grid. A predicate that fails open is not a gate.
+//
+// The org test is `org_domain` (a read-only field on every skill in /api/state) and ONLY
+// that. Two near-miss tests were tried and are wrong:
+//   - the `org-` name PREFIX: core org skills happen to carry it, but the converse does not
+//     hold, and a user skill named `org-software-implementation-plan` is an ordinary
+//     coding-harness skill whose card its author needs.
+//   - `targets` containing `mitos-agent`: the seven `delivers:` skills and `gws` list it
+//     ALONGSIDE the coding harnesses, so that test hides exactly the skills a coding
+//     workstation is told it gets on its first deploy.
+// Skills that target the harness and nothing else (`new-session`, `graph-bootstrap`,
+// `project-update`) are left to `deploys_here` — the pre-existing scope chip already answers
+// "would any machine of mine receive this", and that is not the flag's question.
 const hasMitosAgent = () => !!STATE.mitos_agent;
 const isTargetVisible = (t) => t !== "agents-md" && (hasMitosAgent() || t !== "mitos-agent");
-const isSkillVisible = (s) => hasMitosAgent()
-  || (!s.name.startsWith("org-") && !(s.targets || []).includes("mitos-agent"));
+const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
 
 
 function renderSkills() {

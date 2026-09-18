@@ -2510,7 +2510,8 @@ def test_app_js_gates_every_org_surface_behind_the_flag():
     assert "const isSkillVisible = (s) =>" in app
     # static, never a join against the async /api/org response — a predicate that fails
     # open is not a gate
-    assert 's.name.startsWith("org-")' in app
+    assert "const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;" in app
+    assert 's.name.startsWith("org-")' not in app,         "the org- name prefix is not an identity test — see the regression tests below"
 
     # 1 + 2: the "+ New org" button and the "Orgs only" chip
     assert 'if (hasMitosAgent()) {\n    const newOrgBtn' in app
@@ -2564,3 +2565,58 @@ def test_propose_graph_change_preserves_existing_org_domain():
     assert tagged, "the effort node must be in the candidate"
     assert any(dom in json.dumps(n) for n in tagged), \
         "the orgDomain tag must survive into the proposed JSON-LD"
+
+
+def test_org_prefixed_user_skill_is_not_treated_as_an_org_domain_skill():
+    """`org-` is a naming convention the core org skills happen to follow, not an identity
+    test. A user skill called `org-software-implementation-plan` — no `org_domain:`, targeting
+    coding harnesses — is an ordinary skill, and gating the card grid on the name prefix would
+    delete it from the console of the very machines it deploys to.
+
+    The payload must therefore carry `org_domain` for the client to read, and carry it OUTSIDE
+    `frontmatter` so the metadata editor still cannot edit a domain's identity."""
+    import copy
+    from agentic.loader import Skill
+    from agentic.review import prompt_index
+
+    rig = copy.deepcopy(reg)
+    rig.skills["org-software-implementation-plan"] = Skill(
+        name="org-software-implementation-plan",
+        rel="skills/org-software-implementation-plan/SKILL.md",
+        frontmatter={"targets": ["antigravity", "claude-code"],
+                     "description": "Turn an export into a lean implementation plan"},
+        body="")
+    by_name = {s["name"]: s for s in prompt_index(rig)["skills"]}
+
+    impostor = by_name["org-software-implementation-plan"]
+    assert impostor["org_domain"] == "", "a skill with no org_domain: must report none"
+    assert "mitos-agent" not in impostor["targets"]
+
+    real = by_name["org-software"]
+    assert real["org_domain"] == "software", "a real org-domain skill must report its domain"
+    # read-only: the editor edits `frontmatter`, and a domain's identity is not editable
+    assert "org_domain" not in real["frontmatter"]
+
+
+def test_flag_never_hides_a_skill_a_coding_workstation_deploys():
+    """The gate hides ORG skills. It must not hide a skill that merely lists `mitos-agent`
+    among its targets — the seven `delivers:` skills and `gws` name it alongside every coding
+    harness, so a `targets`-based test would empty the console of exactly the skills the
+    README promises a coding workstation on its first deploy.
+
+    The check is the real registry, deliberately: the point is which skills actually declare
+    what, and a hand-built fixture would only assert the rule against itself."""
+    from agentic.review import prompt_index
+
+    by_name = {s["name"]: s for s in prompt_index(reg)["skills"]}
+    # isSkillVisible with the flag OFF, evaluated here exactly as app.js evaluates it
+    visible = lambda s: not s["org_domain"]
+
+    for name in ("documentation", "tests", "changelog", "deploy-book", "runbook",
+                 "migration-notes", "requirements-receipt", "gws"):
+        s = by_name[name]
+        assert "mitos-agent" in s["targets"], f"{name} no longer targets the harness — re-check"
+        assert visible(s), f"{name} must stay visible with the flag off"
+
+    for name in ("org-software", "org-design", "org-marketing"):
+        assert not visible(by_name[name]), f"{name} is an org skill and must be hidden"

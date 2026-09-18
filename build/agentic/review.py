@@ -1591,6 +1591,13 @@ def prompt_index(reg: Registry) -> dict:
         "description": s.frontmatter.get("description", ""),
         "category": s.category,
         "targets": s.targets,
+        # READ-ONLY, and deliberately a sibling of `frontmatter` rather than a member of
+        # _SKILL_META_WHITELIST: a domain's identity is fixed by propose_new_org_domain, so
+        # widening the editable set would make it editable as a side effect. The console
+        # needs it only to ANSWER "is this an org-domain skill" — the `org-` name prefix is
+        # not that answer (a user skill may be called org-software-implementation-plan and
+        # have nothing to do with the org model).
+        "org_domain": s.frontmatter.get("org_domain", "") or "",
         "body": s.body,
         "frontmatter": _meta_dict(s.frontmatter, _SKILL_META_WHITELIST),
         "favorited": s.name in favorites,
