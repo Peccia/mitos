@@ -48,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Two groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) and registry-wide defaults (`default_deliverables`) | field key |
+| `user.yaml` | Three groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`), registry-wide defaults (`default_deliverables`), and the `mitos_agent` display flag | field key |
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
@@ -73,7 +73,7 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping in **two groups** — identity, and registry-wide defaults:
+A flat mapping in **three groups** — identity, registry-wide defaults, and a display flag:
 
 ```yaml
 # IDENTITY — the personalization placeholders
@@ -84,11 +84,15 @@ location: Your City, State
 
 # DEFAULTS — what a new effort inherits when it names none of its own
 default_deliverables: [documentation, tests]
+
+# DISPLAY — show the incubating Mitos Agent planning harness
+mitos_agent: true
 ```
 
 Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`, `default_deliverables: [documentation, tests]`). Any key
+`location: Your City, State`, `default_deliverables: [documentation, tests]`,
+`mitos_agent: false`). Any key
 outside this exact set is a hard error at compile time — the schema is intentionally
 closed (`loader.KNOWN_USER_KEYS`).
 
@@ -97,6 +101,13 @@ key here that is, validated against the closed deliverables vocabulary
 (`graph.KNOWN_DELIVERABLES`) exactly as a declared deliverable is, because a default is
 *copied* onto real efforts and a typo would otherwise mint invalid ones from a file
 nobody looks at twice. See [Default deliverables](#default-deliverables) below.
+
+`mitos_agent` is a **boolean**; only YAML `true`/`false` is accepted (`"true"` and `1` fail at
+load). On, the operator console shows the Mitos Agent surfaces — org-domain skills, the
+`mitos-agent` target chip, **+ New org**, the effort editor's **Org domain** field — and relabels
+the Skills tab **Skills & Orgs**; `mitos init` also lists the Mitos Agent setup option. It is
+display only: what a machine compiles and deploys is decided by its `targets:`. See
+[ADR-004](../docs/decisions/004-presentation-facade-mitos-agent-flag.md).
 
 **Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
 token list rather than this file's keys, so a defaults key can never leak into placeholder

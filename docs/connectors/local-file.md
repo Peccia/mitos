@@ -28,13 +28,14 @@ python build/mitos.py connect --project <slug> --folder-id /path/to/docs
 # include nested subdirectories
 python build/mitos.py connect --project <slug> --folder-id /path/to/docs --recursive
 
-# exclude one or more subdirectories by name
-python build/mitos.py connect --project <slug> --folder-id /path/to/docs --recursive \
-  --exclude-folders Archive --exclude-folders Drafts
-
 # no folder-id: scope defaults to the current directory
 python build/mitos.py connect --project <slug>
 ```
+
+There is no command-line flag for skipping subdirectories. List them under `exclude_folders:` in
+the project manifest or in the store's entry in `connections/servers.yaml` — see
+[Excluding folders from staging](README.md#excluding-folders-from-staging). This connector
+matches each entry against a directory's name (case-insensitive) or its absolute path.
 
 Like every connector, this produces a `kind: graph` candidate in `inbox/` that you accept in the
 operator console (`python build/compile.py review`). Nothing is written to the registry directly.

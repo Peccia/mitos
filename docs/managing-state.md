@@ -81,7 +81,7 @@ Each line of a `deploy`/`diff` plan is `[state]  <path> — <detail>  <flag>`. T
 | `drift` | File was edited in place; registry unchanged. | Depends on **policy** (below): capture+overwrite, or block. |
 | `conflict` | Either edited-in-place **and** registry-changed, **or** an untracked existing file that differs. | Depends on **policy**: capture+overwrite, or block. |
 | `resolved` | Live already matches the registry but the lock was stale (e.g. right after `adopt`). | Re-locks; **never** needs `--force`. |
-| `merge` | A tool-owned config file (Antigravity `config.json`, Antigravity/Claude-Desktop `config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
+| `merge` | A tool-owned config file (Antigravity `config.json`, Claude Desktop `claude_desktop_config.json`). | Splices only Mitos-owned keys in; never a whole-file overwrite. |
 | `orphan` | Previously deployed by Mitos, no longer in the plan (a deselected skill, a retired project). | Kept on disk until you `--prune`. |
 | `clone` | A project repo to check out beside its project node. | Clones if absent; fast-forwards an existing clean checkout on its manifest branch; never resets, stashes, re-checks-out, or deletes one (a dirty/detached/diverged checkout is skipped and reported). |
 

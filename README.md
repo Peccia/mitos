@@ -133,7 +133,7 @@ build/.venv/Scripts/python.exe -m pip install -r build/requirements.txt
 > [!NOTE]
 > The compiler validates machine profiles against your host OS before writing files. Rehearse any cross-machine deployments safely using the `--root <dir>` flag to write into a sandbox directory.
 >
-> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. The repo-root shims — `mitos` (Linux/macOS) and `mitos.cmd` (Windows) — are the supported way to call it: they pick the venv interpreter and route the verb to `build/mitos.py` (`init`, `project`, `connect`, `connectors`, `sync`) or `build/compile.py` (everything else). Later commands written as `python build/compile.py <verb>` are the same thing as `./mitos <verb>`; if you invoke the scripts directly, use the venv path (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`).
+> Mitos operates directly as a script runner (`build/compile.py`, `build/mitos.py`) rather than a packaged CLI. The repo-root shims — `mitos` (Linux/macOS) and `mitos.cmd` (Windows) — are the supported way to call it: they pick the venv interpreter and route the verb to `build/mitos.py` (`init`, `project`, `connect`, `connectors`, `peek`, `sync`, `update`) or `build/compile.py` (everything else). Later commands written as `python build/compile.py <verb>` are the same thing as `./mitos <verb>`; if you invoke the scripts directly, use the venv path (`build/.venv/bin/python` or `build/.venv/Scripts/python.exe`).
 >
 > To type a bare `mitos` from anywhere, add the repo root to your `PATH`, or on Windows add `Set-Alias mitos <repo>\mitos.cmd` to your PowerShell `$PROFILE`.
 
@@ -477,13 +477,13 @@ reference:
 | Command | What it does |
 |---|---|
 | `compile [--target T]` | Validate the registry and render every machine's targets into `dist/`. |
-| `deploy --machine M [--dry-run] [--force] [--root DIR] [--lane L] [--prune]` | Materialize a machine's files; capture drift to `inbox/`; report orphans. |
-| `diff --machine M` | Three-way drift report: registry vs. lockfile vs. disk. |
+| `deploy --machine M [--dry-run] [--force] [--root DIR] [--lane L] [--prune] [--target T]` | Materialize a machine's files; capture drift to `inbox/`; report orphans. |
+| `diff --machine M [--root DIR] [--lane L] [--target T]` | Three-way drift report: registry vs. lockfile vs. disk. |
 | `adopt <path>` | Pull an in-place edit on a deployed file back into the registry. |
 | `harvest [--machine M] [--adopt-all]` | Digest of `harvest`-policy drift — proposals from self-improving tools. |
-| `review` | The operator console (localhost). |
-| `graph --project <slug>` | Inspect/query a project's knowledge graph. |
-| `mitos.py init` / `project add` / `connect` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) — the separate, optional entrypoint. |
+| `review [--port N] [--no-open]` | The operator console (localhost; default port 8765). |
+| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. |
+| `mitos.py init` / `project add` / `connect` / `connectors` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) / list the available connectors — the separate, optional entrypoint. |
 | `mitos.py sync --machine M [init\|clone --hub URL\|status]` | Set up (`init`/`clone`) or run git-only overlay sync across your machines: pull → deploy → push. |
 | `mitos.py update --machine M [--dry-run] [--json]` | Unattended core pull → overlay pull → deploy; never force, prune, or push. `--json` prints one `schema: 1` outcome (see [managing state](docs/managing-state.md#automating-an-update)). |
 

@@ -7,15 +7,17 @@ Secrets in `.local/` are never synced.
 
 ## Running these commands — what `mitos` means
 
-Until the packaged CLI is installed, **`mitos` is shorthand** for your venv interpreter + the
-script:
+**`mitos` is the repo-root shim** — run it from the repo root as `./mitos` (Linux / macOS) or
+`.\mitos` (Windows PowerShell), or put the repo root on your `PATH` to type a bare `mitos`. It
+picks the venv interpreter and routes `sync` to `build/mitos.py`, so it equals calling the script
+directly:
 
-| Platform | `mitos` = |
-|---|---|
-| Windows (PowerShell) | `build\.venv\Scripts\python.exe build\mitos.py` |
-| Linux / macOS | `build/.venv/bin/python build/mitos.py` |
+| Platform | Shim | Direct equivalent |
+|---|---|---|
+| Windows (PowerShell) | `.\mitos` | `build\.venv\Scripts\python.exe build\mitos.py` |
+| Linux / macOS | `./mitos` | `build/.venv/bin/python build/mitos.py` |
 
-So `mitos sync --machine main` is `build/.venv/bin/python build/mitos.py sync --machine main`.
+So `mitos sync --machine main` is `./mitos sync --machine main`.
 
 ## What `mitos sync` does
 

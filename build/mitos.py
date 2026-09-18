@@ -8,9 +8,11 @@ imported by the compiler's deterministic verbs, and connector backend deps stay 
 
 Usage:
   python build/mitos.py init
-  python build/mitos.py project add SLUG [--name NAME] [--document-store SERVER]
+  python build/mitos.py project add SLUG [--name NAME] [--document-store SERVER] [--root DIR]
   python build/mitos.py connect --project SLUG [--folder-id ID [--recursive]] [--query TEXT] [--stage]
+                                [--store SERVER] [--backend NAME]
   python build/mitos.py connectors
+  python build/mitos.py peek --id ID [--store SERVER | --backend NAME]   (console-internal)
   python build/mitos.py sync --machine NAME init|clone --hub URL [--branch B] [--ssh-key PATH]
   python build/mitos.py sync --machine NAME [all|pull|push|refresh|status] [--dry-run]
   python build/mitos.py update --machine NAME [--dry-run] [--json]
@@ -205,7 +207,7 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
               "(documentation, tests, changelog, deploy-book, runbook, migration-notes, "
               "requirements-receipt). You can add your own custom skills:")
         print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
-        print("  - the console's Skills & Orgs tab: python build/compile.py review")
+        print("  - the console's Skills tab: python build/compile.py review")
         print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "
               "set each skill's `targets:` to the harnesses you picked above.")
     print(f"\nThen: python build/compile.py compile && "

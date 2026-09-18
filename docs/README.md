@@ -47,14 +47,6 @@ Take control of your registry and author your own skills and prompts:
 
 ---
 
-## 🔁 Design and implementation plans
-
-Cross-repo design records for work in flight. These describe intent and sequencing, not shipped behaviour — check the code before relying on one:
-
-- **[Closing the loop](concepts/closing-the-loop-implementation-plan.md)** — Carrying an implementation's own documents back into the shared store and the knowledge graph: deliverable skills publishing to the connection, export planning statistics, grounded-reference curation, the evaluation summary, and the Implemented Document written on graduation.
-
----
-
 ## 🧭 Decision records
 
 Why the code is shaped the way it is, written when the choice was made:
