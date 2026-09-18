@@ -77,8 +77,8 @@ A flat mapping in **three groups** — identity, registry-wide defaults, and a d
 
 ```yaml
 # IDENTITY — the personalization placeholders
-given_name: Paul
-full_name: Paul Peccia
+given_name: Example
+full_name: Example User
 email: example@domain.com
 location: Your City, State
 
@@ -114,7 +114,7 @@ token list rather than this file's keys, so a defaults key can never leak into p
 expansion as `{{user_default_deliverables}}`.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
-context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Paul's`,
+context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Example's`,
 or `Chris'` when the name ends in *s*), `{{user_full_name}}`, `{{user_email}}`,
 `{{user_location}}`. They expand at deploy time (`render.expand_placeholders`, applied to
 every text/skill-zip output — never to a tool's own merged config or an env template) and

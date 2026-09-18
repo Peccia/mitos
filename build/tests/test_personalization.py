@@ -110,12 +110,12 @@ def test_machine_document_store_validated_like_project():
 
 # ── expand_placeholders ───────────────────────────────────────────────────────
 def test_expand_substitutes_all_five_tokens():
-    user = {"given_name": "Paul", "full_name": "Paul Peccia",
+    user = {"given_name": "Example", "full_name": "Example User",
             "email": "example@domain.com", "location": "Your City, State"}
     text = ("{{user_given_name}} / {{users_given_name}} / {{user_full_name}} / "
             "{{user_email}} / {{user_location}}")
     out = render.expand_placeholders(_FakeReg(user), text)
-    assert out == "Paul / Paul's / Paul Peccia / example@domain.com / Your City, State"
+    assert out == "Example / Example's / Example User / example@domain.com / Your City, State"
 
 def test_expand_possessive_trailing_s_uses_bare_apostrophe():
     user = {"given_name": "Chris", "full_name": "", "email": "", "location": ""}
@@ -139,11 +139,11 @@ def test_user_token_map_resolves_configured_tokens_only():
     """The console auto-substitutes these on copy (never asking the operator to type their
     own name) and treats every OTHER {{token}} as a fillable input. An unset token is
     omitted — it stays literal on copy, exactly as expand_placeholders leaves it."""
-    user = {"given_name": "Paul", "full_name": "Paul Peccia",
+    user = {"given_name": "Example", "full_name": "Example User",
             "email": "example@domain.com", "location": ""}
     out = render.user_token_map(_FakeReg(user))
-    assert out == {"user_given_name": "Paul", "users_given_name": "Paul's",
-                   "user_full_name": "Paul Peccia", "user_email": "example@domain.com"}
+    assert out == {"user_given_name": "Example", "users_given_name": "Example's",
+                   "user_full_name": "Example User", "user_email": "example@domain.com"}
     assert "user_location" not in out       # unset → omitted → literal
 
 
@@ -367,12 +367,12 @@ def test_reverse_expand_round_trips_a_simple_edit():
     assert out == "Hello {{user_given_name}}, welcome. EXTRA SENTENCE."
 
 def test_reverse_expand_longest_value_first():
-    # user_full_name's expansion ("Paul Peccia") contains user_given_name's ("Paul") as a
-    # prefix — reversing the shorter one first would strand " Peccia" instead of
+    # user_full_name's expansion contains user_given_name's as a
+    # prefix — reversing the shorter one first would strand " User" instead of
     # restoring {{user_full_name}} whole.
-    user = {"given_name": "Paul", "full_name": "Paul Peccia", "email": "", "location": ""}
+    user = {"given_name": "Example", "full_name": "Example User", "email": "", "location": ""}
     original = "{{user_full_name}} says hi. {{user_given_name}} agrees."
-    live = "Paul Peccia says hi. Paul agrees."
+    live = "Example User says hi. Example agrees."
     out = render.reverse_expand_placeholders(_FakeReg(user), original, live)
     assert out == original
 

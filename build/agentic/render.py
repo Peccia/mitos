@@ -311,8 +311,8 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     default `given_name` "User" appearing as an ordinary English word elsewhere) can
     never corrupt a partial that never used the placeholder in the first place.
 
-    Longest expanded VALUE first: "Paul Peccia" (user_full_name) must reverse before
-    "Paul" (user_given_name) — otherwise replacing "Paul" first would strand " Peccia"
+    Longest expanded VALUE first: "Example User" (user_full_name) must reverse before
+    "Example" (user_given_name) — otherwise replacing "Example" first would strand " User"
     instead of restoring the full-name token.
 
     Machine-scoped tokens (`_MACHINE_TOKENS`) reverse against every machine's value
@@ -562,7 +562,7 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
             "name": fm["name"],
             "description": fm.get("description", ""),
             "version": fm.get("version", "1.0.0"),
-            "author": fm.get("author", "Paul Peccia"),
+            "author": fm.get("author", "Mitos"),
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
