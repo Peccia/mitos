@@ -56,6 +56,7 @@ function curStagedSel() { return stagedSel[stagedPool]; }
 let stagedFilter = "";     // client-side search text for the staged list
 let registryFilter = "";   // client-side search text for the registry list
 let registrySel = new Set(); // selected unassigned doc IDs for bulk move
+let discoveryOpen = null;  // null = auto; boolean = explicit session toggle
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
 let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
@@ -755,6 +756,7 @@ function selectProject(slug) {
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
   registryFilter = ""; registrySel.clear();
+  discoveryOpen = null;
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   projectEditOpen = false; projectEditVals = null; projectConfigOpen = false;
@@ -1247,13 +1249,17 @@ function buildGraphWorkspace(g) {
     + "kind:graph candidate to Accept in the Inbox. Nothing writes the registry directly."));
   ws.append(sticky);
 
-  const panes = el("div", "graph-panes");
-  const discovery = el("div", "graph-pane");
+  const open = discoveryOpen ?? (stagedData == null || stagedVisible(g).all.length > 0 || leftTab === "recovery");
+  const panes = el("div", "graph-panes" + (open ? "" : " discovery-collapsed"));
+  if (open) {
+    const discovery = el("div", "graph-pane");
+    panes.append(discovery);
+    buildLeftPane(discovery, g);
+  }
   const registry = el("div", "graph-pane");
-  panes.append(discovery, registry);
+  panes.append(registry);
+  buildRegistryPane(registry, g, open);
   ws.append(panes);
-  buildLeftPane(discovery, g);
-  buildRegistryPane(registry, g);
   return ws;
 }
 
@@ -1889,9 +1895,18 @@ async function purgeMissing(g, ids) {
 }
 
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
-function buildRegistryPane(container, g) {
+function buildRegistryPane(container, g, open) {
   const head = el("div", "pane-head");
   head.append(el("h2", "pane-head-title", "Registry"));
+  const stagedCount = (stagedData && stagedVisible(g).all.length) || 0;
+  const isDiscOpen = open !== undefined ? open : (discoveryOpen ?? (stagedData == null || stagedCount > 0 || leftTab === "recovery"));
+  const toggleDiscBtn = el("button", "ghost tiny", isDiscOpen ? "Hide Discovery" : `Discovery (${stagedCount})`);
+  toggleDiscBtn.title = isDiscOpen ? "Hide the Discovery pane" : "Show the Discovery pane";
+  toggleDiscBtn.onclick = () => {
+    discoveryOpen = !isDiscOpen;
+    renderGraph();
+  };
+  head.append(toggleDiscBtn);
   const search = el("input", "field registry-search");
   search.type = "search"; search.placeholder = "Filter documents…"; search.value = registryFilter;
   search.oninput = () => { registryFilter = search.value; renderRegistryRows(g); };
@@ -2058,10 +2073,24 @@ function renderRegistryRows(g) {
       continue;
     }
 
+    const effortCollapseKey = `effort:${g.slug}:${effort.id}`;
+    const isEffortCollapsed = !q && !isCurrentEffortEditor && !!collapsed[effortCollapseKey];
+
     const section = el("div", "effort-section" + (status === "remove" ? " effort-remove" : ""));
 
     // effort header row
     const head = el("div", "effort-header");
+    head.onclick = (e) => {
+      if (e.target.closest("button, select, input, a")) return;
+      collapsed[effortCollapseKey] = !isEffortCollapsed;
+      store.set(LS.collapsed, collapsed);
+      renderRegistryRows(g);
+    };
+
+    const caret = el("span", "caret effort-caret", isEffortCollapsed ? "▸" : "▾");
+    caret.title = isEffortCollapsed ? "Expand effort" : "Collapse effort";
+    head.append(caret);
+
     const nameSpan = el("span", "effort-name" + (status === "remove" ? " struck" : ""), effort.name);
     if (effort.orgDomain) {
       nameSpan.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
@@ -2128,6 +2157,23 @@ function renderRegistryRows(g) {
     }
     head.append(actions);
     section.append(head);
+
+    if (isEffortCollapsed) {
+      if (effort.goal) {
+        const goalEl = el("div", "effort-goal");
+        goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
+        section.append(goalEl);
+      }
+      const nonRemovedDocs = effortDocs.filter((d) => !draft.remove[d.id]);
+      const totalDocs = effortDraftAdds.length + nonRemovedDocs.length;
+      const countEl = el("div", "effort-docs muted", `${totalDocs} doc${totalDocs === 1 ? "" : "s"}`);
+      countEl.style.fontSize = ".78rem";
+      countEl.style.marginBottom = ".3rem";
+      section.append(countEl);
+      box.append(section);
+      renderedSections++;
+      continue;
+    }
 
     if (effort.description) {
       section.append(el("div", "effort-desc muted", effort.description));

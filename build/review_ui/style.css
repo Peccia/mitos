@@ -1749,6 +1749,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 @container graphws (min-width: 1000px) {
   .graph-panes { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.9fr); }
+  .graph-panes.discovery-collapsed { grid-template-columns: 1fr; }
 }
 .graph-pane {
   background: var(--panel);
@@ -2400,6 +2401,17 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .effort-header {
   display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
   margin-bottom: .25rem;
+  cursor: pointer;
+}
+.effort-header .row-actions {
+  cursor: default;
+}
+.effort-caret {
+  cursor: pointer;
+  color: var(--muted);
+  width: 1ch;
+  user-select: none;
+  font-size: .85rem;
 }
 .effort-name {
   font-weight: 600; font-size: .85rem;
