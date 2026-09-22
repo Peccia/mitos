@@ -3955,9 +3955,8 @@ function renderSkillFilesSection(s) {
 // projects that name this skill in their manifest's `skills:` list, on whichever of
 // claude-code/antigravity it targets). Mirrors the Supporting Files panel's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
-// projects itself is read-only here: the console doesn't write project manifests
-// (see docs/managing-state.md, invariant #3) — add/remove a project's binding by
-// editing that project's registry/projects/<slug>.yaml `skills:` list directly. ──
+// projects itself is read-only here: change which projects bind this skill from
+// each project's Knowledge Graph → Edit properties (or edit its manifest YAML). ──
 function renderSkillScopeSection(s) {
   const key = `skill:${s.name}`;
   const section = el("div", "skill-extension-section");
@@ -3972,6 +3971,8 @@ function renderSkillScopeSection(s) {
     "Global (default): deploys to every shared directory this skill's targets offer. "
     + "Project: deploys only to the projects below, on claude-code/antigravity — mitos-agent and "
     + "claude-app ignore this and always stay global."));
+  section.append(el("div", "muted resources-hint",
+    "Change which projects bind this skill from each project's Knowledge Graph → Edit properties."));
 
   function refreshActionState() {
     const d = metaDrafts[key];

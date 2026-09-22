@@ -1604,8 +1604,8 @@ def prompt_index(reg: Registry) -> dict:
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
         # projects whose manifest `skills:` list names this skill — the read-only
         # "where does scope: project actually apply" view (renderSkillScopeSection).
-        # Editing this list happens in the project manifest YAML directly; the console
-        # doesn't write project manifests (see docs/managing-state.md, invariant #3).
+        # Projects bind skills via each project's manifest YAML or the console's
+        # Project panel (Knowledge Graph → Edit properties → Bound skills).
         "bound_projects": sorted(slug for slug, proj in reg.projects.items()
                                  if s.name in (proj.get("skills") or [])),
         "deploys_here": s.name in live_skills,
