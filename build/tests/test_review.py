@@ -273,6 +273,111 @@ def test_propose_project_edit_clearing_repo_removes_repo_notes_too():
     assert "repo_notes" not in text
 
 
+def test_graph_index_exposes_effort_keywords_and_project_skills():
+    from dataclasses import replace
+    from agentic.review import graph_index
+    treg, _ = _temp_registry()
+    treg.projects["example-project"]["skills"] = ["tests"]
+    pg = treg.graphs["example-project"]
+    assert pg.efforts, "example-project should have at least one effort"
+    pg.efforts = [replace(pg.efforts[0], keywords="alias1, alias2")] + list(pg.efforts[1:])
+
+    idx = graph_index(treg)
+    proj_entry = next(p for p in idx if p["slug"] == "example-project")
+    assert "skills" in proj_entry
+    assert proj_entry["skills"] == ["tests"]
+
+    effort_entry = next(e for e in proj_entry["efforts"] if e["id"] == pg.efforts[0].id)
+    assert "keywords" in effort_entry
+    assert effort_entry["keywords"] == "alias1, alias2"
+
+
+def test_propose_project_edit_sets_and_clears_skills():
+    """Setting skills lands in the candidate and survives Accept round-trip; passing []
+    clears the skills key from the manifest cleanly."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, load_candidates, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "git-auto-commit"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: git-auto-commit\nscope: project\ntargets: [claude-code]\n---\nbody\n",
+        encoding="utf-8",
+    )
+    treg = loadermod.load(tmp)
+
+    out = propose_project_edit(treg, "example-project", {"skills": ["git-auto-commit"]}, "")
+    assert out["ok"], out
+    assert out["registry_path"] == "projects/example-project.yaml"
+
+    candidates = load_candidates(treg)
+    cand = next(c for c in candidates if c["id"] == out["id"])
+    assert "skills:" in cand["payload"]
+    assert "git-auto-commit" in cand["payload"]
+
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"].get("skills") == ["git-auto-commit"]
+
+    # Clearing skills with [] removes the key
+    out2 = propose_project_edit(reloaded, "example-project", {"skills": []}, "")
+    assert out2["ok"], out2
+    result2 = decide(reloaded, out2["id"], "accept", "")
+    assert result2["ok"], result2
+    reloaded2 = loadermod.load(tmp)
+    assert "skills" not in reloaded2.projects["example-project"]
+    written = tmp / "registry" / "projects" / "example-project.yaml"
+    assert "skills:" not in written.read_text(encoding="utf-8")
+
+
+def test_propose_project_edit_rejects_unknown_skill():
+    from agentic.review import propose_project_edit
+
+    treg, _ = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"skills": ["unknown-skill-xyz"]}, "")
+    assert not out["ok"]
+    assert "unknown skill 'unknown-skill-xyz'" in out["error"]
+
+
+def test_propose_project_edit_rejects_non_list_skills():
+    from agentic.review import propose_project_edit
+
+    treg, _ = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"skills": "git-auto-commit"}, "")
+    assert not out["ok"]
+    assert "skills must be a list" in out["error"]
+
+
+def test_propose_project_edit_leaves_skills_untouched_when_absent():
+    """Pass-through regression: an edit not naming skills leaves existing bindings untouched."""
+    import yaml as _y
+    from agentic import loader as loadermod
+    from agentic.review import decide, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "git-auto-commit"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: git-auto-commit\nscope: project\ntargets: [claude-code]\n---\nbody\n",
+        encoding="utf-8",
+    )
+    proj_path = tmp / "registry" / "projects" / "example-project.yaml"
+    proj_data = _y.safe_load(proj_path.read_text(encoding="utf-8"))
+    proj_data["skills"] = ["git-auto-commit"]
+    proj_path.write_text(_y.safe_dump(proj_data), encoding="utf-8")
+    treg = loadermod.load(tmp)
+
+    out = propose_project_edit(treg, "example-project", {"description": "updated description"}, "")
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"].get("skills") == ["git-auto-commit"]
+
+
 def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     """propose_new_skill needs no new acceptance-path logic: route_into_registry already
     writes a brand-new file verbatim when the target path doesn't exist (commands.py),
@@ -2565,6 +2670,34 @@ def test_propose_graph_change_preserves_existing_org_domain():
     assert tagged, "the effort node must be in the candidate"
     assert any(dom in json.dumps(n) for n in tagged), \
         "the orgDomain tag must survive into the proposed JSON-LD"
+
+
+def test_propose_graph_change_preserves_effort_keywords_when_key_absent():
+    """Pin the review.py:795 behavior: re-proposing an effort without naming keywords
+    preserves the existing aliases on disk, protecting against stale/partial drafts."""
+    import json
+    from agentic import review, loader as loadermod
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+
+    out1 = review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch Prep", "keywords": "legacy-alias, alt-tag"}])
+    assert out1["ok"], out1
+    review.decide(treg, out1["id"], "accept", "")
+    treg = loadermod.load(tmp)
+
+    # Now propose an edit without "keywords" in the effort dict
+    out2 = review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch Prep Renamed"}])
+    assert out2["ok"], out2
+
+    cand = sorted((tmp / "registry" / "local" / "inbox").glob("*/*.jsonld"))[-1]
+    body = json.loads(cand.read_text(encoding="utf-8"))
+    work_nodes = [n for n in body["@graph"] if str(n.get("@id", "")).endswith("launch-prep")]
+    assert work_nodes, "launch-prep effort node must exist in candidate"
+    assert any("legacy-alias" in json.dumps(n) for n in work_nodes), \
+        "existing keywords must be preserved when the key is omitted in the proposal"
 
 
 def test_org_prefixed_user_skill_is_not_treated_as_an_org_domain_skill():
