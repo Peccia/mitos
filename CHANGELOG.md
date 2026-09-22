@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A `context.builder` project node (Mitos self-hosting) on a machine that deploys `mitos-agent` now lists its cloned repos as the generated `## Navigation` roster, like every other project node. Before, the agent host had the checkouts on disk but its node named none, so Mitos Agent grounded every session on zero code. Recompile and redeploy the agent host to pick it up; nothing else changes.
+
 ## [0.1.7] - 2026-09-18
 
 ### Added

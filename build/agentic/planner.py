@@ -1260,6 +1260,18 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
                     (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
+                if (hosts_assistant_tree(machine) and _project_repo_entries(proj)
+                        and sections):
+                    # The agent host clones this project's repos beside the node (plan_clones),
+                    # so the node lists them as the generated `## Navigation` roster, exactly as
+                    # the ctx_key lane does. Without it the harness greps a node that names no
+                    # checkout and grounds on zero code. The builder partial is the last source;
+                    # anything ahead of it (none on an assistant host) stays a region of its own.
+                    b_src, b_body = sections[-1]
+                    regions = list(sections[:-1]) + _project_node_regions(
+                        proj, b_src, b_body.rstrip("\n"), gen_body)
+                    regions = [(s, b.rstrip("\n")) for s, b in regions if b.strip()]
+                    combined_sections = regions
                 outputs.append(Output(
                     target="agents-md", kind="text", deploy_path=deploy_path,
                     dist_rel=f"agents-md/{safe_rel(deploy_path)}",

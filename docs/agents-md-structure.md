@@ -106,7 +106,10 @@ is still ordinary, adoptable drift.
 Only project nodes whose checkouts are actually siblings of the file get a roster — the
 workstation `local_path` node, the `agentic_context_root` reference mount, and the `mitos-agent`
 operating tree (which clones repos into `<assistant_root>/Projects/<name>/<basename>/` as
-siblings of the project node). An `agentic_tree:` mount puts clones beside the mount rather
+siblings of the project node). That includes a `context.builder` project such as Mitos
+self-hosting: on a machine that also deploys `mitos-agent`, its node carries the roster too;
+on an `agents-md`-only machine it does not, because nothing clones beside it there.
+An `agentic_tree:` mount puts clones beside the mount rather
 than inside it.
 
 ## Skills

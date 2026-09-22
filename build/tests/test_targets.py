@@ -232,6 +232,53 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert out.section_bodies
     assert any(render.is_generated_source(s) for s, _ in out.section_bodies)
 
+def _builder_rig(targets, repos=True):
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = targets
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.projects["mitos"]["document_store"] = "gws"
+    if repos:
+        rig.projects["mitos"]["repo"] = [
+            "https://github.com/you/mitos.git", "https://github.com/you/mitos-agent.git"]
+        rig.projects["mitos"]["repo_notes"] = {"mitos": "the compiler"}
+    else:
+        rig.projects["mitos"].pop("repo", None)
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
+        efforts=[], path=None)
+    outs = planner.plan_machine(rig, "example-windows")
+    return next(o for o in outs if o.deploy_path == "C:/Projects/Mitos/AGENTS.md"
+                and o.target == "agents-md")
+
+
+def test_builder_lane_renders_repo_roster_on_assistant_host():
+    """On a machine that hosts the assistant tree, plan_clones puts the project's checkouts
+    beside the builder-context node, so the node lists them as the generated `## Navigation`
+    roster. Without it the agent host grounded on a node that named no checkout."""
+    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"])
+    assert "## Navigation" in out.content
+    assert "- `mitos/` — the compiler" in out.content
+    assert "- `mitos-agent/`" in out.content
+    assert "github.com/you/mitos.git" not in out.content
+    assert render.GENERATED_NAV in [s for s, _ in out.section_bodies]
+    assert "Design Review" in out.content          # the document index still follows
+
+
+def test_builder_lane_no_roster_without_assistant_tree():
+    """Only where the checkouts sit beside the node: an agents-md-only machine gets none."""
+    out = _builder_rig(["claude-code", "agents-md"])
+    assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
+    assert "- `mitos/`" not in out.content
+
+
+def test_builder_lane_no_roster_without_repos():
+    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"], repos=False)
+    assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
+
+
 def test_multi_store_project_renders_one_connection_section_per_store():
     """A project bound to two stores (document_store: a list) gets one `## <Name>
     (`key`)` section per store in its generated AGENTS.md, each holding only that
