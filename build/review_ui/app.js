@@ -57,7 +57,7 @@ let stagedFilter = "";     // client-side search text for the staged list
 let registryFilter = "";   // client-side search text for the registry list
 let registrySel = new Set(); // selected unassigned doc IDs for bulk move
 let discoveryOpen = null;  // null = auto; boolean = explicit session toggle
-let hiddenMenuOpen = false; // whether the "Hidden (N)" work-items menu is open in Registry pane
+let hiddenDrawerOpen = false; // whether the "Hidden (N)" work-items drawer is open in Registry pane
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
 let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
@@ -698,6 +698,7 @@ function renderGraph() {
   split.append(buildGraphSidebar(graphs), newProjectOpen ? buildNewProjectWorkspace() : buildGraphWorkspace(g));
   view.append(split);
   updateGraphDock();
+  if (hiddenDrawerOpen && g) renderHiddenDrawer(g);
 }
 
 // ── left: searchable project sidebar (scales to 100s–1000s of projects) ───────
@@ -758,7 +759,7 @@ function selectProject(slug) {
   stagedFilter = ""; stagedPool = "project";
   registryFilter = ""; registrySel.clear();
   discoveryOpen = null;
-  hiddenMenuOpen = false;
+  closeHiddenDrawer();
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   projectEditOpen = false; projectEditVals = null; projectConfigOpen = false;
@@ -1909,55 +1910,49 @@ function hiddenEffortsFor(g) {
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
 
-function buildHiddenWorkMenu(g, hiddenEfforts) {
-  const menu = el("div", "hidden-work-menu");
-  menu.onclick = (e) => e.stopPropagation();
+function openHiddenDrawer(g) {
+  hiddenDrawerOpen = true;
+  const drawer = $("hidden-work-drawer");
+  if (!drawer) return;
+  renderHiddenDrawer(g);
+  drawer.hidden = false;
+  requestAnimationFrame(() => drawer.classList.add("open"));
+  const btn = document.querySelector(".hidden-toggle-btn");
+  if (btn) btn.classList.add("active");
+}
 
-  const head = el("div", "hidden-menu-head");
-  const titleWrap = el("div");
-  titleWrap.append(el("h3", "hidden-menu-title", "Hidden Work Items"));
-  titleWrap.append(el("div", "hidden-menu-subtitle", "Excluded from the main document list and deployed AGENTS.md"));
-  head.append(titleWrap);
-
-  const closeBtn = el("button", "ghost tiny", "✕");
-  closeBtn.title = "Close menu";
-  closeBtn.onclick = () => {
-    hiddenMenuOpen = false;
-    renderGraph();
-  };
-  head.append(closeBtn);
-  menu.append(head);
-
-  if (!hiddenEfforts.length) {
-    menu.append(el("div", "hidden-menu-empty", "No hidden work items in this project."));
-    return menu;
+function closeHiddenDrawer() {
+  hiddenDrawerOpen = false;
+  const drawer = $("hidden-work-drawer");
+  if (drawer) {
+    drawer.classList.remove("open");
+    drawer.hidden = true;
   }
+  const btn = document.querySelector(".hidden-toggle-btn");
+  if (btn) btn.classList.remove("active");
+}
 
-  const list = el("div", "hidden-menu-list");
-  const draft = draftFor(g.slug);
+function renderHiddenDrawer(g) {
+  const body = $("hidden-work-drawer-body");
+  if (!body) return;
+  body.replaceChildren();
+
+  const hiddenEfforts = hiddenEffortsFor(g);
+  if (!hiddenEfforts.length) {
+    body.append(el("div", "hidden-drawer-empty", "No hidden work items in this project."));
+    return;
+  }
 
   for (const effort of hiddenEfforts) {
     const isRemoved = effort._status === "remove";
     const card = el("div", "hidden-effort-card" + (isRemoved ? " struck" : ""));
-    const effHead = el("div", "hidden-effort-head");
+    const head = el("div", "hidden-effort-head");
     const nameEl = el("span", "hidden-effort-name" + (isRemoved ? " struck" : ""), effort.name);
-    effHead.append(nameEl);
-
-    if (effort.orgDomain) {
-      effHead.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
-    }
-    if ((effort.deliverables || []).length) {
-      const delivSpan = el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", "));
-      effHead.append(delivSpan);
-    }
-    if ((effort.requirementsCoverage || []).length) {
-      const covSpan = el("span", "effort-domain-tag", " · coverage: " + effort.requirementsCoverage.length);
-      effHead.append(covSpan);
-    }
+    head.append(nameEl);
 
     if (effort._status && effort._status !== "mapped") {
       const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[effort._status];
-      if (label) effHead.append(el("span", "badge draft", label));
+      if (label) head.append(el("span", "badge draft", label));
     }
 
     const actions = el("span", "hidden-effort-actions");
@@ -1998,14 +1993,14 @@ function buildHiddenWorkMenu(g, hiddenEfforts) {
             hidden: !!effort.hidden,
           }
         };
-        hiddenMenuOpen = false;
+        closeHiddenDrawer();
         renderGraph();
       };
       actions.append(editBtn);
 
       if (effort._status !== "add") {
         const rmBtn = el("button", "ghost tiny danger", "Remove");
-        rmBtn.title = "Schedule this effort for removal (its documents reset to Project root)";
+        rmBtn.title = "Schedule this effort for removal";
         rmBtn.onclick = () => {
           effortDraftRemove(g.slug, effort);
           renderGraph();
@@ -2013,50 +2008,15 @@ function buildHiddenWorkMenu(g, hiddenEfforts) {
         actions.append(rmBtn);
       }
     }
-    effHead.append(actions);
-    card.append(effHead);
+    head.append(actions);
+    card.append(head);
 
-    if (effort.goal) {
-      const goalEl = el("div", "hidden-effort-goal");
-      goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
-      card.append(goalEl);
+    if (effort.description) {
+      card.append(el("div", "hidden-effort-desc", effort.description));
     }
 
-    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
-    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
-    const nonRemovedDocs = effortDocs.filter((d) => !draft.remove[d.id]);
-    const totalDocs = effortDraftAdds.length + nonRemovedDocs.length;
-
-    if (totalDocs > 0) {
-      const details = el("details", "hidden-effort-docs-toggle");
-      const summary = el("summary", "", `${totalDocs} document${totalDocs === 1 ? "" : "s"}`);
-      details.append(summary);
-      const ul = el("ul", "hidden-effort-docs-list");
-      for (const d of effortDraftAdds) {
-        const li = el("li");
-        li.append(document.createTextNode(d.name + " "), el("code", "", "(pending add)"));
-        ul.append(li);
-      }
-      for (const d of nonRemovedDocs) {
-        const effDoc = draft.edit[d.id] || d;
-        const li = el("li");
-        li.append(document.createTextNode(effDoc.name));
-        if (draft.edit[d.id]) li.append(document.createTextNode(" "), el("code", "", "(pending edit)"));
-        ul.append(li);
-      }
-      details.append(ul);
-      card.append(details);
-    } else {
-      const emptyDocs = el("div", "muted", "0 documents");
-      emptyDocs.style.fontSize = ".72rem";
-      card.append(emptyDocs);
-    }
-
-    list.append(card);
+    body.append(card);
   }
-
-  menu.append(list);
-  return menu;
 }
 
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
@@ -2075,20 +2035,14 @@ function buildRegistryPane(container, g, open) {
 
   const hiddenEfforts = hiddenEffortsFor(g);
   const hiddenCount = hiddenEfforts.length;
-  const hiddenWrap = el("div", "hidden-menu-wrap");
-  const toggleHiddenBtn = el("button", "ghost tiny hidden-toggle-btn" + (hiddenMenuOpen ? " active" : ""),
-    hiddenMenuOpen ? "Hide Hidden" : `Hidden (${hiddenCount})`);
-  toggleHiddenBtn.title = hiddenMenuOpen ? "Close hidden work items menu" : "View and manage hidden work items";
-  toggleHiddenBtn.onclick = (e) => {
-    e.stopPropagation();
-    hiddenMenuOpen = !hiddenMenuOpen;
-    renderGraph();
+  const toggleHiddenBtn = el("button", "ghost tiny hidden-toggle-btn" + (hiddenDrawerOpen ? " active" : ""),
+    `Hidden (${hiddenCount})`);
+  toggleHiddenBtn.title = hiddenDrawerOpen ? "Close hidden work items drawer" : "View and manage hidden work items";
+  toggleHiddenBtn.onclick = () => {
+    if (hiddenDrawerOpen) closeHiddenDrawer();
+    else openHiddenDrawer(g);
   };
-  hiddenWrap.append(toggleHiddenBtn);
-  if (hiddenMenuOpen) {
-    hiddenWrap.append(buildHiddenWorkMenu(g, hiddenEfforts));
-  }
-  head.append(hiddenWrap);
+  head.append(toggleHiddenBtn);
   const search = el("input", "field registry-search");
   search.type = "search"; search.placeholder = "Filter documents…"; search.value = registryFilter;
   search.oninput = () => { registryFilter = search.value; renderRegistryRows(g); };
@@ -2443,11 +2397,13 @@ function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
     };
     nameCell.append(cb);
   }
+  const contentWrap = el("span", "rrow-name-content");
   const name = el("span", "rrow-name-text" + (status === "remove" ? " struck" : ""), doc.name);
-  nameCell.append(name);
+  contentWrap.append(name);
   const badge = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
-  if (badge) nameCell.append(el("span", "badge draft", badge));
-  if (isPending) nameCell.append(el("span", "badge pending", "Awaiting review"));
+  if (badge) contentWrap.append(el("span", "badge draft", badge));
+  if (isPending) contentWrap.append(el("span", "badge pending", "Awaiting review"));
+  nameCell.append(contentWrap);
 
   const descCell = el("div", "rrow-cell rrow-desc");
   if (doc.description) descCell.append(el("div", "registry-desc muted", doc.description));
@@ -2461,15 +2417,6 @@ function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
 
   const dateCell = el("div", "rrow-cell rrow-date");
   if (doc.dateModified) dateCell.append(el("span", "muted num", doc.dateModified));
-
-  // The store's opaque id gets its own column (matching the concept's ID header) rather
-  // than sharing the actions cell — packed in with Open/Edit/Remove it took a full line
-  // to itself and forced every row to ~93px. The container query in style.css drops this
-  // column entirely once the pane is too narrow to seat it.
-  const idCell = el("div", "rrow-cell rrow-id");
-  const idSpan = el("span", "muted mono registry-id", doc.id);
-  idSpan.title = doc.id;
-  idCell.append(idSpan);
 
   const actionsCell = el("div", "rrow-cell rrow-actions");
   const openUrl = doc.webUrl || `https://drive.google.com/open?id=${doc.id}`;
@@ -2521,7 +2468,7 @@ function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
   }
   actionsCell.append(actions);
 
-  row.append(nameCell, descCell, dateCell, idCell, actionsCell);
+  row.append(nameCell, descCell, dateCell, actionsCell);
   return row;
 }
 
@@ -2534,7 +2481,6 @@ function registryHeaderRow() {
     el("span", "", "Document name"),
     el("span", "", "Description"),
     el("span", "", "Date"),
-    el("span", "rrow-id", "ID"),
     el("span", "sr-only", "Actions"),
   );
   return row;
@@ -4924,6 +4870,7 @@ function showTab(which) {
   $("view-prompts").hidden = which !== "prompts";
 
   if (which !== "prompts") resetNewPromptDraft();
+  if (which !== "graph") closeHiddenDrawer();
 
   // sidebar active state
   const activeNav = { inbox: "nav-inbox", graph: "nav-graph",
@@ -5057,10 +5004,9 @@ document.addEventListener("keydown", (e) => {
     closeDeployConfirm();
     return;
   }
-  if (e.key === "Escape" && hiddenMenuOpen) {
+  if (e.key === "Escape" && hiddenDrawerOpen) {
     e.preventDefault();
-    hiddenMenuOpen = false;
-    renderGraph();
+    closeHiddenDrawer();
     return;
   }
   if (e.key === "Escape" && newProjectOpen) {
@@ -5086,9 +5032,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("click", (e) => {
-  if (hiddenMenuOpen && !e.target.closest(".hidden-menu-wrap")) {
-    hiddenMenuOpen = false;
-    renderGraph();
+  if (hiddenDrawerOpen && !e.target.closest("#hidden-work-drawer, .hidden-toggle-btn")) {
+    closeHiddenDrawer();
   }
 });
 
@@ -5305,6 +5250,7 @@ $("ops-drawer-toggle").onclick = () => {
 $("ops-drawer-dismiss").onclick = () => { $("ops-drawer").hidden = true; };
 window.addEventListener("resize", repositionOpsDrawer);
 $("skill-edit-drawer-close").onclick = () => { closeSkillDrawer(); renderSkills(); };
+$("hidden-work-drawer-close").onclick = () => closeHiddenDrawer();
 $("deploy-confirm-cancel").onclick = () => closeDeployConfirm();
 $("deploy-confirm-go").onclick = () => confirmDeploy();
 $("deploy-confirm").onclick = (e) => { if (e.target.id === "deploy-confirm") closeDeployConfirm(); };

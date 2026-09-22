@@ -2479,26 +2479,30 @@ def test_app_js_propose_graph_draft_includes_hidden():
     assert "hidden: !!x.hidden" in app
 
 
-def test_app_js_hides_hidden_efforts_with_menu_toggle():
+def test_app_js_hides_hidden_efforts_with_drawer():
     """Ensure app.js excludes hidden efforts from the main registry list and provides
-    the toggled Hidden menu with unhide capabilities."""
+    the slide-out Hidden drawer with unhide capabilities, and excludes ID column."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
     css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
+    html = (review.UI_DIR / "index.html").read_text(encoding="utf-8")
 
     # State and functions exist
-    assert "let hiddenMenuOpen = false;" in app
+    assert "let hiddenDrawerOpen = false;" in app
     assert "function hiddenEffortsFor(g)" in app
-    assert "function buildHiddenWorkMenu(g, hiddenEfforts)" in app
+    assert "function renderHiddenDrawer(g)" in app
     assert "toggleHiddenBtn" in app
     assert "effort.hidden && !isCurrentEffortEditor" in app
     assert "!e.hidden" in app
+    assert "rrow-name-content" in app
 
-    # Style rules exist
-    assert ".hidden-menu-wrap" in css
-    assert ".hidden-work-menu" in css
+    # HTML and CSS drawer exist
+    assert 'id="hidden-work-drawer"' in html
+    assert "#hidden-work-drawer" in css
+    assert "#hidden-work-drawer.open" in css
     assert ".hidden-effort-card" in css
     assert ".hidden-effort-actions" in css
+
 
 
 
