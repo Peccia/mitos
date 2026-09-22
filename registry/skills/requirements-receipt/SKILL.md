@@ -80,7 +80,8 @@ Two different lines, and the difference is not stylistic:
 Write `evidence:` **only** when the thing you name actually exists and actually
 demonstrates the requirement. A test path that does not exist, or that tests something
 else, is worse than no evidence at all: it is the line a reviewer will trust and not check.
-When in doubt, it is a `claim:`.
+When in doubt, it is a `claim:`. An acceptance that reads `Given …, when …, then …` is the
+check: its `evidence:` is the test that does the *when* and asserts the *then*.
 
 A requirement may carry both — evidence for the part that is proven, a claim for the part
 that is not.
