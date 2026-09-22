@@ -2479,6 +2479,29 @@ def test_app_js_propose_graph_draft_includes_hidden():
     assert "hidden: !!x.hidden" in app
 
 
+def test_app_js_hides_hidden_efforts_with_menu_toggle():
+    """Ensure app.js excludes hidden efforts from the main registry list and provides
+    the toggled Hidden menu with unhide capabilities."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
+
+    # State and functions exist
+    assert "let hiddenMenuOpen = false;" in app
+    assert "function hiddenEffortsFor(g)" in app
+    assert "function buildHiddenWorkMenu(g, hiddenEfforts)" in app
+    assert "toggleHiddenBtn" in app
+    assert "effort.hidden && !isCurrentEffortEditor" in app
+    assert "!e.hidden" in app
+
+    # Style rules exist
+    assert ".hidden-menu-wrap" in css
+    assert ".hidden-work-menu" in css
+    assert ".hidden-effort-card" in css
+    assert ".hidden-effort-actions" in css
+
+
+
 def test_api_graph_effort_hidden_toggle_end_to_end():
     """HTTP API test: toggle effort hidden on and off via /api/graph and /api/decide,
     verifying it reflects in /api/state."""

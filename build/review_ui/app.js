@@ -57,6 +57,7 @@ let stagedFilter = "";     // client-side search text for the staged list
 let registryFilter = "";   // client-side search text for the registry list
 let registrySel = new Set(); // selected unassigned doc IDs for bulk move
 let discoveryOpen = null;  // null = auto; boolean = explicit session toggle
+let hiddenMenuOpen = false; // whether the "Hidden (N)" work-items menu is open in Registry pane
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
 let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
@@ -757,6 +758,7 @@ function selectProject(slug) {
   stagedFilter = ""; stagedPool = "project";
   registryFilter = ""; registrySel.clear();
   discoveryOpen = null;
+  hiddenMenuOpen = false;
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   projectEditOpen = false; projectEditVals = null; projectConfigOpen = false;
@@ -1894,6 +1896,169 @@ async function purgeMissing(g, ids) {
   }
 }
 
+function hiddenEffortsFor(g) {
+  const draft = draftFor(g.slug);
+  const effMap = {};
+  for (const e of (g.efforts || [])) effMap[e.id] = { ...e };
+  for (const e of Object.values(draft.effortAdd)) effMap[e.id] = { ...e, _status: "add" };
+  for (const e of Object.values(draft.effortEdit)) effMap[e.id] = { ...effMap[e.id], ...e, _status: "edit" };
+  for (const id of Object.keys(draft.effortRemove)) {
+    if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
+  }
+  return Object.values(effMap).filter((e) => e.hidden)
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
+function buildHiddenWorkMenu(g, hiddenEfforts) {
+  const menu = el("div", "hidden-work-menu");
+  menu.onclick = (e) => e.stopPropagation();
+
+  const head = el("div", "hidden-menu-head");
+  const titleWrap = el("div");
+  titleWrap.append(el("h3", "hidden-menu-title", "Hidden Work Items"));
+  titleWrap.append(el("div", "hidden-menu-subtitle", "Excluded from the main document list and deployed AGENTS.md"));
+  head.append(titleWrap);
+
+  const closeBtn = el("button", "ghost tiny", "✕");
+  closeBtn.title = "Close menu";
+  closeBtn.onclick = () => {
+    hiddenMenuOpen = false;
+    renderGraph();
+  };
+  head.append(closeBtn);
+  menu.append(head);
+
+  if (!hiddenEfforts.length) {
+    menu.append(el("div", "hidden-menu-empty", "No hidden work items in this project."));
+    return menu;
+  }
+
+  const list = el("div", "hidden-menu-list");
+  const draft = draftFor(g.slug);
+
+  for (const effort of hiddenEfforts) {
+    const isRemoved = effort._status === "remove";
+    const card = el("div", "hidden-effort-card" + (isRemoved ? " struck" : ""));
+    const effHead = el("div", "hidden-effort-head");
+    const nameEl = el("span", "hidden-effort-name" + (isRemoved ? " struck" : ""), effort.name);
+    effHead.append(nameEl);
+
+    if (effort.orgDomain) {
+      effHead.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
+    }
+    if ((effort.deliverables || []).length) {
+      const delivSpan = el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", "));
+      effHead.append(delivSpan);
+    }
+    if ((effort.requirementsCoverage || []).length) {
+      const covSpan = el("span", "effort-domain-tag", " · coverage: " + effort.requirementsCoverage.length);
+      effHead.append(covSpan);
+    }
+
+    if (effort._status && effort._status !== "mapped") {
+      const label = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[effort._status];
+      if (label) effHead.append(el("span", "badge draft", label));
+    }
+
+    const actions = el("span", "hidden-effort-actions");
+    if (effort._status === "add" || effort._status === "edit" || effort._status === "remove") {
+      const undo = el("button", "ghost tiny", "Undo");
+      undo.onclick = () => {
+        effortDraftUndo(g.slug, effort.id);
+        renderGraph();
+      };
+      actions.append(undo);
+    }
+    if (!isRemoved) {
+      const unhideBtn = el("button", "ghost tiny", "Unhide");
+      unhideBtn.title = "Restore to main document list and deployed AGENTS.md";
+      unhideBtn.onclick = () => {
+        effortDraftUpsert(g.slug, { ...effort, hidden: false }, effort._status === "add");
+        toast(`Restored "${effort.name}" to main document list.`);
+        renderGraph();
+      };
+      actions.append(unhideBtn);
+
+      const editBtn = el("button", "ghost tiny", "Edit");
+      editBtn.title = "Edit this effort in the main registry view";
+      editBtn.onclick = () => {
+        openEditor = {
+          where: "registry",
+          lockId: true,
+          kind: "effort",
+          vals: {
+            id: effort.id,
+            name: effort.name,
+            description: effort.description || "",
+            keywords: effort.keywords || "",
+            goal: effort.goal || "",
+            orgDomain: effort.orgDomain || "",
+            deliverables: (effort.deliverables || []).slice(),
+            requirementsCoverage: (effort.requirementsCoverage || []).slice(),
+            hidden: !!effort.hidden,
+          }
+        };
+        hiddenMenuOpen = false;
+        renderGraph();
+      };
+      actions.append(editBtn);
+
+      if (effort._status !== "add") {
+        const rmBtn = el("button", "ghost tiny danger", "Remove");
+        rmBtn.title = "Schedule this effort for removal (its documents reset to Project root)";
+        rmBtn.onclick = () => {
+          effortDraftRemove(g.slug, effort);
+          renderGraph();
+        };
+        actions.append(rmBtn);
+      }
+    }
+    effHead.append(actions);
+    card.append(effHead);
+
+    if (effort.goal) {
+      const goalEl = el("div", "hidden-effort-goal");
+      goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
+      card.append(goalEl);
+    }
+
+    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
+    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
+    const nonRemovedDocs = effortDocs.filter((d) => !draft.remove[d.id]);
+    const totalDocs = effortDraftAdds.length + nonRemovedDocs.length;
+
+    if (totalDocs > 0) {
+      const details = el("details", "hidden-effort-docs-toggle");
+      const summary = el("summary", "", `${totalDocs} document${totalDocs === 1 ? "" : "s"}`);
+      details.append(summary);
+      const ul = el("ul", "hidden-effort-docs-list");
+      for (const d of effortDraftAdds) {
+        const li = el("li");
+        li.append(document.createTextNode(d.name + " "), el("code", "", "(pending add)"));
+        ul.append(li);
+      }
+      for (const d of nonRemovedDocs) {
+        const effDoc = draft.edit[d.id] || d;
+        const li = el("li");
+        li.append(document.createTextNode(effDoc.name));
+        if (draft.edit[d.id]) li.append(document.createTextNode(" "), el("code", "", "(pending edit)"));
+        ul.append(li);
+      }
+      details.append(ul);
+      card.append(details);
+    } else {
+      const emptyDocs = el("div", "muted", "0 documents");
+      emptyDocs.style.fontSize = ".72rem";
+      card.append(emptyDocs);
+    }
+
+    list.append(card);
+  }
+
+  menu.append(list);
+  return menu;
+}
+
 // ── right pane: the project's mapped documents + draft adds, grouped by effort ──
 function buildRegistryPane(container, g, open) {
   const head = el("div", "pane-head");
@@ -1907,6 +2072,23 @@ function buildRegistryPane(container, g, open) {
     renderGraph();
   };
   head.append(toggleDiscBtn);
+
+  const hiddenEfforts = hiddenEffortsFor(g);
+  const hiddenCount = hiddenEfforts.length;
+  const hiddenWrap = el("div", "hidden-menu-wrap");
+  const toggleHiddenBtn = el("button", "ghost tiny hidden-toggle-btn" + (hiddenMenuOpen ? " active" : ""),
+    hiddenMenuOpen ? "Hide Hidden" : `Hidden (${hiddenCount})`);
+  toggleHiddenBtn.title = hiddenMenuOpen ? "Close hidden work items menu" : "View and manage hidden work items";
+  toggleHiddenBtn.onclick = (e) => {
+    e.stopPropagation();
+    hiddenMenuOpen = !hiddenMenuOpen;
+    renderGraph();
+  };
+  hiddenWrap.append(toggleHiddenBtn);
+  if (hiddenMenuOpen) {
+    hiddenWrap.append(buildHiddenWorkMenu(g, hiddenEfforts));
+  }
+  head.append(hiddenWrap);
   const search = el("input", "field registry-search");
   search.type = "search"; search.placeholder = "Filter documents…"; search.value = registryFilter;
   search.oninput = () => { registryFilter = search.value; renderRegistryRows(g); };
@@ -1972,7 +2154,7 @@ function renderRegistryRows(g) {
     if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
   }
 
-  const activeEfforts = Object.values(effMap).filter((e) => e._status !== "remove")
+  const activeEfforts = Object.values(effMap).filter((e) => e._status !== "remove" && !e.hidden)
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   const hasEfforts = Object.keys(effMap).length > 0;
 
@@ -2069,6 +2251,9 @@ function renderRegistryRows(g) {
     });
 
     const isCurrentEffortEditor = isEffortEditor && editorId === effort.id;
+    if (effort.hidden && !isCurrentEffortEditor) {
+      continue;
+    }
     if (q && !effortNameMatches && !filteredEffortAdds.length && !filteredEffortDocs.length && !isCurrentEffortEditor) {
       continue;
     }
@@ -2131,7 +2316,13 @@ function renderRegistryRows(g) {
       const visBtn = el("button", "ghost tiny", effort.hidden ? "Unhide" : "Hide");
       visBtn.title = effort.hidden ? "Restore to deployed AGENTS.md" : "Hide from deployed AGENTS.md";
       visBtn.onclick = () => {
-        effortDraftUpsert(g.slug, { ...effort, hidden: !effort.hidden }, status === "add");
+        const willHide = !effort.hidden;
+        effortDraftUpsert(g.slug, { ...effort, hidden: willHide }, status === "add");
+        if (willHide) {
+          toast(`Moved "${effort.name}" to Hidden work items.`);
+        } else {
+          toast(`Restored "${effort.name}" to main document list.`);
+        }
         renderGraph();
       };
       actions.append(visBtn);
@@ -2196,6 +2387,13 @@ function renderRegistryRows(g) {
 
     box.append(section);
     renderedSections++;
+  }
+
+  if (!q && renderedSections === 0) {
+    const hiddenCount = Object.values(effMap).filter((e) => e.hidden && e._status !== "remove").length;
+    if (hiddenCount > 0) {
+      box.append(el("div", "empty-state", `${hiddenCount} work item${hiddenCount === 1 ? " is" : "s are"} hidden — open Hidden (${hiddenCount}) above to view.`));
+    }
   }
 
   if (q && renderedSections === 0) {
@@ -4859,6 +5057,12 @@ document.addEventListener("keydown", (e) => {
     closeDeployConfirm();
     return;
   }
+  if (e.key === "Escape" && hiddenMenuOpen) {
+    e.preventDefault();
+    hiddenMenuOpen = false;
+    renderGraph();
+    return;
+  }
   if (e.key === "Escape" && newProjectOpen) {
     e.preventDefault();
     newProjectOpen = false;
@@ -4878,6 +5082,13 @@ document.addEventListener("keydown", (e) => {
     if (p) { e.preventDefault(); copyPrompt(p); pushRecent(p.key); }
   } else if (e.key === "/" && t.id !== "search") {
     e.preventDefault(); $("search").focus();
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (hiddenMenuOpen && !e.target.closest(".hidden-menu-wrap")) {
+    hiddenMenuOpen = false;
+    renderGraph();
   }
 });
 
