@@ -2007,6 +2007,30 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   justify-content: flex-end; text-align: right;
   min-width: 0; /* don't let this flex container's intrinsic size drive the grid track */
 }
+.rrow-move-select {
+  padding: .15rem .3rem;
+  font-size: .72rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  max-width: 8rem;
+}
+.bulk-move-bar {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem .6rem;
+  margin-bottom: .4rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: .8rem;
+}
+.registry-search {
+  max-width: 14rem;
+  font-size: .8rem;
+}
 
 /* ── Skills tab: accordion list ─────────────────────────────────────────── */
 .skills-toolbar {
@@ -2382,6 +2406,13 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .effort-name.struck { text-decoration: line-through; color: var(--muted); }
 .effort-desc { font-size: .78rem; margin-bottom: .3rem; }
+.effort-goal {
+  font-size: .78rem;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: .5rem;
+  margin-bottom: .3rem;
+}
 .effort-domain-tag { font-size: .72rem; color: var(--muted); font-weight: normal; }
 .effort-docs { padding-left: .8rem; }
 

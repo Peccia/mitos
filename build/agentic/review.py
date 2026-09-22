@@ -2176,6 +2176,7 @@ def graph_index(reg: Registry) -> list[dict]:
                          "orgDomain": e.org_domain, "goal": e.goal,
                          "deliverables": list(e.deliverables),
                          "requirementsCoverage": list(e.requirements_coverage),
+                         "keywords": e.keywords,
                          "hidden": bool(e.hidden)}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,

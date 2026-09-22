@@ -54,6 +54,8 @@ let stagedData = null;   // { ok, slug, documents, staged_at } from /api/graph/s
 let stagedSel = { project: new Set(), unassigned: new Set() };
 function curStagedSel() { return stagedSel[stagedPool]; }
 let stagedFilter = "";     // client-side search text for the staged list
+let registryFilter = "";   // client-side search text for the registry list
+let registrySel = new Set(); // selected unassigned doc IDs for bulk move
 let stagedPool = "project"; // "project" | "unassigned" — which staged pool the toggle shows
 let leftTab = "discovery"; // "discovery" | "recovery" — which pane the left column shows
 let dismissedData = null; // { ok, slug, documents, is_unassigned } from /api/graph/dismissed
@@ -752,6 +754,7 @@ function selectProject(slug) {
   newProjectOpen = false;
   stagedData = null; stagedSel = { project: new Set(), unassigned: new Set() };
   stagedFilter = ""; stagedPool = "project";
+  registryFilter = ""; registrySel.clear();
   dismissedData = null; recoverFilter = ""; leftTab = "discovery";
   openEditor = null;
   projectEditOpen = false; projectEditVals = null; projectConfigOpen = false;
@@ -1816,6 +1819,10 @@ async function purgeMissing(g, ids) {
 function buildRegistryPane(container, g) {
   const head = el("div", "pane-head");
   head.append(el("h2", "pane-head-title", "Registry"));
+  const search = el("input", "field registry-search");
+  search.type = "search"; search.placeholder = "Filter documents…"; search.value = registryFilter;
+  search.oninput = () => { registryFilter = search.value; renderRegistryRows(g); };
+  head.append(search);
   const addDocBtn = el("button", "ghost tiny", "+ Doc");
   addDocBtn.title = "Map a document by hand (e.g. a Drive ID that isn't staged)";
   addDocBtn.onclick = () => {
@@ -1831,7 +1838,7 @@ function buildRegistryPane(container, g) {
     // g.defaultDeliverables, so the client never reimplements the chain and can never drift
     // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "", hidden: false,
+                   vals: { id: "", name: "", description: "", keywords: "", hidden: false,
                            deliverables: (g.defaultDeliverables || []).slice() } };
     renderRegistryRows(g);
   };
@@ -1861,6 +1868,13 @@ function renderRegistryRows(g) {
   else if (editorUnplaced && isDocEditor) box.append(editorCard(g));
 
   // ── effort-grouped rendering ──────────────────────────────────────────────
+  const q = (registryFilter || "").trim().toLowerCase();
+  const docMatches = (d) => {
+    if (!q) return true;
+    const hay = ((d.name || "") + " " + (d.description || "") + " " + (d.keywords || "")).toLowerCase();
+    return hay.includes(q);
+  };
+
   // Effective efforts = registry + draft adds/edits, minus draft removes
   const effMap = {};
   for (const e of (g.efforts || [])) effMap[e.id] = { ...e };
@@ -1870,32 +1884,107 @@ function renderRegistryRows(g) {
     if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
   }
 
-  // "project root" section: draft adds without a parentId, then docs with parentId=""
-  const rootDraftAdds = Object.values(draft.add).filter((d) => !d.parentId);
-  const rootDocs = (g.documents || []).filter((d) => !d.parentId);
+  const activeEfforts = Object.values(effMap).filter((e) => e._status !== "remove")
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   const hasEfforts = Object.keys(effMap).length > 0;
 
+  // "project root" / "Unassigned" section: draft adds without a parentId, then docs with parentId=""
+  const rootDraftAdds = Object.values(draft.add).filter((d) => !d.parentId);
+  const rootDocs = (g.documents || []).filter((d) => !d.parentId);
+  const unassignedCount = rootDraftAdds.length + rootDocs.filter((d) => !draft.remove[d.id]).length;
+
+  // Prune registrySel for any ids no longer in unassigned
+  const unassignedIds = new Set([...rootDraftAdds.map((d) => d.id), ...rootDocs.map((d) => d.id)]);
+  for (const id of registrySel) {
+    if (!unassignedIds.has(id)) registrySel.delete(id);
+  }
+
+  const filteredRootAdds = rootDraftAdds.filter((d) => docMatches(d));
+  const filteredRootDocs = rootDocs.filter((d) => {
+    const eff = draft.edit[d.id] || d;
+    return docMatches(eff);
+  });
+
+  let renderedSections = 0;
+
   if (hasEfforts) {
-    const rootSection = el("div", "effort-section");
-    const rootHead = el("div", "effort-header");
-    rootHead.append(el("span", "effort-name", "Project Documents"));
-    rootSection.append(rootHead);
-    const rootDocs2 = el("div", "effort-docs");
-    _renderDocGroup(rootDocs2, g, rootDraftAdds, rootDocs, draft, pending, false);
-    rootSection.append(rootDocs2);
-    box.append(rootSection);
+    if (!q || filteredRootAdds.length > 0 || filteredRootDocs.length > 0) {
+      const rootSection = el("div", "effort-section");
+      const rootHead = el("div", "effort-header");
+      rootHead.append(el("span", "effort-name", `Unassigned (${unassignedCount})`));
+      rootSection.append(rootHead);
+
+      if (registrySel.size > 0 && activeEfforts.length > 0) {
+        const bar = el("div", "bulk-move-bar");
+        bar.append(el("span", "muted", `${registrySel.size} selected · Move to `));
+        const moveSel = el("select", "graph-select rrow-move-select");
+        for (const eff of activeEfforts) {
+          const opt = el("option", "", eff.name);
+          opt.value = eff.id;
+          moveSel.append(opt);
+        }
+        bar.append(moveSel);
+        const applyBtn = el("button", "accept tiny", "Apply");
+        applyBtn.onclick = () => {
+          const targetEffortId = moveSel.value;
+          if (!targetEffortId) return;
+          for (const docId of registrySel) {
+            const doc = (g.documents || []).find((d) => d.id === docId)
+                        || draft.add[docId]
+                        || draft.edit[docId];
+            if (doc) {
+              const isAdd = !!draft.add[docId];
+              draftUpsert(g.slug, { ...doc, parentId: targetEffortId }, isAdd);
+            }
+          }
+          registrySel.clear();
+          renderGraph();
+        };
+        const clearBtn = el("button", "ghost tiny", "Clear");
+        clearBtn.onclick = () => {
+          registrySel.clear();
+          renderRegistryRows(g);
+        };
+        bar.append(applyBtn, clearBtn);
+        rootSection.append(bar);
+      }
+
+      const rootDocs2 = el("div", "effort-docs");
+      _renderDocGroup(rootDocs2, g, filteredRootAdds, filteredRootDocs, draft, pending, false, activeEfforts, true);
+      rootSection.append(rootDocs2);
+      box.append(rootSection);
+      renderedSections++;
+    }
   } else {
     // No efforts — flat list with pending doc adds first
-    _renderDocGroup(box, g, Object.values(draft.add), g.documents || [], draft, pending, true);
-    if (!(g.documents || []).length && !Object.keys(draft.add).length && !isEditorOpen) {
+    _renderDocGroup(box, g, filteredRootAdds, filteredRootDocs, draft, pending, !q, activeEfforts, false);
+    if (!q && !(g.documents || []).length && !Object.keys(draft.add).length && !isEditorOpen) {
       box.append(el("div", "empty-state", "No documents mapped yet — Add one or Map from Discovery."));
     }
+    if (filteredRootAdds.length > 0 || filteredRootDocs.length > 0) renderedSections++;
   }
 
   // ── effort sections ───────────────────────────────────────────────────────
   for (const effort of Object.values(effMap).sort((a, b) =>
       (a.name || "").localeCompare(b.name || ""))) {
     const status = effort._status || "mapped";
+
+    // documents belonging to this effort
+    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
+    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
+
+    const effortNameMatches = !q || (effort.name || "").toLowerCase().includes(q);
+    const filteredEffortAdds = effortNameMatches ? effortDraftAdds : effortDraftAdds.filter((d) => docMatches(d));
+    const filteredEffortDocs = effortNameMatches ? effortDocs : effortDocs.filter((d) => {
+      const eff = draft.edit[d.id] || d;
+      return docMatches(eff);
+    });
+
+    const isCurrentEffortEditor = isEffortEditor && editorId === effort.id;
+    if (q && !effortNameMatches && !filteredEffortAdds.length && !filteredEffortDocs.length && !isCurrentEffortEditor) {
+      continue;
+    }
+
     const section = el("div", "effort-section" + (status === "remove" ? " effort-remove" : ""));
 
     // effort header row
@@ -1909,8 +1998,10 @@ function renderRegistryRows(g) {
     }
     // The COUNT, not the names: six dimensions would swamp the row. The names live in the editor.
     if ((effort.requirementsCoverage || []).length) {
-      nameSpan.append(el("span", "effort-domain-tag",
-                         " · coverage: " + effort.requirementsCoverage.length));
+      const covSpan = el("span", "effort-domain-tag",
+                         " · coverage: " + effort.requirementsCoverage.length);
+      covSpan.title = effort.requirementsCoverage.join(", ");
+      nameSpan.append(covSpan);
     }
     head.append(nameSpan);
     if (effort.hidden) {
@@ -1940,6 +2031,7 @@ function renderRegistryRows(g) {
       edit.onclick = () => {
         openEditor = { where: "registry", lockId: true, kind: "effort",
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
+                               keywords: effort.keywords || "",
                                goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "",
                                deliverables: (effort.deliverables || []).slice(),
@@ -1962,29 +2054,37 @@ function renderRegistryRows(g) {
       section.append(el("div", "effort-desc muted", effort.description));
     }
 
+    if (effort.goal) {
+      const goalEl = el("div", "effort-goal");
+      goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
+      section.append(goalEl);
+    }
+
     // effort editor in-place
     if (isEffortEditor && editorId === effort.id) {
       section.append(effortEditorCard(g));
     }
 
-    // documents belonging to this effort
-    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
-    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
     const docBox = el("div", "effort-docs");
-    _renderDocGroup(docBox, g, effortDraftAdds, effortDocs, draft, pending, false);
+    _renderDocGroup(docBox, g, filteredEffortAdds, filteredEffortDocs, draft, pending, false, activeEfforts, false);
     section.append(docBox);
 
     box.append(section);
+    renderedSections++;
+  }
+
+  if (q && renderedSections === 0) {
+    box.append(el("div", "empty-state", "No documents match."));
   }
 }
 
-function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, showEmpty) {
+function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, showEmpty, activeEfforts, isUnassigned) {
   const isEditorOpen = openEditor && openEditor.where === "registry" && openEditor.kind === "doc";
   for (const doc of draftAdds) {
     if (isEditorOpen && openEditor.vals.id === doc.id) {
       container.append(editorCard(g));
     } else {
-      container.append(registryRow(g, doc, "add", pending));
+      container.append(registryRow(g, doc, "add", pending, activeEfforts, isUnassigned));
     }
   }
   if (showEmpty && !registryDocs.length && !draftAdds.length && !openEditor) {
@@ -1997,7 +2097,7 @@ function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, 
     const removed = !!draft.remove[doc.id];
     const edited = draft.edit[doc.id];
     const status = removed ? "remove" : (edited ? "edit" : "mapped");
-    container.append(registryRow(g, edited || doc, status, pending));
+    container.append(registryRow(g, edited || doc, status, pending, activeEfforts, isUnassigned));
   }
 }
 
@@ -2005,11 +2105,21 @@ function _renderDocGroup(container, g, draftAdds, registryDocs, draft, pending, 
 // variable-height blocks with no shared column edges — an ID and three buttons could
 // end up wrapped onto their own line. It's a grid now (registryHeaderRow below defines
 // the matching header), four cells per row: name, description, date, id+actions.
-function registryRow(g, doc, status, pending) {
+function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
   const isPending = pending.has(doc.id);
   const row = el("div", "registry-row " + status + (isPending ? " pending" : ""));
 
   const nameCell = el("div", "rrow-cell rrow-name");
+  if (isUnassigned && !isPending && status !== "remove") {
+    const cb = el("input"); cb.type = "checkbox";
+    cb.checked = registrySel.has(doc.id);
+    cb.onchange = () => {
+      if (cb.checked) registrySel.add(doc.id);
+      else registrySel.delete(doc.id);
+      renderRegistryRows(g);
+    };
+    nameCell.append(cb);
+  }
   const name = el("span", "rrow-name-text" + (status === "remove" ? " struck" : ""), doc.name);
   nameCell.append(name);
   const badge = { add: "Pending add", edit: "Pending edit", remove: "Pending remove" }[status];
@@ -2043,6 +2153,25 @@ function registryRow(g, doc, status, pending) {
   const openLink = el("a", "staged-link", "Open");
   openLink.target = "_blank"; openLink.rel = "noopener"; openLink.href = openUrl;
   actionsCell.append(openLink);
+
+  if (activeEfforts && activeEfforts.length > 0 && status !== "remove" && !isPending) {
+    const moveSel = el("select", "graph-select rrow-move-select");
+    moveSel.title = "Move document to effort";
+    const unopt = el("option", "", "Unassigned");
+    unopt.value = "";
+    moveSel.append(unopt);
+    for (const eff of activeEfforts) {
+      const opt = el("option", "", eff.name);
+      opt.value = eff.id;
+      moveSel.append(opt);
+    }
+    moveSel.value = doc.parentId || "";
+    moveSel.onchange = () => {
+      draftUpsert(g.slug, { ...doc, parentId: moveSel.value }, status === "add");
+      renderGraph();
+    };
+    actionsCell.append(moveSel);
+  }
 
   const actions = el("span", "row-actions");
   if (status === "remove" || status === "add" || status === "edit") {
@@ -2204,6 +2333,7 @@ function effortEditorCard(g) {
   field("id", "Effort ID (slug)", "auth-rework", openEditor.lockId);
   field("name", "Name", "Auth Rework");
   field("description", "Description", "short summary (optional)");
+  field("keywords", "Also known as", "comma-separated aliases");
 
   // Goal — free-text outcome statement, often a paragraph or two, so a textarea rather
   // than the single-line inputs above.
@@ -2341,6 +2471,7 @@ function effortEditorCard(g) {
     const effort = { id: inputs.id.value.trim().toLowerCase(),
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
+                     keywords: inputs.keywords ? inputs.keywords.value.trim() : (vals.keywords || ""),
                      goal: inputs.goal.value.trim(),
                      // null when the field was not rendered — carry the stored tag
                      // forward rather than proposing it away
@@ -2443,13 +2574,18 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
     id: x.id, name: x.name, description: x.description || "",
     dateModified: x.dateModified, keywords: x.keywords || "", parentId: x.parentId || "" }));
   const removals = Object.keys(d.remove);
-  const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => ({
-    id: x.id, name: x.name, description: x.description || "",
-    goal: x.goal || "",
-    orgDomain: x.orgDomain || "",
-    hidden: !!x.hidden,
-    deliverables: x.deliverables || [],
-    requirementsCoverage: x.requirementsCoverage || [] }));
+  const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => {
+    const item = {
+      id: x.id, name: x.name, description: x.description || "",
+      goal: x.goal || "",
+      orgDomain: x.orgDomain || "",
+      hidden: !!x.hidden,
+      deliverables: x.deliverables || [],
+      requirementsCoverage: x.requirementsCoverage || [],
+    };
+    if ("keywords" in x) item.keywords = x.keywords ?? "";
+    return item;
+  });
   const effortRemovals = Object.keys(d.effortRemove);
   if (!documents.length && !removals.length && !efforts.length && !effortRemovals.length) {
     toast("No changes to propose."); return;
