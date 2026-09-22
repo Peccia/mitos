@@ -864,7 +864,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables", "hidden", "document_store"}
+                            "default_deliverables", "hidden", "document_store", "skills"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -872,10 +872,10 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
     """Propose an identity/repo edit to a project's manifest as a `kind: project` inbox
     candidate: `name`, `description`, `stage`, `repo` (the full replacement URL list —
     a single URL collapses to a plain string, matching manifest convention), `repo_notes`
-    (the full replacement basename -> description map). Anything not named in `fields` is
-    left untouched — every other manifest key (document_store, local_path, context, skills,
-    agentic_tree, ...) passes through as-is, same "whitelist overlay" shape as
-    propose_meta_edit for skills/prompts.
+    (the full replacement basename -> description map), `skills` (the full replacement
+    bound skills list). Anything not named in `fields` is left untouched — every other
+    manifest key (local_path, context, agentic_tree, ...) passes through as-is, same
+    "whitelist overlay" shape as propose_meta_edit for skills/prompts.
 
     The edited manifest is re-validated against a scratch copy of the whole registry
     (loader._validate) before it ever reaches the inbox — "reject early", not just at
@@ -967,6 +967,21 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["document_store"] = [str(s).strip() for s in raw_ds if str(s).strip()]
         else:
             return {"ok": False, "error": "document_store must be a string or list of strings"}
+    if "skills" in fields:
+        raw_skills = fields["skills"]
+        if not isinstance(raw_skills, list):
+            return {"ok": False, "error": "skills must be a list"}
+        seen = set()
+        deduped = []
+        for s in raw_skills:
+            item = str(s).strip()
+            if item and item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        if deduped:
+            updated["skills"] = deduped
+        else:
+            updated.pop("skills", None)
 
     import copy
     trial = copy.deepcopy(reg)
@@ -2157,6 +2172,7 @@ def graph_index(reg: Registry) -> list[dict]:
             "document_store": proj.get("document_store") or "none",
             "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
+            "skills": list(proj.get("skills") or []),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),
             # The deliverables a NEW effort under this project starts checked with —

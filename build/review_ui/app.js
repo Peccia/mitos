@@ -783,6 +783,23 @@ function buildProjectPanel(container, g) {
   const repoCount = (g.repo || []).length;
   const docCount = (g.documents || []).length;
 
+  const allRegSkills = (STATE.prompts && STATE.prompts.skills) || [];
+  const regSkillMap = new Map(allRegSkills.map((s) => [s.name, s]));
+  const boundSkills = g.skills || [];
+  const projectScopedBound = [];
+  const globalBound = [];
+  const unknownBound = [];
+  for (const sname of boundSkills) {
+    const s = regSkillMap.get(sname);
+    if (!s) {
+      unknownBound.push(sname);
+    } else if ((s.frontmatter && s.frontmatter.scope) === "project") {
+      projectScopedBound.push(sname);
+    } else {
+      globalBound.push(sname);
+    }
+  }
+
   const head = el("div", "card-head");
   head.append(el("h1", "project-panel-title", g.name), el("code", "", g.slug));
   if (g.stage) head.append(el("span", "badge stage", g.stage));
@@ -794,6 +811,9 @@ function buildProjectPanel(container, g) {
   }
   head.append(el("span", "muted", `${docCount} mapped`));
   if (repoCount) head.append(el("span", "muted", `${repoCount} repo${repoCount === 1 ? "" : "s"}`));
+  if (projectScopedBound.length) {
+    head.append(el("span", "muted", `${projectScopedBound.length} bound skill${projectScopedBound.length === 1 ? "" : "s"}`));
+  }
 
   const actions = el("span", "push-right project-panel-actions");
   const configBtn = el("button", "tiny ghost", projectConfigOpen ? "Hide config" : "View config");
@@ -805,6 +825,7 @@ function buildProjectPanel(container, g) {
       name: g.name || "", description: g.description || "", stage: g.stage || "",
       document_store: g.document_store || "none",
       hidden: !!g.hidden,
+      skills: (g.skills || []).slice(),
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
       // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
       // inherits nothing". Two different answers, and the absent case must not collapse to [].
@@ -825,6 +846,15 @@ function buildProjectPanel(container, g) {
     const detail = el("div", "project-config-detail");
     if (g.description) detail.append(el("p", "card-note muted", g.description));
     detail.append(el("p", "card-note muted", `Document store: ${g.document_store || "none"}`));
+    if (projectScopedBound.length) {
+      detail.append(el("p", "card-note muted", `Bound skills: ${projectScopedBound.join(", ")}`));
+    }
+    if (globalBound.length) {
+      detail.append(el("p", "card-note muted", `no effect: ${globalBound.join(", ")}`));
+    }
+    if (unknownBound.length) {
+      detail.append(el("p", "card-note muted", `unknown: ${unknownBound.join(", ")}`));
+    }
     if (repoCount) {
       const list = el("div", "card-note project-repo-list");
       for (const url of g.repo) {
@@ -838,7 +868,7 @@ function buildProjectPanel(container, g) {
       }
       detail.append(list);
     }
-    if (!g.description && !repoCount) detail.append(el("p", "card-note muted", "No description or repos set."));
+    if (!g.description && !repoCount && !boundSkills.length) detail.append(el("p", "card-note muted", "No description or repos set."));
     card.append(detail);
   }
   container.append(card);
@@ -944,6 +974,48 @@ function projectEditorCard(g) {
   ddWrap.append(ddGroup); card.append(ddWrap);
   inputs.ddInherit = ddInherit; inputs.ddBoxes = ddBoxes;
 
+  // Bound skills (this project's checkouts)
+  const skillsWrap = el("div", "graph-field");
+  skillsWrap.append(el("label", "", "Bound skills (this project's checkouts)"));
+  const skillsGroup = el("div", "target-checks");
+  const boundChecked = new Set(vals.skills || []);
+  const skillBoxes = {};
+
+  const allRegSkills = (STATE.prompts && STATE.prompts.skills) || [];
+  const regSkillMap = new Map(allRegSkills.map((s) => [s.name, s]));
+  const candidateSkills = new Set();
+  for (const s of allRegSkills) {
+    const isProjectScope = (s.frontmatter && s.frontmatter.scope) === "project";
+    const targets = s.targets || [];
+    const hasTarget = targets.includes("claude-code") || targets.includes("antigravity");
+    if (isProjectScope && hasTarget) {
+      candidateSkills.add(s.name);
+    }
+  }
+  for (const name of boundChecked) {
+    candidateSkills.add(name);
+  }
+
+  const sortedSkillNames = Array.from(candidateSkills).sort();
+  for (const name of sortedSkillNames) {
+    const lbl = el("label", "target-check");
+    const box = el("input"); box.type = "checkbox"; box.checked = boundChecked.has(name);
+    skillBoxes[name] = box;
+    lbl.append(box, document.createTextNode(" " + name));
+
+    const s = regSkillMap.get(name);
+    if (!s) {
+      lbl.append(el("span", "muted", " (unknown)"));
+    } else if ((s.frontmatter && s.frontmatter.scope) !== "project") {
+      const warn = el("span", "muted", " (global — binding has no effect)");
+      warn.title = "Global skills deploy to every shared directory; a project binding only affects scope: project skills";
+      lbl.append(warn);
+    }
+    skillsGroup.append(lbl);
+  }
+  skillsWrap.append(skillsGroup); card.append(skillsWrap);
+  inputs.skillBoxes = skillBoxes;
+
   // Repos — url + one-line description per row (repo_notes, keyed by checkout basename
   // server-side); add/remove rows freely, order doesn't matter to the manifest.
   const reposWrap = el("div", "graph-field");
@@ -993,6 +1065,7 @@ function projectEditorCard(g) {
       name, description: inputs.description.value.trim(), stage: inputs.stage.value,
       document_store: inputs.document_store.value,
       hidden: inputs.hidden.checked,
+      skills: Object.keys(inputs.skillBoxes).filter((n) => inputs.skillBoxes[n] && inputs.skillBoxes[n].checked),
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
     if (inputs.ddInherit && !inputs.ddInherit.checked) {
@@ -1994,7 +2067,13 @@ function renderRegistryRows(g) {
       nameSpan.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
     }
     if ((effort.deliverables || []).length) {
-      nameSpan.append(el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", ")));
+      const delivSpan = el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", "));
+      const delivSkills = effort.deliverables.map((d) => {
+        const p = (STATE.deliverable_skills || {})[d] || [];
+        return p.length ? p.join(", ") : `${d} (no skill)`;
+      });
+      delivSpan.title = "Produced by: " + delivSkills.join(", ");
+      nameSpan.append(delivSpan);
     }
     // The COUNT, not the names: six dimensions would swamp the row. The names live in the editor.
     if ((effort.requirementsCoverage || []).length) {
