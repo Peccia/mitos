@@ -217,7 +217,6 @@ function openPromptInputs(p, body, inputs) {
   };
   $("prompt-input-copy").onclick = go;
   $("prompt-input-cancel").onclick = closePromptInputs;
-  modal.onclick = (e) => { if (e.target === modal) closePromptInputs(); };
   modal.hidden = false;
   boxes[inputs[0]].focus();
 }
@@ -3986,13 +3985,12 @@ const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
 function renderSkills() {
 
   const box = $("view-skills");
-  box.replaceChildren();
 
   // The create forms replace the grid entirely — the drawer must not hang over them.
   // (These return early, before the drawer-sync tail at the end of this function.)
   if (newSkillOpen || newOrgDomainOpen) closeSkillDrawer();
-  if (newSkillOpen)     { box.append(newSkillForm());      return; }
-  if (newOrgDomainOpen) { box.append(newOrgDomainForm()); return; }
+  if (newSkillOpen)     { box.replaceChildren(newSkillForm());      return; }
+  if (newOrgDomainOpen) { box.replaceChildren(newOrgDomainForm()); return; }
 
   // ── build domain-by-skill lookup from orgData ────────────────────────────
   // orgData is keyed by domain ("software"), each entry has .skill ("org-software").
@@ -4003,18 +4001,59 @@ function renderSkills() {
     orgDomainBySkill[data.skill] = dom;
   }
 
-  // ── toolbar: filter bar (left) + action buttons (right) ─────────────────
-  const toolbar = el("div", "skills-toolbar");
+  let toolbar = box.querySelector(".skills-toolbar");
+  let gridWrap = box.querySelector(".skills-grid-wrap");
+  let searchInp;
+  let chipRow;
+  let btnGroup;
 
-  const filterBar = el("div", "skill-filter-bar");
-  const searchInp = el("input");
-  searchInp.type = "text";
-  searchInp.placeholder = "Filter skills…";
-  searchInp.value = skillFilterText;
-  searchInp.oninput = () => { skillFilterText = searchInp.value; renderSkills(); };
-  filterBar.append(searchInp);
+  if (!toolbar || !gridWrap) {
+    box.replaceChildren();
+    toolbar = el("div", "skills-toolbar");
 
-  const chipRow = el("div", "skill-filter-chips");
+    const filterBar = el("div", "skill-filter-bar");
+    searchInp = el("input");
+    searchInp.type = "text";
+    searchInp.placeholder = "Filter skills…";
+    searchInp.value = skillFilterText;
+    filterBar.append(searchInp);
+
+    chipRow = el("div", "skill-filter-chips");
+    filterBar.append(chipRow);
+    toolbar.append(filterBar);
+
+    btnGroup = el("div", "skill-toolbar-btns");
+    toolbar.append(btnGroup);
+
+    gridWrap = el("div", "skills-grid-wrap");
+    box.append(toolbar, gridWrap);
+  } else {
+    searchInp = toolbar.querySelector(".skill-filter-bar input");
+    if (searchInp && searchInp !== document.activeElement) {
+      searchInp.value = skillFilterText;
+    }
+    chipRow = toolbar.querySelector(".skill-filter-chips");
+    btnGroup = toolbar.querySelector(".skill-toolbar-btns");
+  }
+
+  // Only the grid re-renders on a keystroke — this input survives, so focus is never lost.
+  searchInp.oninput = () => {
+    skillFilterText = searchInp.value;
+    renderSkillsGrid(gridWrap, orgDomainBySkill);
+  };
+
+  btnGroup.replaceChildren();
+  const newSkillBtn = el("button", "accept", "+ New skill");
+  newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
+  btnGroup.append(newSkillBtn);
+  if (hasMitosAgent()) {
+    const newOrgBtn = el("button", "", "+ New org");
+    newOrgBtn.title = "Scaffold a new org domain skill";
+    newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
+    btnGroup.append(newOrgBtn);
+  }
+
+  chipRow.replaceChildren();
 
   // Scope toggle: what this registry's machines deploy (default) vs. everything. Shown only
   // when something is actually withheld — on a fleet that includes a mitos-agent box every core
@@ -4114,22 +4153,11 @@ function renderSkills() {
   } else if (skillFilterOrg) {
     skillFilterOrg = false;
   }
-  filterBar.append(chipRow);
-  toolbar.append(filterBar);
 
-  const btnGroup = el("div", "skill-toolbar-btns");
-  const newSkillBtn = el("button", "accept", "+ New skill");
-  newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
-  btnGroup.append(newSkillBtn);
-  if (hasMitosAgent()) {
-    const newOrgBtn = el("button", "", "+ New org");
-    newOrgBtn.title = "Scaffold a new org domain skill";
-    newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
-    btnGroup.append(newOrgBtn);
-  }
-  toolbar.append(btnGroup);
-  box.append(toolbar);
+  renderSkillsGrid(gridWrap, orgDomainBySkill);
+}
 
+function renderSkillsGrid(container, orgDomainBySkill) {
   // ── filter ───────────────────────────────────────────────────────────────
   const q = skillFilterText.trim().toLowerCase();
   const skills = (STATE.prompts.skills || []).filter(isSkillVisible);
@@ -4145,11 +4173,13 @@ function renderSkills() {
     return true;
   });
 
+  container.replaceChildren();
+
   if (!visible.length) {
     // Distinguish "you have none" from "the scope hid them" — otherwise a fresh
     // coding-harness install reads as a broken registry rather than an empty one.
     const hiddenByScope = !skillShowAll && skills.some(s => s.deploys_here === false);
-    box.append(el("div", "empty-state",
+    container.append(el("div", "empty-state",
       !skills.length ? "No skills yet — create one to get started."
       : hiddenByScope ? "No skills deploy to your machines yet — create one, or pick All to "
                         + "browse the ones that ship with Mitos."
@@ -4161,7 +4191,7 @@ function renderSkills() {
   for (const s of visible) {
     list.append(skillCard(s, orgDomainBySkill[s.name] || null));
   }
-  box.append(list);
+  container.append(list);
 
   // The drawer lives outside #view-skills (it's a fixed overlay), so re-rendering the grid
   // doesn't touch it. Keep it in sync with the freshly-rendered data: if its skill is gone
