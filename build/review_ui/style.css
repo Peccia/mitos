@@ -660,6 +660,7 @@ select:disabled, input:disabled, textarea:disabled {
 .badge.stale  { background: var(--warn-bg); color: var(--warn); }
 .badge.manual { background: var(--bad-bg); color: var(--bad); }
 .badge.new    { background: var(--ok-bg); color: var(--ok); }
+.badge.badge-done { background: var(--ok-bg); color: var(--ok); }
 .badge.draft  { background: var(--chg-bg); color: var(--accent); text-transform: none; letter-spacing: 0; }
 .badge.pending { background: var(--warn-bg); color: var(--warn); }
 .badge.removed { background: var(--bad-bg); color: var(--bad); text-transform: none; letter-spacing: 0; }
@@ -2402,6 +2403,8 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .effort-name.struck { text-decoration: line-through; color: var(--muted); }
 .effort-desc { font-size: .78rem; margin-bottom: .3rem; }
+.effort-evaluation { font-size: .78rem; margin-bottom: .3rem; overflow-wrap: anywhere; }
+.effort-evaluation code { font-family: var(--mono, monospace); }
 .effort-goal {
   font-size: .78rem;
   color: var(--muted);

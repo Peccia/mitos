@@ -86,6 +86,12 @@ def main(argv: list[str] | None = None) -> int:
     p_graph.add_argument("--project", help="project slug (omit to list all graphs)")
     p_graph.add_argument("--query", default="documents",
                          help="saved query name (default: documents)")
+    p_graph.add_argument("--complete-effort", metavar="EFFORT_ID",
+                         help="propose marking this effort Done (lands an Inbox candidate; "
+                              "requires --project)")
+    p_graph.add_argument("--evaluation-doc", metavar="DOC_ID",
+                         help="with --complete-effort: the Implemented Document the effort "
+                              "was completed against")
 
     args = parser.parse_args(argv)
 
@@ -110,7 +116,9 @@ def main(argv: list[str] | None = None) -> int:
         from agentic import review
         return review.cmd_review(reg, args.port, open_browser=not args.no_open)
     if args.cmd == "graph":
-        return commands.cmd_graph(reg, args.project, args.query)
+        return commands.cmd_graph(reg, args.project, args.query,
+                                  complete_effort=args.complete_effort,
+                                  evaluation_doc=args.evaluation_doc)
     return 1
 
 

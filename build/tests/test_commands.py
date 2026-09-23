@@ -1022,3 +1022,75 @@ def test_init_fresh_offers_the_agent_option_to_someone_already_running_it(monkey
         ["Sam", "Lee", "Sam", "sam@example.com", "Austin, TX", "1", ""], monkeypatch)
 
     assert "[2] Mitos Agent" in out
+
+
+# ── graph --complete-effort (propose-only) ────────────────────────────────────
+def _graph_hashes(tmp):
+    import hashlib
+    root = tmp / "registry"
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for sub in ("graph", "local/graph") if (root / sub).is_dir()
+            for p in sorted((root / sub).rglob("*")) if p.is_file()}
+
+
+def _complete_rig():
+    from agentic import loader as loadermod, review
+    treg, tmp = _temp_registry()
+    out = review.propose_graph_change(
+        treg, "example-project",
+        documents=[{"id": "EXAMPLEDOCID", "name": "Implemented", "dateModified": "2026-09-01",
+                    "parentId": "ship"}],
+        efforts=[{"id": "ship", "name": "Ship It", "goal": "g", "keywords": "alias"}])
+    assert out["ok"], out
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    return loadermod.load(tmp), tmp
+
+
+def _run_graph(treg, *args, **kw):
+    import contextlib
+    import io
+    from agentic.commands import cmd_graph
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_graph(treg, *args, **kw)
+    return rc, buf.getvalue()
+
+
+def test_cmd_graph_complete_effort_lands_an_inbox_candidate_only():
+    import yaml as _y
+    from agentic import loader as loadermod, review
+    treg, tmp = _complete_rig()
+    before = _graph_hashes(tmp)
+    inbox_before = {p.name for p in _inbox(tmp).iterdir()} if _inbox(tmp).is_dir() else set()
+    rc, out = _run_graph(treg, "example-project", "documents",
+                         complete_effort="ship", evaluation_doc="EXAMPLEDOCID")
+    assert rc == 0, out
+    assert _graph_hashes(tmp) == before, "the CLI must not write the graph directly"
+    new = [p for p in _inbox(tmp).iterdir() if p.name not in inbox_before]
+    assert len(new) == 1 and new[0].name in out
+    meta = _y.safe_load((new[0] / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["kind"] == "graph" and meta["efforts_touched"] == ["ship"]
+    assert '"creativeWorkStatus": "done"' in (new[0] / "graph.jsonld").read_text(encoding="utf-8")
+    assert review.decide(treg, new[0].name, "accept", "")["ok"]
+    e = next(e for e in loadermod.load(tmp).graphs["example-project"].efforts if e.id == "ship")
+    assert (e.status, e.evaluation, e.goal, e.keywords) == ("done", "EXAMPLEDOCID", "g", "alias")
+
+
+def test_cmd_graph_complete_effort_unknown_effort_returns_2_and_writes_nothing():
+    treg, tmp = _complete_rig()
+    before = _graph_hashes(tmp)
+    inbox_before = sorted(p.name for p in _inbox(tmp).iterdir())
+    for args, kw in (((treg, "example-project", "documents"), {"complete_effort": "nope"}),
+                     ((treg, None, "documents"), {"complete_effort": "ship"}),
+                     ((treg, "example-project", "documents"),
+                      {"complete_effort": "ship", "evaluation_doc": "MISSINGDOC"})):
+        rc, _out = _run_graph(treg, *args[1:], **kw)
+        assert rc == 2, (kw, _out)
+    assert _graph_hashes(tmp) == before
+    assert sorted(p.name for p in _inbox(tmp).iterdir()) == inbox_before
+
+
+def test_cmd_graph_evaluation_doc_requires_complete_effort():
+    treg, tmp = _complete_rig()
+    rc, out = _run_graph(treg, "example-project", "documents", evaluation_doc="EXAMPLEDOCID")
+    assert rc == 2 and "--complete-effort" in out

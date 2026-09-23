@@ -2780,3 +2780,180 @@ def test_flag_never_hides_a_skill_a_coding_workstation_deploys():
 
     for name in ("org-software", "org-design", "org-marketing"):
         assert not visible(by_name[name]), f"{name} is an org skill and must be hidden"
+
+
+# ── Effort Done state through the Inbox valve ─────────────────────────────────
+def _done_rig():
+    """A temp registry whose first project has one Implemented Document under effort
+    `ship`, accepted and reloaded — the starting point for Done-state valve tests."""
+    from agentic import loader as loadermod, review
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = review.propose_graph_change(
+        treg, slug,
+        documents=[{"id": "EXAMPLEDOCID", "name": "Implemented", "dateModified": "2026-09-01",
+                    "parentId": "ship"}],
+        efforts=[{"id": "ship", "name": "Ship It", "goal": "g"},
+                 {"id": "other", "name": "Other Work"}])
+    assert out["ok"], out
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    return loadermod.load(tmp), tmp, slug
+
+
+def _accept(treg, tmp, out):
+    from agentic import loader as loadermod, review
+    assert out["ok"], out
+    res = review.decide(treg, out["id"], "accept", "")
+    assert res["ok"], res
+    return loadermod.load(tmp)
+
+
+def _effort(treg, slug, eid):
+    return next(e for e in treg.graphs[slug].efforts if e.id == eid)
+
+
+def _mark_done(treg, slug):
+    from agentic import review
+    return review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "goal": "g", "status": "done",
+         "evaluation": "EXAMPLEDOCID"}])
+
+
+def test_propose_effort_edit_without_status_keys_preserves_done():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(
+        treg, slug, [], efforts=[{"id": "ship", "name": "Ship It Renamed", "hidden": True}]))
+    e = _effort(treg, slug, "ship")
+    assert (e.name, e.status, e.evaluation) == ("Ship It Renamed", "done", "EXAMPLEDOCID")
+
+
+def test_propose_effort_explicit_empty_status_clears_done():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(
+        treg, slug, [], efforts=[{"id": "ship", "name": "Ship It", "status": "",
+                                  "evaluation": ""}]))
+    e = _effort(treg, slug, "ship")
+    assert (e.status, e.evaluation) == ("", "")
+
+
+def test_propose_rejects_unknown_status():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    for bad in ("in-progress", "Done"):
+        out = review.propose_graph_change(treg, slug, [], efforts=[
+            {"id": "ship", "name": "Ship It", "status": bad}])
+        assert not out["ok"] and "status" in out["error"], out
+
+
+def test_propose_rejects_dangling_evaluation():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    out = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "status": "done", "evaluation": "MISSINGDOC"}])
+    assert not out["ok"] and "MISSINGDOC" in out["error"], out
+    out = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "evaluation": "EXAMPLEDOCID"}])
+    assert not out["ok"], "an evaluation without status done must be rejected"
+
+
+def test_propose_rejects_removing_the_evaluation_document():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    out = review.propose_graph_change(treg, slug, [], removals=["EXAMPLEDOCID"])
+    assert not out["ok"] and "EXAMPLEDOCID" in out["error"], out
+    # clearing the evaluation in the same proposal makes the removal legal
+    out = review.propose_graph_change(treg, slug, [], removals=["EXAMPLEDOCID"], efforts=[
+        {"id": "ship", "name": "Ship It", "evaluation": ""}])
+    assert out["ok"], out
+
+
+def test_propose_doc_mapping_alone_never_changes_effort_status():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, review.propose_graph_change(treg, slug, documents=[
+        {"id": "EXAMPLEDOCID", "name": "Implemented", "dateModified": "2026-09-02",
+         "parentId": "ship"}]))
+    assert _effort(treg, slug, "ship").status == ""
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(treg, slug, documents=[
+        {"id": "OTHERDOCID", "name": "Other", "dateModified": "2026-09-03",
+         "parentId": "other"}]))
+    assert _effort(treg, slug, "ship").status == "done"
+
+
+def test_two_candidates_accepted_out_of_order_preserves_done():
+    """Candidate A (a goal tweak on `other`) is proposed BEFORE candidate B marks `ship` done;
+    accepting A after B must not roll `ship` back — A's fragment carries a stale `ship`."""
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    a = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "other", "name": "Other Work", "goal": "new goal"}])
+    assert a["ok"], a
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, a)
+    assert _effort(treg, slug, "ship").status == "done"
+    assert _effort(treg, slug, "other").goal == "new goal"
+
+
+def test_graph_candidate_summary_includes_effort_delta():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    out = _mark_done(treg, slug)
+    assert out["ok"], out
+    cand = next(c for c in review.load_candidates(treg) if c["id"] == out["id"])
+    assert cand["effort_delta"] == [{"id": "ship", "status": ["", "done"],
+                                     "evaluation": ["", "EXAMPLEDOCID"]}]
+    assert cand["no_changes"] is False
+
+
+def test_graph_index_exposes_effort_status_and_evaluation():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    idx = next(g for g in review.graph_index(treg) if g["slug"] == slug)
+    e = next(e for e in idx["efforts"] if e["id"] == "ship")
+    assert (e["status"], e["evaluation"]) == ("done", "EXAMPLEDOCID")
+
+
+def _ui_src(name):
+    from agentic import review
+    return (review.UI_DIR / name).read_text(encoding="utf-8")
+
+
+def test_app_js_propose_graph_draft_includes_status_and_evaluation():
+    """The draft payload forwards completion state only when the draft carries the key — an
+    absent key is the server's preserve-when-absent signal, so a stale draft cannot un-mark Done."""
+    src = _ui_src("app.js")
+    body = src[src.index("async function proposeGraphDraft"):]
+    body = body[:body.index("\n}\n")]
+    assert 'if ("status" in x) item.status = x.status ?? "";' in body
+    assert 'if ("evaluation" in x) item.evaluation = x.evaluation ?? "";' in body
+    # both Edit-button draft seeds and the effort editor carry the fields
+    assert src.count('status: effort.status || ""') == 3
+    assert 'status: inputs.status.checked ? "done" : ""' in src
+
+
+def test_app_js_tweak_offers_done_only_on_identity_peek():
+    src = _ui_src("app.js")
+    tweak = src[src.index("async function openTweak"):]
+    tweak = tweak[:tweak.index("\n}\n")]
+    assert "openEditor.vals.implementedFor = effortId;" in tweak
+    assert "Mark effort as Done with this Implemented Document" in src
+    assert 'status: "done", evaluation: doc.id' in src
+
+
+def test_app_js_renders_done_badge_and_evaluation_ref():
+    src = _ui_src("app.js")
+    assert '"badge badge-done", "Done"' in src
+    assert 'el("div", "effort-evaluation")' in src
+    assert "effortDeltaSummary(c)" in src
+
+
+def test_style_css_defines_badge_done_classes():
+    css = _ui_src("style.css")
+    assert ".badge.badge-done" in css and ".effort-evaluation" in css

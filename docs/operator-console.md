@@ -188,6 +188,29 @@ omits the receipt, and the owner may have a reason.
 
 The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
 
+### ✔️ Done state on efforts
+
+The effort editor has a **Mark as Done** checkbox and an **Implemented Document ID** field. Done
+is the effort's completion state (`schema:creativeWorkStatus`). The only allowed value is
+`done`; an effort with no status is active. The Implemented Document ID must be a document
+mapped in the same project, and it only works with Done ticked. The server rejects an unknown
+status, an Implemented Document ID without Done, and an ID that matches no document. Like every
+other edit, marking an effort Done creates a `kind: graph` candidate in the Inbox. Once
+accepted, the effort's registry row shows a **Done** badge and an `Implemented Document: <id>`
+line. Before that, the Inbox card shows the change as `Effort <id>: active → done`.
+
+Other edits won't clear Done. If an effort edit leaves out `status` or `evaluation`, the stored
+values stay; sending an empty value clears them. An accept merges only the efforts that
+candidate touched, so accepting an older candidate later won't undo Done.
+
+In **Tweak & map**, the identity peek may find an Implemented Document fragment for an effort in
+this project. If it does, the card also shows **Mark effort as Done with this Implemented
+Document**. The checkbox starts unticked, because mapping a document doesn't change an
+effort's status by itself. If you tick it, the effort edit goes into the same draft, so one
+proposal carries both the mapping and the Done change. From the CLI, `python build/compile.py
+graph --project <slug> --complete-effort <id> [--evaluation-doc <doc-id>]` proposes the same
+change without writing the graph.
+
 ### 🔎 Requirements coverage on efforts
 
 Beside it sits a **Requirements coverage** checkbox group — the *interview contract*, the mirror

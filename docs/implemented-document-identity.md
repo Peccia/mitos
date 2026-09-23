@@ -151,3 +151,26 @@ candidate is created, no invisible write happens. The accepted candidate goes th
 same `propose_graph_change` → `kind: graph` inbox path every mapped document already uses, so it
 passes `graph.py`'s own `isPartOf` validation unchanged — this fragment never bypasses that gate,
 it only saves the operator from retyping what Mitos-Agent already knew.
+
+The same peek also shows a **Mark effort as Done with this Implemented Document** checkbox, which
+starts unticked. If the operator ticks it, the effort edit (`status: done`,
+`evaluation: <this document's id>`) goes into the same proposal as the mapping (see ADR-005).
+Mapping a document without ticking the box doesn't change the effort's status.
+
+### The completion line (cross-repo contract)
+
+In every generated view, a Done effort gets one extra line after its goal line
+(`graph._effort_status_line`):
+
+```
+_Status: Done · Implemented Document: `<doc id>`._
+_Status: Done._
+```
+
+The second form is used when no Implemented Document was recorded, and active efforts get no
+line. Mitos Agent reads the line with an anchored regex (`tree/parse.py::_STATUS_RE`, exposed as
+`Node.effort_statuses`). Golden tests in both repos pin the exact strings:
+`build/tests/test_graph.py::test_effort_status_line_is_the_contract_grammar` in this repo and
+`tests/test_parse.py::test_effort_statuses_reads_the_generated_line` in Mitos Agent. If you
+change one, change the other. Mitos Agent treats the line as information only; whether a
+session can write is still decided by `Dossier.graduated`.

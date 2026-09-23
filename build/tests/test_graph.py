@@ -1415,3 +1415,91 @@ def test_project_with_only_hidden_efforts_and_no_root_docs_emits_no_documents_ye
         out = render(pg)
         assert "_No documents mapped yet._" in out
         assert "Parked" not in out
+
+
+# ── Effort completion state (schema:creativeWorkStatus + peccia:evaluation) ───
+def _done_graph(status="done", evaluation="EXAMPLEDOCID"):
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    done = graph.CreativeWork(id="shipped", name="Shipped Work", description="d",
+                              is_part_of=proj_iri, goal="ship it",
+                              deliverables=("tests",), status=status, evaluation=evaluation)
+    active = graph.CreativeWork(id="active", name="Active Work", description="a",
+                                is_part_of=proj_iri)
+    doc = graph.Document(drive_id="EXAMPLEDOCID", name="Implemented", description="",
+                         date_modified="2026-09-01", is_part_of=done.iri)
+    return graph.ProjectGraph(slug="p", name="P", description="", documents=[doc],
+                              efforts=[done, active])
+
+
+def _expect_graph_error(jsonld, label):
+    from agentic import graph
+    p = _write_graph(jsonld)
+    try:
+        try:
+            graph.load_project_graph(p)
+        except graph.GraphError:
+            return
+        raise AssertionError(f"expected GraphError for: {label}")
+    finally:
+        p.unlink()
+
+
+def test_creativework_status_and_evaluation_round_trips_canonical_jsonld():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph())
+    assert '"creativeWorkStatus": "done"' in jsonld
+    assert f'"{graph.EVALUATION_PRED}": {{\n        "@id": "{graph.DOCUMENT_NS}EXAMPLEDOCID"' in jsonld
+    p = _write_graph(jsonld)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == jsonld
+        e = next(e for e in reloaded.efforts if e.id == "shipped")
+        assert (e.status, e.evaluation) == ("done", "EXAMPLEDOCID")
+    finally:
+        p.unlink()
+
+
+def test_creativework_active_omits_status_and_evaluation():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph())
+    assert jsonld.count('"creativeWorkStatus"') == 1
+    assert jsonld.count(graph.EVALUATION_PRED) == 1
+
+
+def test_effort_status_line_is_the_contract_grammar():
+    from agentic import graph
+    golden = "_Status: Done · Implemented Document: `EXAMPLEDOCID`._"
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(_done_graph())
+        assert golden + "\n" in out
+        # placed after the goal, before deliverables; the active effort carries no line
+        assert out.index("**Goal:** ship it") < out.index(golden) < out.index(
+            "_Expected deliverables: tests._")
+        assert out.count("_Status:") == 1
+        assert "_Status: Done._\n" in render(_done_graph(evaluation=""))
+
+
+def test_loader_rejects_unknown_status():
+    from agentic import graph
+    for bad in ("in-progress", "Done"):
+        _expect_graph_error(graph.canonical_jsonld(_done_graph(status=bad)), bad)
+
+
+def test_loader_rejects_evaluation_without_done():
+    from agentic import graph
+    _expect_graph_error(graph.canonical_jsonld(_done_graph(status="")), "eval w/o done")
+
+
+def test_loader_rejects_dangling_evaluation_reference():
+    from agentic import graph
+    _expect_graph_error(graph.canonical_jsonld(_done_graph(evaluation="MISSINGDOC")),
+                        "dangling evaluation")
+
+
+def test_loader_rejects_duplicate_status_triples():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph()).replace(
+        '"creativeWorkStatus": "done"', '"creativeWorkStatus": ["done", "shipped"]')
+    _expect_graph_error(jsonld, "duplicate status")

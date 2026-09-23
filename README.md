@@ -440,7 +440,9 @@ deps (the deterministic verbs never import them):
 - **Mock (`mock`)** — in-process demo for tests and dry runs (`--backend mock`).
 
 Nothing writes the graph directly. Inspect any project with
-`python build/compile.py graph --project <slug>`.
+`python build/compile.py graph --project <slug>`. To mark an effort Done, run
+`python build/compile.py graph --project <slug> --complete-effort <id> [--evaluation-doc <doc-id>]`.
+This creates an Inbox candidate; the graph doesn't change until you accept it.
 
 ## Operator console
 
@@ -482,7 +484,7 @@ reference:
 | `adopt <path>` | Pull an in-place edit on a deployed file back into the registry. |
 | `harvest [--machine M] [--adopt-all]` | Digest of `harvest`-policy drift — proposals from self-improving tools. |
 | `review [--port N] [--no-open]` | The operator console (localhost; default port 8765). |
-| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. |
+| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. Add `--complete-effort <id> [--evaluation-doc <doc-id>]` to propose marking an effort Done (creates an Inbox candidate only). |
 | `mitos.py init` / `project add` / `connect` / `connectors` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) / list the available connectors — the separate, optional entrypoint. |
 | `mitos.py sync --machine M [init\|clone --hub URL\|status]` | Set up (`init`/`clone`) or run git-only overlay sync across your machines: pull → deploy → push. |
 | `mitos.py update --machine M [--dry-run] [--json]` | Unattended core pull → overlay pull → deploy; never force, prune, or push. `--json` prints one `schema: 1` outcome (see [managing state](docs/managing-state.md#automating-an-update)). |

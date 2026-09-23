@@ -76,12 +76,13 @@ def load_candidates(reg: Registry) -> list[dict]:
         project, doc_ids, removal_ids, effort_ids, effort_removal_ids = \
             _graph_candidate_targets(reg, meta, payload)
         doc_delta = _doc_delta(reg, meta, payload)
+        effort_delta = _effort_delta(reg, meta, payload)
         # A graph candidate with nothing to add/change and no in-flight removal is a
         # true no-op — the console de-emphasizes (never hides) Accept for it; the
         # server-side accept path is the real check either way.
         no_changes = (meta.get("kind") == "graph"
                      and not doc_delta.get("added") and not doc_delta.get("changed")
-                     and not doc_delta.get("removed"))
+                     and not doc_delta.get("removed") and not effort_delta)
         registry_path = meta.get("registry_path") or ""
         out.append({
             "id": folder.name,
@@ -96,6 +97,7 @@ def load_candidates(reg: Registry) -> list[dict]:
             "effort_ids": effort_ids,
             "effort_removal_ids": effort_removal_ids,
             "doc_delta": doc_delta,
+            "effort_delta": effort_delta,
             "no_changes": no_changes,
             "store": meta.get("store", ""),
             "source": meta.get("source") or {},
@@ -184,6 +186,35 @@ def _doc_delta(reg: Registry, meta: dict, payload: str) -> dict:
     return {"added": added, "changed": changed, "removed": removed}
 
 
+def _effort_delta(reg: Registry, meta: dict, payload: str) -> list[dict]:
+    """Completion-state changes a `kind: graph` candidate would make, per effort:
+    [{id, status: [old, new], evaluation: [old, new]}] for each effort whose status or
+    evaluation differs from the current graph. Scoped to `efforts_touched` when the candidate
+    records it — the fragment carries every effort, and only touched ones are merged. [] for a
+    non-graph or unparsable candidate."""
+    if meta.get("kind") != "graph":
+        return []
+    slug = meta.get("project") or ""
+    from . import graph as graphmod
+    try:
+        _name, _desc, _docs, efforts = graphmod.parse_fragment(payload, slug)
+    except graphmod.GraphError:
+        return []
+    touched = meta.get("efforts_touched")
+    existing_pg = reg.graphs.get(slug)
+    existing = {e.id: e for e in (existing_pg.efforts if existing_pg else [])}
+    out = []
+    for e in sorted(efforts, key=lambda e: e.id):
+        if touched is not None and e.id not in touched:
+            continue
+        prior = existing.get(e.id)
+        old = (prior.status, prior.evaluation) if prior else ("", "")
+        if old != (e.status, e.evaluation):
+            out.append({"id": e.id, "status": [old[0], e.status],
+                        "evaluation": [old[1], e.evaluation]})
+    return out
+
+
 def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, str]:
     """(current_registry_text, proposed_text, acceptable, note) for one candidate —
     derived exactly as accept would route it, so the diff shows what accept would do."""
@@ -195,7 +226,7 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
             return "", payload, False, f"unknown project {slug!r} for graph candidate"
         try:
             merged = _merged_graph(reg, slug, payload, meta.get("removals"),
-                                   meta.get("effort_removals"))
+                                   meta.get("effort_removals"), meta.get("efforts_touched"))
         except graphmod.GraphError as e:
             return "", payload, False, f"invalid graph fragment: {e}"
         current = (graphmod.canonical_jsonld(reg.graphs[slug])
@@ -480,13 +511,22 @@ def _graph_file(reg: Registry, slug: str) -> Path:
 
 def _merged_graph(reg: Registry, slug: str, fragment_text: str,
                   removals: list[str] | None = None,
-                  effort_removals: list[str] | None = None):
+                  effort_removals: list[str] | None = None,
+                  efforts_touched: list[str] | None = None):
     """The project graph as it WOULD be after accepting this candidate: the existing
     graph (or a fresh one) with the fragment's documents and efforts upserted,
     `removals` dropped, and `effort_removals` removed (resetting their child docs to
     project root). Pure — writes nothing. Raises graph.GraphError on an invalid
     fragment or a missing-name new project. Effort removals are applied before effort
-    and doc upserts so any re-parented docs in the fragment land cleanly."""
+    and doc upserts so any re-parented docs in the fragment land cleanly.
+
+    `efforts_touched` (from candidate meta) scopes the effort upserts: the fragment carries
+    every effort as it stood at propose time, so upserting them all would let a stale
+    candidate roll back an effort another candidate changed since (e.g. un-mark it Done).
+    An untouched effort is still added when the base lacks it, so the fragment's documents
+    keep a parent. None (a legacy candidate without the key) upserts every fragment effort.
+    The merged completion state is re-validated, so an accept can never land a dangling
+    evaluation reference."""
     from . import graph as graphmod
     name, desc, docs, efforts = graphmod.parse_fragment(fragment_text, slug)
     path = _graph_file(reg, slug)
@@ -512,7 +552,10 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
         if eid:
             base = graphmod.remove_effort(base, eid)
     from dataclasses import replace as _dc_replace
+    base_ids = {x.id for x in base.efforts}
     for e in efforts:
+        if efforts_touched is not None and e.id not in efforts_touched and e.id in base_ids:
+            continue
         # keep every parsed field (notably org_domain) — only normalise the parent IRI;
         # a positional reconstruction here would silently drop fields added later.
         base = graphmod.upsert_effort(base, _dc_replace(e, is_part_of=base.iri))
@@ -522,6 +565,9 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
         rid = str(rid).strip()
         if rid:
             base = graphmod.remove_document(base, rid)
+    doc_ids = {d.drive_id for d in base.documents}
+    for e in base.efforts:
+        graphmod.check_effort_status(e, doc_ids, f"{slug}.jsonld")
     base.path = path
     return base
 
@@ -551,7 +597,7 @@ def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[lis
             for rid in removals if rid in by_id]
     try:
         merged = _merged_graph(reg, slug, payload, meta.get("removals"),
-                               meta.get("effort_removals"))
+                               meta.get("effort_removals"), meta.get("efforts_touched"))
         write_text(_graph_file(reg, slug), graphmod.canonical_jsonld(merged))
     except graphmod.GraphError as e:
         return [], f"invalid graph fragment: {e}"
@@ -793,6 +839,18 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
             hidden_val = bool(e_dict["hidden"]) if "hidden" in e_dict else prev_hidden
             prev_kw = effective_efforts[eid].keywords if eid in effective_efforts else ""
             kw_val = str(e_dict.get("keywords", prev_kw)).strip()
+            # Completion state is preserve-when-absent too: a rename or visibility toggle
+            # must never silently un-mark a Done effort. An explicit "" clears it.
+            prev_status = effective_efforts[eid].status if eid in effective_efforts else ""
+            status_val = (str(e_dict["status"] or "").strip() if "status" in e_dict
+                          else prev_status)
+            prev_eval = effective_efforts[eid].evaluation if eid in effective_efforts else ""
+            eval_val = (str(e_dict["evaluation"] or "").strip() if "evaluation" in e_dict
+                        else prev_eval)
+            if status_val and status_val not in graphmod.KNOWN_STATUSES:
+                return {"ok": False, "error": f"unknown status {status_val!r} for effort "
+                                              f"{eid!r}; valid: "
+                                              f"{', '.join(graphmod.KNOWN_STATUSES)} (or empty)"}
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
@@ -802,7 +860,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 deliverables=_deliv,
                 requirements_coverage=_cover,
                 keywords=kw_val,
-                hidden=hidden_val)
+                hidden=hidden_val,
+                status=status_val,
+                evaluation=eval_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -813,6 +873,17 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
 
     if not docs and not removals and not efforts and not effort_removals:
         return {"ok": False, "error": "no documents to propose"}
+
+    # Referential integrity for completion state, against the graph as it would stand after
+    # this candidate: an evaluation needs status "done" and a document that still exists —
+    # so removing an effort's Implemented Document needs its evaluation cleared alongside.
+    effective_doc_ids = {d.drive_id for d in existing_pg.documents} if existing_pg else set()
+    effective_doc_ids = (effective_doc_ids | upsert_ids) - set(removals)
+    for e in effective_efforts.values():
+        try:
+            graphmod.check_effort_status(e, effective_doc_ids, "proposal")
+        except graphmod.GraphError as ex:
+            return {"ok": False, "error": str(ex)}
 
     name = (reg.projects[slug].get("name")) or slug
     desc = reg.graphs[slug].description if slug in reg.graphs else ""
@@ -837,6 +908,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     }
     if removals:
         meta["removals"] = removals
+    # Only these efforts merge on accept (see _merged_graph) — the fragment carries all of them.
+    meta["efforts_touched"] = sorted(upsert_effort_ids)
     if effort_removals:
         meta["effort_removals"] = effort_removals
     if reason:
@@ -2193,7 +2266,8 @@ def graph_index(reg: Registry) -> list[dict]:
                          "deliverables": list(e.deliverables),
                          "requirementsCoverage": list(e.requirements_coverage),
                          "keywords": e.keywords,
-                         "hidden": bool(e.hidden)}
+                         "hidden": bool(e.hidden),
+                         "status": e.status, "evaluation": e.evaluation}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,

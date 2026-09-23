@@ -371,6 +371,23 @@ function inboxListRow(c) {
 // flags store-B's documents) — the concise view; the full line diff over the merged
 // JSON-LD moves behind a <details> disclosure in candidateCard so re-running `connect`
 // on a whole store doesn't bury the reviewer in unchanged lines.
+// Completion-state changes a graph candidate makes (review._effort_delta) — surfaced so a
+// Done transition is never buried in the merged JSON-LD line diff.
+function effortDeltaSummary(c) {
+  const box = el("div", "doc-delta");
+  for (const x of c.effort_delta || []) {
+    const [was, now] = x.status || ["", ""];
+    const cls = now === "done" && was !== "done" ? "ins" : (was === "done" && now !== "done" ? "del" : "chg");
+    const r = el("div", "doc-delta-row " + cls);
+    r.append(el("span", "doc-delta-label",
+      `Effort ${x.id}: ${was || "active"} → ${now || "active"}`));
+    const ev = (x.evaluation || ["", ""])[1];
+    if (ev) r.append(el("code", "doc-delta-ids", "Implemented Document " + ev));
+    box.append(r);
+  }
+  return box;
+}
+
 function docDeltaSummary(c) {
   const box = el("div", "doc-delta");
   const delta = c.doc_delta || {};
@@ -453,6 +470,7 @@ function candidateCard(c) {
     card.append(el("div", "muted card-note", "New file — nothing to diff against; see the proposed text below."));
   } else if (c.kind === "graph") {
     card.append(docDeltaSummary(c));
+    if ((c.effort_delta || []).length) card.append(effortDeltaSummary(c));
     const fullDiff = el("details", "payload");
     fullDiff.append(el("summary", "", "Full graph diff (raw)"));
     fullDiff.append(diffTable(c.diff));
@@ -1988,6 +2006,8 @@ function renderHiddenDrawer(g) {
             goal: effort.goal || "",
             orgDomain: effort.orgDomain || "",
             deliverables: (effort.deliverables || []).slice(),
+            status: effort.status || "",
+            evaluation: effort.evaluation || "",
             requirementsCoverage: (effort.requirementsCoverage || []).slice(),
             hidden: !!effort.hidden,
           }
@@ -2250,6 +2270,13 @@ function renderRegistryRows(g) {
       nameSpan.append(covSpan);
     }
     head.append(nameSpan);
+    if (effort.status === "done") {
+      const done = el("span", "badge badge-done", "Done");
+      done.title = effort.evaluation
+        ? "Completed against Implemented Document " + effort.evaluation
+        : "Marked Done";
+      head.append(done);
+    }
     if (effort.hidden) {
       const badge = el("span", "badge", "hidden");
       badge.title = "Kept out of deployed AGENTS.md — the effort and its documents remain in the graph.";
@@ -2287,8 +2314,12 @@ function renderRegistryRows(g) {
                                goal: effort.goal || "",
                                orgDomain: effort.orgDomain || "",
                                deliverables: (effort.deliverables || []).slice(),
+            status: effort.status || "",
+            evaluation: effort.evaluation || "",
                                requirementsCoverage: (effort.requirementsCoverage || []).slice(),
-                               hidden: !!effort.hidden } };
+                               hidden: !!effort.hidden,
+                               status: effort.status || "",
+                               evaluation: effort.evaluation || "" } };
         renderRegistryRows(g);
       };
       actions.append(edit);
@@ -2327,6 +2358,13 @@ function renderRegistryRows(g) {
       const goalEl = el("div", "effort-goal");
       goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
       section.append(goalEl);
+    }
+
+    if (effort.status === "done" && effort.evaluation) {
+      const evalEl = el("div", "effort-evaluation");
+      evalEl.append(el("span", "muted", "Implemented Document: "),
+                    el("code", "", effort.evaluation));
+      section.append(evalEl);
     }
 
     // effort editor in-place
@@ -2531,6 +2569,19 @@ function editorCard() {
     wrap.append(sel); card.append(wrap); inputs.parentId = sel;
   }
 
+  // Offered only when the identity peek (openTweak) found an Implemented Document fragment
+  // naming an effort that exists here. Unticked by default: mapping a document alone never
+  // changes an effort's status.
+  let markDone = null;
+  if (vals.implementedFor && effMap[vals.implementedFor]) {
+    const wrap = el("div", "graph-field");
+    markDone = el("input"); markDone.type = "checkbox";
+    const lbl = el("label", "target-check");
+    lbl.append(markDone, document.createTextNode(
+      " Mark effort as Done with this Implemented Document"));
+    wrap.append(lbl); card.append(wrap);
+  }
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -2546,6 +2597,12 @@ function editorCard() {
     }
     const isAdd = !g.documents.some((d) => d.id === doc.id);
     draftUpsert(g.slug, doc, isAdd);
+    if (markDone && markDone.checked) {
+      const eff = effMap[vals.implementedFor];
+      const effIsAdd = !g.efforts.some((e) => e.id === eff.id);
+      const { _status, ...base } = eff;
+      effortDraftUpsert(g.slug, { ...base, status: "done", evaluation: doc.id }, effIsAdd);
+    }
     openEditor = null;
     renderGraph();
   };
@@ -2731,6 +2788,22 @@ function effortEditorCard(g) {
   hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
   inputs.hidden = hiddenBox;
 
+  // Done — the effort's completion state (schema:creativeWorkStatus). Proposing it lands in the
+  // Inbox like any edit; the Implemented Document it was completed against must be a document
+  // mapped in this project, and needs Done ticked (the server rejects either mismatch).
+  const doneWrap = el("div", "graph-field");
+  const doneBox = el("input"); doneBox.type = "checkbox"; doneBox.checked = vals.status === "done";
+  const doneLbl = el("label", "target-check");
+  doneLbl.append(doneBox, document.createTextNode(" Mark as Done"));
+  doneWrap.append(doneLbl); card.append(doneWrap);
+  inputs.status = doneBox;
+  const evalWrap = el("div", "graph-field");
+  evalWrap.append(el("label", "", "Implemented Document ID"));
+  const evalInp = el("input"); evalInp.type = "text"; evalInp.value = vals.evaluation || "";
+  evalInp.placeholder = "document ID in this project (optional)";
+  evalWrap.append(evalInp); card.append(evalWrap);
+  inputs.evaluation = evalInp;
+
   inputs.name.focus();
 
   const actions = el("div", "inline-actions");
@@ -2746,6 +2819,8 @@ function effortEditorCard(g) {
                      orgDomain: inputs.orgDomain ? inputs.orgDomain.value
                                                  : (vals.orgDomain || ""),
                      hidden: inputs.hidden.checked,
+                     status: inputs.status.checked ? "done" : "",
+                     evaluation: inputs.status.checked ? inputs.evaluation.value.trim() : "",
                      deliverables: (STATE.known_deliverables || [])
                        .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
                      requirementsCoverage: (STATE.known_coverage || [])
@@ -2790,6 +2865,10 @@ async function openTweak(g, d) {
     if (effortId && openEditor && openEditor.where === "staged"
         && openEditor.vals && openEditor.vals.id === d.id && !openEditor.vals.parentId) {
       openEditor.vals.parentId = effortId;
+      // The fragment names this document an Implemented Document for that effort — offer
+      // (never apply) the Done transition. Ticking it stages the effort edit into the SAME
+      // draft, so one proposal carries both the mapping and the status change.
+      openEditor.vals.implementedFor = effortId;
       renderStagedRows(g);
     }
   } catch (e) {
@@ -2852,6 +2931,10 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
       requirementsCoverage: x.requirementsCoverage || [],
     };
     if ("keywords" in x) item.keywords = x.keywords ?? "";
+    // Absent keys mean "leave as is" server-side (preserve-when-absent), so a draft that never
+    // saw the completion state cannot un-mark a Done effort; an explicit "" clears it.
+    if ("status" in x) item.status = x.status ?? "";
+    if ("evaluation" in x) item.evaluation = x.evaluation ?? "";
     return item;
   });
   const effortRemovals = Object.keys(d.effortRemove);
