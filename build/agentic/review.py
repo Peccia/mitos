@@ -769,7 +769,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         return {"ok": False, "error": f"unknown project {slug!r}"}
 
     # ── parse document dicts ──────────────────────────────────────────────────
-    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store` (an
+    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store`/`webUrl` (an
     # older console payload) must not wipe an existing annotation — preserve each from the
     # current graph when the key is absent.
     existing = {d.drive_id: d for d in (reg.graphs.get(slug).documents
@@ -787,8 +787,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 date_modified=str(d["dateModified"]).strip(),
                 is_part_of=parent_iri,
                 keywords=str(d.get("keywords", "")).strip(),
-                web_url=str(d.get("webUrl", "")).strip(),
-                doc_type=(str(d["type"]).strip() if "type" in d
+                web_url=(str(d["webUrl"]).strip() if "webUrl" in d
+                         else (prior.web_url if prior else "")),
+                doc_type=(graphmod.friendly_doc_type(str(d["type"])) if "type" in d
                           else (prior.doc_type if prior else "")),
                 store=(str(d["store"]).strip() if "store" in d
                       else (store or (prior.store if prior else "")))))

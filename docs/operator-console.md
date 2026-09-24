@@ -88,6 +88,15 @@ The **Knowledge Graph** tab is Stage 3 of mapping your workspace documents into 
 5. Click **Propose selected**. This writes a `kind: graph` candidate into your Inbox.
 6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which compiles into the Agentic Context roster on your next deploy.
 
+### 🖼️ Document type and images
+The document editor carries a **Type** field (`document`, `pdf`, `image`, …), pre-filled from
+the store's kind and sent with every proposal. A typed `png`, `jpg`, `image/png` (any
+PNG/JPEG/GIF/WebP form) is normalized server-side to `image` and stored as a
+`schema:ImageObject`. **Apply refuses an image with an empty Description** — for a picture,
+the description is the only text a harness can match it on. Images are edited, removed, and
+recovered exactly like any other document; editing never strips a stored link (`webUrl` is
+preserved when the editor omits it).
+
 ### 🗂️ Discovery and Recovery
 
 The left column is tabbed: **Discovery** (staged files not yet mapped — the checklist above) and

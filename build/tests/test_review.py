@@ -2957,3 +2957,80 @@ def test_app_js_renders_done_badge_and_evaluation_ref():
 def test_style_css_defines_badge_done_classes():
     css = _ui_src("style.css")
     assert ".badge.badge-done" in css and ".effort-evaluation" in css
+
+
+def _seed_and_accept(docs):
+    from agentic import review
+    treg, tmp = _temp_registry()
+    out = review.propose_graph_change(treg, "example-project", docs, reason="seed")
+    assert out["ok"], out
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    return tmp
+
+
+def _graph_doc(tmp, did):
+    from agentic import graph
+    pg = graph.load_project_graph(tmp / "registry" / "graph" / "example-project.jsonld")
+    return next(d for d in pg.documents if d.drive_id == did)
+
+
+def test_propose_graph_change_normalizes_image_type():
+    """A hand-typed `png`/`image/png` becomes the one `image` kind (stored as ImageObject)."""
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "whiteboard", "dateModified": "2026-01-01",
+         "type": "png"},
+        {"id": "I2", "name": "Shot", "description": "screenshot", "dateModified": "2026-01-01",
+         "type": "image/png"}])
+    assert _graph_doc(tmp, "I1").doc_type == "image"
+    assert _graph_doc(tmp, "I2").doc_type == "image"
+    raw = (tmp / "registry" / "graph" / "example-project.jsonld").read_text(encoding="utf-8")
+    assert '"@type": "ImageObject"' in raw
+
+
+def test_propose_graph_change_preserves_web_url_when_omitted():
+    """The console's editor sends no webUrl; an edit must not strip the stored link."""
+    from agentic import review
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "d", "dateModified": "2026-01-01",
+         "webUrl": "https://example.com/board", "type": "image"}])
+    reg = loader.load(tmp)
+    out = review.propose_graph_change(reg, "example-project", [
+        {"id": "I1", "name": "Board v2", "description": "d", "dateModified": "2026-01-02"}])
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    d = _graph_doc(tmp, "I1")
+    assert d.name == "Board v2" and d.web_url == "https://example.com/board"
+    assert d.doc_type == "image"
+
+
+def test_app_js_refuses_empty_description_for_image_type():
+    """Contract on the console: `type` rides stagedDoc and proposeGraphDraft, the editor has
+    a Type field, and Apply refuses an image with no description."""
+    import re
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    staged = app[app.index("function stagedDoc("):]
+    assert re.search(r"type:\s*d\.type", staged[:staged.index("\n}")])
+    draft = app[app.index("async function proposeGraphDraft("):]
+    assert "type: x.type" in draft[:draft.index("const removals")]
+    card = app[app.index("function editorCard("):]
+    card = card[:card.index("\nfunction ")]
+    assert 'field("type", "Type"' in card
+    assert "isImageKind(doc.type) && !doc.description" in card
+    guard = card.index("isImageKind(doc.type) && !doc.description")
+    assert card.index("return;", guard) < card.index("draftUpsert(", guard)
+
+
+def test_remove_image_object_moves_to_recovery():
+    """Removing an ImageObject runs the shared document path: gone from the graph,
+    auto-dismissed into Recovery."""
+    from agentic import graph, review
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "d", "dateModified": "2026-01-01",
+         "type": "image"}])
+    out = review.propose_graph_change(loader.load(tmp), "example-project", [],
+                                      removals=["I1"], reason="drop image")
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    pg = graph.load_project_graph(tmp / "registry" / "graph" / "example-project.jsonld")
+    assert "I1" not in {d.drive_id for d in pg.documents}
+    dismissed = review.load_dismissed(loader.load(tmp), "example-project")["documents"]
+    assert [x["id"] for x in dismissed] == ["I1"]

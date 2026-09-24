@@ -1696,9 +1696,15 @@ function renderStagedRows(g) {
   updateStagedMeta(g);
 }
 
+// Mirrors graph.friendly_doc_type's raster set: the server normalizes these to "image".
+const IMAGE_KINDS = new Set(["image", "png", "jpg", "jpeg", "gif", "webp",
+                             "image/png", "image/jpeg", "image/gif", "image/webp"]);
+function isImageKind(t) { return IMAGE_KINDS.has((t || "").trim().toLowerCase()); }
+
 function stagedDoc(d) {
   return { id: d.id, name: d.name, description: d.description || "",
-           dateModified: d.dateModified || todayISO(), keywords: d.keywords || "" };
+           dateModified: d.dateModified || todayISO(), keywords: d.keywords || "",
+           type: d.type || "" };
 }
 
 function updateStagedMeta(g) {
@@ -2492,7 +2498,8 @@ function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
       openEditor = { where: "registry", lockId: true, kind: "doc",
                      vals: { id: doc.id, name: doc.name,
                              description: doc.description || "", dateModified: doc.dateModified,
-                             keywords: doc.keywords || "", parentId: doc.parentId || "" } };
+                             keywords: doc.keywords || "", parentId: doc.parentId || "",
+                             type: doc.type || "" } };
       renderRegistryRows(g);
     };
     actions.append(edit);
@@ -2546,6 +2553,7 @@ function editorCard() {
   field("description", "Description", "one-line summary");
   field("dateModified", "Modified", "", "date");
   field("keywords", "Tags", "strategy, Q4, draft");
+  field("type", "Type", "document, pdf, image…");
 
   // Parent effort dropdown
   const draft = draftFor(g.slug);
@@ -2591,9 +2599,14 @@ function editorCard() {
                   description: inputs.description.value.trim(),
                   dateModified: inputs.dateModified.value.trim(),
                   keywords: inputs.keywords.value.trim(),
+                  type: inputs.type.value.trim(),
                   parentId: inputs.parentId ? inputs.parentId.value : "" };
     if (!doc.id || !doc.name || !doc.dateModified) {
       toast("Drive ID, Title, and Modified are required."); return;
+    }
+    if (isImageKind(doc.type) && !doc.description) {
+      toast("An image needs a description: it is the only text a harness can match it on.");
+      return;
     }
     const isAdd = !g.documents.some((d) => d.id === doc.id);
     draftUpsert(g.slug, doc, isAdd);
@@ -2919,7 +2932,9 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
   const d = draftFor(slug);
   const documents = [...Object.values(d.add), ...Object.values(d.edit)].map((x) => ({
     id: x.id, name: x.name, description: x.description || "",
-    dateModified: x.dateModified, keywords: x.keywords || "", parentId: x.parentId || "" }));
+    dateModified: x.dateModified, keywords: x.keywords || "", parentId: x.parentId || "",
+    // absent = preserve server-side, so a draft saved before the Type field can't wipe a kind
+    ...("type" in x ? { type: x.type || "" } : {}) }));
   const removals = Object.keys(d.remove);
   const efforts = [...Object.values(d.effortAdd), ...Object.values(d.effortEdit)].map((x) => {
     const item = {

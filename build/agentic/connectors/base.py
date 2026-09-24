@@ -24,40 +24,10 @@ class ConnectorError(Exception):
     """A connector could not authenticate or fetch — reported, never a silent failure."""
 
 
-# Friendly names for the store MIME types the fleet actually meets. Anything else falls
-# back to the subtype tail ("text/markdown" → "markdown", "vnd.google-apps.drawing" →
-# "drawing") so no store type is ever silently dropped.
-_MIME_FRIENDLY = {
-    "application/vnd.google-apps.document": "document",
-    "application/vnd.google-apps.spreadsheet": "spreadsheet",
-    "application/vnd.google-apps.presentation": "presentation",
-    "application/vnd.google-apps.form": "form",
-    "application/vnd.google-apps.folder": "folder",
-    "application/pdf": "pdf",
-}
-
-# Raster formats a vision model can view collapse to one kind, "image" — the graph
-# serializes that kind as schema:ImageObject. SVG/HEIC/TIFF are deliberately absent: they
-# keep their subtype and behave as generic documents.
-IMAGE_KIND = "image"
-_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
-
-
-def friendly_doc_type(raw: str) -> str:
-    """A short, agent-facing document kind from a store's raw MIME type. Already-short
-    values (a file extension from the local connector) pass through unchanged; empty
-    stays empty — the graph field is optional (omit-when-absent)."""
-    raw = (raw or "").strip()
-    if not raw:
-        return ""
-    if raw in _MIME_FRIENDLY:
-        return _MIME_FRIENDLY[raw]
-    if raw.lower() in _IMAGE_MIMES or raw.lower() in _IMAGE_EXTS or raw.lower() == IMAGE_KIND:
-        return IMAGE_KIND
-    if "/" in raw:
-        return raw.rsplit("/", 1)[-1].rsplit(".", 1)[-1] or raw
-    return raw
+# The MIME → friendly-kind mapping lives in the offline core (graph.py) so the console's
+# propose path can normalize a hand-typed kind without importing connector code
+# (invariant #11); re-exported here for the connectors that produce kinds.
+from ..graph import IMAGE_KIND, friendly_doc_type  # noqa: E402,F401
 
 
 class WorkspaceConnector(abc.ABC):
