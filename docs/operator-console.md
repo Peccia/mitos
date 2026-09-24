@@ -89,10 +89,14 @@ The **Knowledge Graph** tab is Stage 3 of mapping your workspace documents into 
 6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which compiles into the Agentic Context roster on your next deploy.
 
 ### 🖼️ Document type and images
-The document editor carries a **Type** field (`document`, `pdf`, `image`, …), pre-filled from
-the store's kind and sent with every proposal. A typed `png`, `jpg`, `image/png` (any
-PNG/JPEG/GIF/WebP form) is normalized server-side to `image` and stored as a
-`schema:ImageObject`. **Apply refuses an image with an empty Description** — for a picture,
+The document editor carries a **Type** dropdown over the supported kinds (`document`,
+`spreadsheet`, `presentation`, `form`, `pdf`, `markdown`, `image` — `graph.KNOWN_DOC_TYPES`).
+A document added by hand with **+ Doc** starts on `document`; an existing or staged one keeps
+the kind its store reported (an untyped one shows `(unset)` rather than being typed silently
+on edit, and a store kind outside the list stays selectable). Only non-`document` kinds are
+labeled in the generated `AGENTS.md`/`AGENTS_DETAILS.md` lines. A PNG/JPEG/GIF/WebP kind
+arriving from a store or the API (`png`, `image/png`, …) is normalized server-side to `image`
+and stored as a `schema:ImageObject`. **Apply refuses an image with an empty Description** — for a picture,
 the description is the only text a harness can match it on. Images are edited, removed, and
 recovered exactly like any other document; editing never strips a stored link (`webUrl` is
 preserved when the editor omits it).

@@ -2076,7 +2076,8 @@ function buildRegistryPane(container, g, open) {
   addDocBtn.title = "Map a document by hand (e.g. a Drive ID that isn't staged)";
   addDocBtn.onclick = () => {
     openEditor = { where: "registry", lockId: false, kind: "doc",
-                   vals: { id: "", name: "", description: "", dateModified: todayISO(), keywords: "", parentId: "" } };
+                   vals: { id: "", name: "", description: "", dateModified: todayISO(), keywords: "", parentId: "",
+                           type: (STATE.known_doc_types || ["document"])[0] } };
     renderRegistryRows(g);
   };
   const addEffortBtn = el("button", "ghost tiny", "+ Work");
@@ -2553,7 +2554,24 @@ function editorCard() {
   field("description", "Description", "one-line summary");
   field("dateModified", "Modified", "", "date");
   field("keywords", "Tags", "strategy, Q4, draft");
-  field("type", "Type", "document, pdf, image…");
+  // Type dropdown over the supported kinds (a new document arrives preset to "document").
+  // An existing entry keeps what it has: an untyped one offers "(unset)" rather than being
+  // silently typed on edit, and a kind a store reported outside the list stays selectable.
+  {
+    const wrap = el("div", "graph-field");
+    wrap.append(el("label", "", "Type"));
+    const sel = el("select", "graph-select");
+    const cur = vals.type || "";
+    const kinds = [...(STATE.known_doc_types || ["document"])];
+    if (cur && !kinds.includes(cur)) kinds.push(cur);
+    if (!cur) kinds.unshift("");
+    for (const k of kinds) {
+      const opt = el("option"); opt.value = k; opt.textContent = k || "(unset)";
+      if (k === cur) opt.selected = true;
+      sel.append(opt);
+    }
+    wrap.append(sel); card.append(wrap); inputs.type = sel;
+  }
 
   // Parent effort dropdown
   const draft = draftFor(g.slug);

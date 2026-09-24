@@ -2365,6 +2365,9 @@ def state(reg: Registry) -> dict:
         # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
         # term to the registry constant surfaces in the UI with no client edit.
         "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        # The document kinds the editor's Type dropdown offers (graph.KNOWN_DOC_TYPES), first
+        # entry the default for a hand-mapped document.
+        "known_doc_types": list(graphmod.KNOWN_DOC_TYPES),
         # Which skill(s) declare `delivers: <term>` — the authoring-time answer to "does anything
         # actually produce this?", so the effort editor can say so where the declaration is made.
         # Registry-wide, deliberately NOT per machine: `deploy --dry-run` already reports the exact

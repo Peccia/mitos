@@ -2353,3 +2353,20 @@ def test_agents_md_image_hint_line():
     assert g.IMAGE_HINT not in g.project_index_markdown(with_img)
     assert ("Knowledge-graph documents for this project. Resolve a document by its ID.\n\n- "
             in g.project_full_markdown(plain, emit_heading=False))
+    # the default kind is never labeled; every other kind is
+    assert "`D1` (2026-01-02)" in g.project_full_markdown(with_img)
+
+
+def test_only_non_document_kinds_are_labeled():
+    """`document` is the default kind, so its line carries the date alone; a sheet, a pdf or
+    a picture keeps its `· <type>` label in both the details and the full views."""
+    from agentic import graph as g
+    pg = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document"),
+        g.Document("S1", "Budget", "b", "2026-01-03", doc_type="spreadsheet"),
+        g.Document("U1", "Notes", "n", "2026-01-04")])
+    for render in (g.project_details_markdown, g.project_full_markdown):
+        out = render(pg)
+        assert "`D1` (2026-01-02) —" in out and "· document" not in out
+        assert "`S1` (2026-01-03 · spreadsheet)" in out
+        assert "`U1` (2026-01-04) —" in out

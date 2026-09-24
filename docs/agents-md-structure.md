@@ -63,7 +63,10 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    (`org_routing=False`): they instruct nobody to load a skill, and that surface is exactly the
    harness that must produce the deliverables.
 
-   A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. When
+   A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. The
+   `· <type>` label appears only for a kind other than the default `document` (a sheet, a
+   pdf, a picture — the kinds that change which tool to reach for); a plain document, or an
+   untyped one, shows the date alone. When
    any document in the project is typed `image` (a `schema:ImageObject` — a picture a
    vision model can view), the details and full views add ONE line directly after the
    connection intro: `_Entries typed `image` are pictures: open one by its ID as an

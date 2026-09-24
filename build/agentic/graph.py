@@ -232,6 +232,15 @@ _IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
+# The kinds the console offers when a document is mapped by hand (its Type dropdown), in
+# display order. "document" is the default kind: it is the one the generated doc lines leave
+# UNLABELED, so only an entry an agent must open differently (a sheet, a picture) spends
+# tokens on a type. Enumeration can still record any other kind a store reports.
+DEFAULT_DOC_KIND = "document"
+KNOWN_DOC_TYPES = (DEFAULT_DOC_KIND, "spreadsheet", "presentation", "form", "pdf",
+                   "markdown", IMAGE_KIND)
+
+
 def friendly_doc_type(raw: str) -> str:
     """A short, agent-facing document kind from a store's raw MIME type. Already-short
     values (a file extension from the local connector) pass through unchanged; empty
@@ -716,11 +725,13 @@ def _cap(docs: list, limit: int = INDEX_LIMIT) -> tuple[list, int]:
 
 def _concise_entry(d: Document) -> str:
     """One condensed bullet per document: title, document ID, modified date (plus the
-    document type when known — the tool-selection hint), then description and tags only
-    when present. No URL — the document store resolves by ID.
+    document type when it is known AND not the default `document` — the tool-selection
+    hint only earns its tokens when it changes which tool to reach for), then description
+    and tags only when present. No URL — the document store resolves by ID.
     Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference,
     so the claude-code and mitos-agent surfaces render identically."""
-    meta = f"{d.date_modified} · {d.doc_type}" if d.doc_type else d.date_modified
+    labeled = d.doc_type and d.doc_type != DEFAULT_DOC_KIND
+    meta = f"{d.date_modified} · {d.doc_type}" if labeled else d.date_modified
     line = f"- **{d.name}** `{d.drive_id}` ({meta})"
     if d.description:
         line += f" — {d.description}"

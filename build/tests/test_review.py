@@ -3014,7 +3014,8 @@ def test_app_js_refuses_empty_description_for_image_type():
     assert "type: x.type" in draft[:draft.index("const removals")]
     card = app[app.index("function editorCard("):]
     card = card[:card.index("\nfunction ")]
-    assert 'field("type", "Type"' in card
+    assert 'wrap.append(el("label", "", "Type"))' in card and "inputs.type = sel" in card
+    assert "STATE.known_doc_types" in card
     assert "isImageKind(doc.type) && !doc.description" in card
     guard = card.index("isImageKind(doc.type) && !doc.description")
     assert card.index("return;", guard) < card.index("draftUpsert(", guard)
@@ -3034,3 +3035,17 @@ def test_remove_image_object_moves_to_recovery():
     assert "I1" not in {d.drive_id for d in pg.documents}
     dismissed = review.load_dismissed(loader.load(tmp), "example-project")["documents"]
     assert [x["id"] for x in dismissed] == ["I1"]
+
+
+def test_add_document_type_dropdown_defaults_to_document():
+    """The console's Type dropdown offers graph.KNOWN_DOC_TYPES (served in state), and a
+    hand-added document starts on the first of them, `document`."""
+    from agentic import graph, review
+    treg, _tmp = _temp_registry()
+    assert review.state(treg)["known_doc_types"] == list(graph.KNOWN_DOC_TYPES)
+    assert graph.KNOWN_DOC_TYPES[0] == graph.DEFAULT_DOC_KIND == "document"
+    assert graph.IMAGE_KIND in graph.KNOWN_DOC_TYPES
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    add = app[app.index('"+ Doc"'):]
+    add = add[:add.index("renderRegistryRows(g)")]
+    assert 'type: (STATE.known_doc_types || ["document"])[0]' in add
