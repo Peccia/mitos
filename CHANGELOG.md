@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Pictures are first-class entries in the knowledge graph.** A PNG, JPEG, GIF or WebP file is now typed `image` and stored as a `schema:ImageObject` — a reference and a description, never the picture itself. Its line in the generated `AGENTS.md`/`AGENTS_DETAILS.md` reads `(<date> · image)`, and a project that holds one gets a single extra line telling the harness to open such entries as images, not text. Projects without pictures compile byte-for-byte as before. SVG, HEIC and TIFF keep their own type, because a vision model cannot view them.
+- **The console's document editor has a Type field.** Typing `png` or `image/png` stores `image`. An image cannot be applied with an empty description — for a picture, the description is the only text a harness can match it on.
+- **The `gws` skill (2.2.0) teaches harnesses how to look at a picture:** fetch a download URL (never the base64 content), rewrite only a loopback host to your configured server, save to a temp folder outside any checkout, view, delete, and never paste the URL anywhere — it is a one-hour bearer link. Redeploy to pick it up.
+
+### Fixed
+- Editing a document in the console no longer erases its stored link. The editor never sent `webUrl`, so every edit wiped it; an omitted link is now kept.
+
 ### Fixed
 - A `context.builder` project node (Mitos self-hosting) on a machine that deploys `mitos-agent` now lists its cloned repos as the generated `## Navigation` roster, like every other project node. Before, the agent host had the checkouts on disk but its node named none, so Mitos Agent grounded every session on zero code. Recompile and redeploy the agent host to pick it up; nothing else changes.
 
