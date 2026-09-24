@@ -27,6 +27,13 @@ PECCIA = "http://peccia.net/"
 PROJECT_NS = PECCIA + "project/"
 DOCUMENT_NS = PECCIA + "document/"
 CREATIVE_WORK_NS = PECCIA + "creativework/"
+# A document whose kind is "image" is a picture a vision model can view; it serializes as
+# schema:ImageObject (no additionalType). Mirrors connectors.base.IMAGE_KIND. Raster
+# extensions found as additionalType on a hand-written node normalize to it on read.
+IMAGE_KIND = "image"
+_IMAGE_KINDS = {"image", "png", "jpg", "jpeg", "gif", "webp"}
+IMAGE_HINT = ("_Entries typed `image` are pictures: open one by its ID as an image, never "
+              "as text (see your document store skill's Images section)._")
 # org_domain is not a schema.org term — an explicit http://peccia.net/ predicate (rather
 # than borrowing an ill-fitting schema.org property) keeps it honest that this is Mitos's
 # own vocabulary: an effort's org-domain tag names which org-* skill governs work on
@@ -299,7 +306,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                 f"{label}: blank node found — every node must be an IRI "
                 f"(give it an http://peccia.net/ id)")
 
-    allowed = {str(SDO("Project")), str(SDO("DigitalDocument")), str(SDO("CreativeWork"))}
+    allowed = {str(SDO("Project")), str(SDO("DigitalDocument")), str(SDO("CreativeWork")),
+               str(SDO("ImageObject"))}
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
@@ -315,8 +323,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
         if unknown:
             raise GraphError(
                 f"{label}: node {subj} has unsupported type(s) {sorted(unknown)} — only "
-                f"schema:Project, schema:CreativeWork, and schema:DigitalDocument "
-                f"are allowed")
+                f"schema:Project, schema:CreativeWork, schema:DigitalDocument, and "
+                f"schema:ImageObject are allowed")
         s = str(subj)
         if str(SDO("Project")) in types:
             if not s.startswith(PROJECT_NS):
@@ -369,11 +377,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     effort_iris = {r[0] for r in raw_efforts}
 
-    # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
+    # ── Pass 2: validate DigitalDocument / ImageObject nodes ─────────────────
+    # An ImageObject is a document that is a picture: same identifier/IRI/isPartOf
+    # invariants, same Document record, doc_type "image".
     docs: list[tuple[str, Document]] = []
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
-        if str(SDO("DigitalDocument")) not in types:
+        is_image = str(SDO("ImageObject")) in types
+        if str(SDO("DigitalDocument")) not in types and not is_image:
             continue
         s = str(subj)
         if not s.startswith(DOCUMENT_NS):
@@ -406,6 +417,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
         web_url = str(url_val) if url_val is not None else ""
         type_val = g.value(subj, SDO("additionalType"))
         doc_type = str(type_val) if type_val is not None else ""
+        if (is_image and not doc_type) or doc_type.lower() in _IMAGE_KINDS:
+            doc_type = IMAGE_KIND
         store_val = g.value(subj, URIRef(STORE_PRED))
         store = str(store_val) if store_val is not None else ""
         docs.append((part_of_str, Document(drive_id=drive_id, name=name,
@@ -535,7 +548,7 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
         doc_node: dict = {
             "@id": d.iri,
-            "@type": "DigitalDocument",
+            "@type": "ImageObject" if d.doc_type == IMAGE_KIND else "DigitalDocument",
             "identifier": d.drive_id,
             "name": d.name,
             "description": d.description,
@@ -546,7 +559,7 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             doc_node["url"] = d.web_url
         if d.keywords:
             doc_node["keywords"] = d.keywords
-        if d.doc_type:
+        if d.doc_type and d.doc_type != IMAGE_KIND:
             doc_node["additionalType"] = d.doc_type
         if d.store:
             doc_node[STORE_PRED] = d.store
@@ -607,7 +620,8 @@ SAVED_QUERIES: dict[str, str] = {
     "documents": """
         PREFIX schema: <https://schema.org/>
         SELECT ?id ?name ?description ?modified WHERE {
-            ?doc a schema:DigitalDocument ;
+            VALUES ?t { schema:DigitalDocument schema:ImageObject }
+            ?doc a ?t ;
                  schema:identifier ?id ;
                  schema:name ?name ;
                  schema:description ?description ;
@@ -780,7 +794,7 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
 
 def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool,
                intro: str, entry_fn, include_effort_desc: bool,
-               org_routing: bool = True) -> str:
+               org_routing: bool = True, image_hint: bool = False) -> str:
     """Shared renderer for all three document blocks — the connection-section grammar.
 
     The connection heading (`<Name> (`key`)`) is emitted at `level` (`#` for the standalone
@@ -795,6 +809,8 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
     if emit_heading:
         lines += [f"{h} {heading}", ""]
     lines += [intro, ""]
+    if image_hint and any(d.doc_type == IMAGE_KIND for d in pg.documents):
+        lines += [IMAGE_HINT, ""]
     visible_efforts = [e for e in pg.efforts if not e.hidden]
     groups, _has_efforts = _grouped(pg)
     has_visible_efforts = bool(visible_efforts)
@@ -882,7 +898,7 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=True, intro=intro, entry_fn=entry_fn,
                       org_routing=org_routing,
-                      include_effort_desc=True)
+                      include_effort_desc=True, image_hint=True)
 
 
 def project_full_markdown(pg: ProjectGraph,
@@ -921,7 +937,8 @@ def project_full_markdown(pg: ProjectGraph,
 
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
-                      include_effort_desc=True, org_routing=org_routing)
+                      include_effort_desc=True, org_routing=org_routing,
+                      image_hint=True)
 
 
 def _by_recency(documents: list) -> list:

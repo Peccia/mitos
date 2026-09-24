@@ -63,6 +63,14 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    (`org_routing=False`): they instruct nobody to load a skill, and that surface is exactly the
    harness that must produce the deliverables.
 
+   A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. When
+   any document in the project is typed `image` (a `schema:ImageObject` — a picture a
+   vision model can view), the details and full views add ONE line directly after the
+   connection intro: `_Entries typed `image` are pictures: open one by its ID as an
+   image, never as text (see your document store skill's Images section)._`
+   (`graph.IMAGE_HINT`). The titles-only index never carries it, and a project without
+   images renders byte-identically.
+
 ## Local vs. connection: the split that keeps context lean
 
 `## Navigation` is **local only** (files, repos, routing); store folder paths live in the

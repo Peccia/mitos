@@ -2331,3 +2331,25 @@ def test_agent_only_skills_have_no_harness_shell_steps():
                     problems.append(f"{path.parent.name}: body line {n}: `{s}` "
                                     f"(agent-only skill runs a shell step; hand it to the owner)")
     assert not problems, "\n".join(problems)
+
+
+def test_agents_md_image_hint_line():
+    """A project holding an image renders `(date · image)` and one hint line after the
+    intro in the details and full views; the titles-only index never carries it, and a
+    project without images renders byte-identically to before (no hint)."""
+    from agentic import graph as g
+    plain = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document")])
+    with_img = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document"),
+        g.Document("I1", "Board", "whiteboard", "2026-01-01", doc_type="image")])
+    for render in (g.project_details_markdown, g.project_full_markdown):
+        out = render(with_img)
+        assert out.count(g.IMAGE_HINT) == 1
+        intro_at = out.index("Resolve a document by its ID.")
+        assert intro_at < out.index(g.IMAGE_HINT) < out.index("Spec")
+        assert "(2026-01-01 · image)" in out
+        assert g.IMAGE_HINT not in render(plain)
+    assert g.IMAGE_HINT not in g.project_index_markdown(with_img)
+    assert ("Knowledge-graph documents for this project. Resolve a document by its ID.\n\n- "
+            in g.project_full_markdown(plain, emit_heading=False))

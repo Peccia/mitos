@@ -36,6 +36,13 @@ _MIME_FRIENDLY = {
     "application/pdf": "pdf",
 }
 
+# Raster formats a vision model can view collapse to one kind, "image" — the graph
+# serializes that kind as schema:ImageObject. SVG/HEIC/TIFF are deliberately absent: they
+# keep their subtype and behave as generic documents.
+IMAGE_KIND = "image"
+_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+
 
 def friendly_doc_type(raw: str) -> str:
     """A short, agent-facing document kind from a store's raw MIME type. Already-short
@@ -46,6 +53,8 @@ def friendly_doc_type(raw: str) -> str:
         return ""
     if raw in _MIME_FRIENDLY:
         return _MIME_FRIENDLY[raw]
+    if raw.lower() in _IMAGE_MIMES or raw.lower() in _IMAGE_EXTS or raw.lower() == IMAGE_KIND:
+        return IMAGE_KIND
     if "/" in raw:
         return raw.rsplit("/", 1)[-1].rsplit(".", 1)[-1] or raw
     return raw

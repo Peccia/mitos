@@ -366,14 +366,16 @@ orphan case is mapped in [Managing state & drift](docs/managing-state.md).
 ## The knowledge graph + connectors
 
 Mitos keeps a **lean [schema.org](https://schema.org/) index** of where each project's
-authoritative documents live — two types (`Project`, `DigitalDocument`), keyed by document ID,
+authoritative documents live — `Project`, `DigitalDocument` (and `ImageObject` for a picture), keyed by document ID,
 storing references and short descriptions, never document bodies. It routes an agent to the
 *correct, current* document instead of letting it guess. Each document may carry an optional
 `additionalType` — a friendly kind (`spreadsheet`, `document`, `pdf`, …) captured from the
 store's MIME type at enumeration — rendered beside the modified date in the deployed doc
 lines so the agent picks the right tool (sheets vs docs) before touching the store. Absent
 on older graphs, and everything still renders — the field is omit-when-absent like `url`
-and `keywords`.
+and `keywords`. PNG/JPEG/GIF/WebP files collapse to the kind `image` and serialize as a
+`schema:ImageObject` node (no `additionalType`) — a reference and a description, never the
+image bytes; the deployed doc lines then tell the harness to open such an entry as an image.
 
 You map documents into the graph through **one human-gated valve** — a `kind: graph` candidate
 in `inbox/` that you accept in the console. Building it is **three independent stages**, so the

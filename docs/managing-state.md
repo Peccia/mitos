@@ -107,7 +107,9 @@ when its deployed copy drifts:
   **roster** (`AGENTS.md` at the tree root) and, on the agents-md/Mitos-Agent side, each project's
   `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
   **overwritten silently** and are **non-adoptable** (there's no registry partial to route an edit
-  back to — edit `registry/graph/<slug>.jsonld` instead).
+  back to — edit `registry/graph/<slug>.jsonld` instead). A picture lives there as a
+  `schema:ImageObject` node beside the `DigitalDocument`s — same identifier/`isPartOf`
+  rules and the same accept/removal path, a reference only (never image bytes).
 
   A project's **`AGENTS.md`** is a special case: it is the project's prose (a registry partial,
   **`protect`**) followed by a generated document block. The two are split in the lockfile, not by

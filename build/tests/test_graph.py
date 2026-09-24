@@ -411,6 +411,48 @@ def test_friendly_doc_type_mapping():
     assert friendly_doc_type("text/markdown") == "markdown"
     assert friendly_doc_type("md") == "md"
     assert friendly_doc_type("") == ""
+    # vision-viewable rasters collapse to one kind; other image subtypes keep theirs
+    for raw in ("image/png", "image/jpeg", "image/gif", "image/webp",
+                "png", "jpg", "jpeg", "gif", "webp", "PNG"):
+        assert friendly_doc_type(raw) == "image", raw
+    assert friendly_doc_type("image/svg+xml") == "svg+xml"
+    assert friendly_doc_type("image/heic") == "heic"
+
+
+def test_image_object_canonical_roundtrip():
+    """An image document serializes as schema:ImageObject with no additionalType, and
+    round-trips byte-identically; only refs are stored (no binary). A hand-written
+    DigitalDocument typed `png` normalizes to the image kind on read."""
+    import json
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="example-project", name="Example Project", description="d",
+                            documents=[graph.Document("imgID", "Board", "whiteboard photo",
+                                                      "2026-01-01", doc_type="image"),
+                                       _doc("docID", "Spec", "s", "2026-01-02")])
+    once = graph.canonical_jsonld(pg)
+    nodes = {n.get("identifier"): n for n in json.loads(once)["@graph"]}
+    assert nodes["imgID"]["@type"] == "ImageObject"
+    assert "additionalType" not in nodes["imgID"]
+    assert nodes["docID"]["@type"] == "DigitalDocument"
+    assert set(nodes["imgID"]) <= {"@id", "@type", "identifier", "name", "description",
+                                   "dateModified", "isPartOf", "url", "keywords",
+                                   graph.STORE_PRED}
+    p = _write_graph(once)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert next(d for d in reloaded.documents if d.drive_id == "imgID").doc_type == "image"
+        assert graph.canonical_jsonld(reloaded) == once
+        assert [r["id"] for r in graph.run_query(reloaded, "documents")].count("imgID") == 1
+    finally:
+        p.unlink()
+    legacy = once.replace('"@type": "ImageObject",', '"@type": "DigitalDocument",\n'
+                          '      "additionalType": "png",')
+    p = _write_graph(legacy)
+    try:
+        assert next(d for d in graph.load_project_graph(p).documents
+                    if d.drive_id == "imgID").doc_type == "image"
+    finally:
+        p.unlink()
 
 
 def test_graph_web_url_round_trip_and_drive_fallback():
