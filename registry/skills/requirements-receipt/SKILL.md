@@ -1,7 +1,7 @@
 ---
 name: requirements-receipt
 description: "After an implementation is complete, report per-requirement outcomes against the requirements document that was handed over, as a return record Mitos can read"
-version: 1.1.0
+version: 1.2.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
@@ -58,8 +58,8 @@ Use exactly these words. Nothing else is accepted:
 
 | Outcome | Use when |
 |---|---|
-| `satisfied` | Done. |
-| `partial` | Some of it. Say which part in a `claim:`. |
+| `satisfied` | Done — as written, or as read (see `reading:` below). |
+| `partial` | Some of it is not built, or not yet verified. Say which part in a `claim:`. |
 | `not-addressed` | Not attempted. |
 | `blocked` | Attempted and prevented. Give the reason in a `claim:`. |
 | `contested` | **You believe the requirement itself is wrong or cannot hold.** |
@@ -84,9 +84,28 @@ When in doubt, it is a `claim:`. An acceptance that reads `Given …, when …, 
 check: its `evidence:` is the test that does the *when* and asserts the *then*.
 
 A requirement may carry both — evidence for the part that is proven, a claim for the part
-that is not.
+that is not. It may carry **several `evidence:` lines**, one pointer each; every one is kept and
+every one is checked, so a single pointer that does not exist demotes the whole row.
 
-## 4. Write the record
+## 4. Say what you built against, when it was not the text as written
+
+Some requirements cannot hold as written — "the same responses on every harness" when the
+models differ. When the plan built something else instead, add a **`reading:`** line: the
+plan's working interpretation, **copied verbatim** from the milestones matrix's `Reading`
+column (or the plan's "Cannot hold as written" entry). Do not write a new one.
+
+A requirement built as read is `satisfied` with a `reading:` — not `partial`. `partial` is kept
+for work that is not built or not yet verified, so the owner can tell a decision from a
+shortfall.
+
+```markdown
+- [CON-3] satisfied
+  reading: one procedure, two tools: in-memory decode on the agent, download URL on coding harnesses
+  evidence: registry/skills/gws/SKILL.md
+  evidence: tests/test_ground.py::test_mcp_fetch_parses_image_marker
+```
+
+## 5. Write the record
 
 Write to **`{{returns_root}}/<run>/requirements-receipt.md`**.
 
@@ -134,17 +153,17 @@ Rules the reader enforces, so getting these wrong means the record is refused:
 - Ids are **bracketed**: `[FR-1]`, not `FR-1`. This is why `NFR-1` is never read as `FR-1`.
 - One bullet per requirement, and **never the same id twice** — two verdicts for one id is
   refused rather than resolved by line order.
-- `evidence:` / `claim:` go on their own indented lines under their bullet.
+- `evidence:` / `claim:` / `reading:` go on their own indented lines under their bullet.
 - Report **every** requirement the document listed. A requirement you omit is not neutral;
   it is a gap in the answer.
 
-## 5. The Unrequested section
+## 6. The Unrequested section
 
 List anything you built that no requirement asked for. Be honest and specific here — this
 is frequently the most valuable part of the record, because it is where the requirement
 nobody wrote down shows up. If there was nothing, omit the section.
 
-## 6. The `locator:` field
+## 7. The `locator:` field
 
 `locator:` names where this record ALSO landed — the shared connection (next section), or an issue
 tracker or wiki if you filed it there too:
@@ -156,7 +175,7 @@ locator: https://example.atlassian.net/browse/PROJ-412
 The local record is still written, always. It is the source of truth; the remote copy is a
 convenience. Mitos never makes a network call to find out what you did.
 
-## 7. Publish to the shared connection
+## 8. Publish to the shared connection
 
 The local record is a file on one machine. The owner's planning harness, and anyone reviewing this
 work later, read the shared document store — so put a copy there too.
@@ -252,7 +271,7 @@ names none of them, and nothing downstream can find a document by guessing at a 
 unreported id is a record the owner has to go looking for. One line per document, and print them
 even when everything went perfectly.
 
-## 8. Report back
+## 9. Report back
 
 Tell the owner, in one or two lines: the run folder you wrote, how many requirements you
 reported, and — separately and explicitly — anything you marked `contested` or `blocked`.
