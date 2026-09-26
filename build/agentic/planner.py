@@ -16,7 +16,7 @@ import yaml
 from . import render
 from .io import safe_rel
 from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_local_path,
-                     _repo_basename, document_stores)
+                     _repo_basename, document_stores, selected_agents)
 
 # A dynamically discovered agentic branch: any partial whose logical key matches
 # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch (see
@@ -1343,6 +1343,24 @@ def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
                 drift_policy=policy, sources=[skill.rel],
             ))
             outputs += _skill_resource_outputs(skill, resources, "mitos-agent", base_dir, policy)
+    # agents
+    ag = spec.get("agents")
+    if home and ag:
+        agent_dir = f"{home.rstrip('/')}/{ag.get('subdir', 'agents')}"
+        policy = ag.get("drift_policy", "harvest")
+        for agent_name in selected_agents(reg, reg.machines[machine_name]):
+            agent = reg.agents[agent_name]
+            deploy_path = f"{agent_dir}/{agent.name}.md"
+            try:
+                agent_rel = agent.source.relative_to(reg.root).as_posix()
+            except (ValueError, AttributeError):
+                agent_rel = str(agent.source)
+            outputs.append(Output(
+                target="mitos-agent", kind="text", deploy_path=deploy_path,
+                dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
+                content=render.render_agent(agent),
+                drift_policy=policy, sources=[agent_rel],
+            ))
     # mcp.json — a WHOLE file Mitos owns (invariant #7 does not apply to this lane), carrying
     # every wired store keyed by server name so §5.4's resolve(id, store) can pick the right
     # server for a multi-store project. No surgical merge, no owned_keys.

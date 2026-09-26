@@ -2370,3 +2370,84 @@ def test_only_non_document_kinds_are_labeled():
         assert "`D1` (2026-01-02) —" in out and "· document" not in out
         assert "`S1` (2026-01-03 · spreadsheet)" in out
         assert "`U1` (2026-01-04) —" in out
+
+
+def test_plan_mitos_agent_emits_agents():
+    import copy
+    from agentic import planner
+    from agentic.loader import Agent
+    rig = _connected_rig("example-linux")
+    rig.agents["crm"] = Agent(
+        name="crm",
+        description="Personal CRM agent",
+        goal="Manage personal relationships and notes",
+        skills=["gws"],
+        body="# Instructions\nManage contacts.\n",
+        source=Path("registry/agents/crm.md")
+    )
+    outs = planner.plan_machine(rig, "example-linux")
+    agent_outs = [o for o in outs if o.deploy_path.endswith("agents/crm.md")]
+    assert len(agent_outs) == 1
+    out = agent_outs[0]
+    assert out.target == "mitos-agent"
+    assert out.drift_policy == "harvest"
+    assert out.deploy_path.endswith("/agents/crm.md")
+    expected = (
+        "---\n"
+        "name: crm\n"
+        "description: Personal CRM agent\n"
+        "goal: Manage personal relationships and notes\n"
+        "skills:\n"
+        "- gws\n"
+        "---\n\n"
+        "# Instructions\n"
+        "Manage contacts.\n"
+    )
+    assert out.content == expected
+
+
+def test_no_agents_output_byte_identical():
+    import copy
+    from agentic import planner
+    rig = copy.deepcopy(reg)
+    rig.agents = {}
+    outs = planner.plan_machine(rig, "example-linux")
+    assert not any("/agents/" in o.deploy_path for o in outs)
+
+
+def test_deselected_agent_then_prune():
+    import json as _json
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    from agentic.loader import Agent
+    reg2 = _connected_rig("example-linux")
+    reg2.agents["crm"] = Agent(
+        name="crm",
+        description="Personal CRM agent",
+        goal="Manage personal relationships and notes",
+        skills=["gws"],
+        body="# Instructions\nManage contacts.\n",
+        source=Path("registry/agents/crm.md")
+    )
+    root = Path(__import__("tempfile").mkdtemp(prefix="ae-prune-agent-"))
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    crm_path = next(o.deploy_path for o in planner.plan_machine(reg2, "example-linux")
+                    if o.deploy_path.endswith("agents/crm.md"))
+    dest = root / safe_rel(crm_path)
+    assert dest.exists()
+
+    # deselect via machine-side exclude: deploy reports an orphan but keeps the file
+    reg2.machines["example-linux"]["agents"] = {"exclude": ["crm"]}
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    assert dest.exists(), "without --prune the deployed agent copy must remain"
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert crm_path in files, "orphan lock entry must be kept for a later --prune"
+
+    # prune: deleted, lock entry dropped
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root,
+                      prune=True) == 0
+    assert not dest.exists()
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert crm_path not in files

@@ -46,6 +46,14 @@ skills:
   frontmatter: mitos-agent
   drift_policy: harvest
 
+# Agents — Markdown files authored in registry/agents/ (and registry/local/agents/).
+# Curation lives in machine profiles under `agents: {include: [...] | exclude: [...]}`;
+# after deselecting, run `deploy --machine <m> --prune` to remove the already-deployed copies.
+agents:
+  deploy_to_key: assistant_root
+  subdir: agents
+  drift_policy: harvest
+
 # MCP — a WHOLE mcp.json Mitos owns (invariant #7 does not apply: this is Mitos Agent's
 # own config file, not a third party's). The output carries EVERY store in the machine's
 # `document_store:` list, keyed by server name (planner._agent_servers), so §5.4's

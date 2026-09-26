@@ -19,6 +19,13 @@ paths:
 #   mitos-agent: {include: [plan, gws]}       # ONLY these (of the ones targeting mitos-agent)
 #   # mitos-agent: {exclude: [example-ops-logs]}  # all compatible ones EXCEPT these
 
+# Per-agent curation (optional) — curate active agents for this Mitos Agent machine.
+# Mitos Agent allows at most 20 active agents. After deselecting, run
+# `deploy --machine <m> --prune` to remove the already-deployed copies.
+# agents:
+#   include: [personal-crm]                  # ONLY these agents
+#   # exclude: [example-ops]                 # all agents EXCEPT these
+
 # How `mitos sync --machine example-linux` reaches this box. Uncomment and set your own hub.
 # Sync is git-only: the overlay (registry/local/) is a git repo synced to `hub` — any git URL
 # (a server you host or a private GitHub repo). Secrets never go here. See docs/lan-sync.md.
