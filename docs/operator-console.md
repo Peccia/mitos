@@ -287,6 +287,17 @@ provenance, so they sit there as a single compact line rather than a grid of car
   exclude a tool.
 - **Import from .zip**: A placeholder for a future release — no backend yet.
 
+### 🤖 Agents in the Console
+
+When `mitos_agent: true` is enabled in `registry/local/user.yaml`, the Skills toolbar reveals an **Agents** chip alongside "Orgs only".
+
+- **Agents Chip & Grid**: Clicking **Agents** swaps the grid from skills to agent cards, sharing the search input to filter agents by name, description, or goal.
+- **Agent Cards**: Each card displays the agent's name, description, **Goal** (intended outcome), assigned skills (each clickable to view that skill's card and drawer), and the machines where the agent is active with their current count and cap (e.g. `example-linux (1 of 20)`).
+- **+ New agent**: Form providing inputs for name (slug), description, goal, a skills picker constrained to skills that target `mitos-agent`, and an embedded Contextual Editor for the agent's Markdown body instructions. Submitting writes a `kind: new` candidate to `registry/local/inbox/`.
+- **Edit agent**: Clicking **Edit agent →** on any card opens the edit form for that agent's description, goal, assigned skills, and body. Submitting proposes a `kind: drift` candidate to the Inbox.
+- **Draft Preservation**: Like skill forms, agent forms maintain in-memory drafts (`newAgentFieldDraft`, `newAgentDraftBody`, `agentEditDraft`) that survive re-renders and tab switches until saved or cancelled.
+- **Inbox Proposal Flow**: The console never writes to `registry/` directly (console invariant #3). Once proposed, review the candidate's diff in the **Inbox** tab and click **Accept** to write or update `registry/local/agents/<name>.md`.
+
 ---
 
 ## 📚 The Prompt Library Tab: One-Shot Composition

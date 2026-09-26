@@ -240,6 +240,10 @@ async function refresh(pre) {
     try { orgData = await (await fetch("/api/org")).json(); }
     catch (e) { orgData = {}; }
   }
+  if (!agentsData && hasMitosAgent()) {
+    try { agentsData = await (await fetch("/api/agents")).json(); }
+    catch (e) { agentsData = { agents: [], machines: [] }; }
+  }
   const rootEl = $("root");
   if (rootEl) { rootEl.textContent = STATE.root; rootEl.title = STATE.root; }
   const countEl = $("inbox-count");
@@ -274,7 +278,7 @@ async function reloadFromDisk() {
   if (!r.ok) { toast(`Reload failed — ${r.error}`, 8000); return; }
   // Staged/dismissed panes are fetched separately and may now be stale too; drop the
   // caches so the Knowledge Graph tab refetches them for the selected project.
-  stagedData = null; dismissedData = null;
+  stagedData = null; dismissedData = null; orgData = null; agentsData = null;
   await refresh(r.state);
   if (graphSlug) { loadStaged(graphSlug); loadDismissed(graphSlug); }
   toast("Reloaded from disk.");
@@ -4097,6 +4101,19 @@ const hasMitosAgent = () => !!STATE.mitos_agent;
 const isTargetVisible = (t) => t !== "agents-md" && (hasMitosAgent() || t !== "mitos-agent");
 const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
 
+let skillShowingAgents = false;
+let agentsData = null;
+let newAgentOpen = false;
+let editingAgentName = null;
+let newAgentFieldDraft = { name: "", description: "", goal: "", skills: [] };
+let newAgentDraftBody = "# Instructions\n\n";
+let agentEditDraft = {};
+
+function resetNewAgentDraft() {
+  newAgentDraftBody = "# Instructions\n\n";
+  newAgentFieldDraft = { name: "", description: "", goal: "", skills: [] };
+}
+
 
 function renderSkills() {
 
@@ -4104,9 +4121,11 @@ function renderSkills() {
 
   // The create forms replace the grid entirely — the drawer must not hang over them.
   // (These return early, before the drawer-sync tail at the end of this function.)
-  if (newSkillOpen || newOrgDomainOpen) closeSkillDrawer();
+  if (newSkillOpen || newOrgDomainOpen || newAgentOpen || editingAgentName) closeSkillDrawer();
   if (newSkillOpen)     { box.replaceChildren(newSkillForm());      return; }
   if (newOrgDomainOpen) { box.replaceChildren(newOrgDomainForm()); return; }
+  if (newAgentOpen)     { box.replaceChildren(newAgentForm());      return; }
+  if (editingAgentName) { box.replaceChildren(editAgentForm(editingAgentName)); return; }
 
   // ── build domain-by-skill lookup from orgData ────────────────────────────
   // orgData is keyed by domain ("software"), each entry has .skill ("org-software").
@@ -4155,18 +4174,30 @@ function renderSkills() {
   // Only the grid re-renders on a keystroke — this input survives, so focus is never lost.
   searchInp.oninput = () => {
     skillFilterText = searchInp.value;
-    renderSkillsGrid(gridWrap, orgDomainBySkill);
+    if (skillShowingAgents && hasMitosAgent()) {
+      renderAgentsGrid(gridWrap);
+    } else {
+      renderSkillsGrid(gridWrap, orgDomainBySkill);
+    }
   };
 
   btnGroup.replaceChildren();
-  const newSkillBtn = el("button", "accept", "+ New skill");
-  newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
-  btnGroup.append(newSkillBtn);
+  if (skillShowingAgents && hasMitosAgent()) {
+    const newAgentBtn = el("button", "accept", "+ New agent");
+    newAgentBtn.onclick = () => { newAgentOpen = true; renderSkills(); };
+    btnGroup.append(newAgentBtn);
+  } else {
+    const newSkillBtn = el("button", "accept", "+ New skill");
+    newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
+    btnGroup.append(newSkillBtn);
+  }
   if (hasMitosAgent()) {
     const newOrgBtn = el("button", "", "+ New org");
     newOrgBtn.title = "Scaffold a new org domain skill";
     newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
-    btnGroup.append(newOrgBtn);
+    if (!skillShowingAgents) {
+      btnGroup.append(newOrgBtn);
+    }
   }
 
   chipRow.replaceChildren();
@@ -4270,7 +4301,24 @@ function renderSkills() {
     skillFilterOrg = false;
   }
 
-  renderSkillsGrid(gridWrap, orgDomainBySkill);
+  if (hasMitosAgent()) {
+    const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");
+    agentsChip.title = "View and manage agents";
+    agentsChip.setAttribute("aria-pressed", String(skillShowingAgents));
+    agentsChip.onclick = () => {
+      skillShowingAgents = !skillShowingAgents;
+      renderSkills();
+    };
+    chipRow.append(agentsChip);
+  } else if (skillShowingAgents) {
+    skillShowingAgents = false;
+  }
+
+  if (skillShowingAgents && hasMitosAgent()) {
+    renderAgentsGrid(gridWrap);
+  } else {
+    renderSkillsGrid(gridWrap, orgDomainBySkill);
+  }
 }
 
 function renderSkillsGrid(container, orgDomainBySkill) {
@@ -4835,6 +4883,321 @@ function newOrgDomainForm() {
   cancel.onclick = () => { newOrgDomainOpen = false; renderSkills(); };
 
   actions.append(create, cancel);
+  wrap.append(actions);
+  return wrap;
+}
+
+// ── Agents View & Forms ───────────────────────────────────────────────────────
+function renderAgentsGrid(container) {
+  const q = skillFilterText.trim().toLowerCase();
+  const rawAgents = (agentsData && agentsData.agents) || [];
+  const machinesInfo = (agentsData && agentsData.machines) || [];
+  const visible = rawAgents.filter((a) => {
+    if (q && !a.name.includes(q) && !(a.description || "").toLowerCase().includes(q) && !(a.goal || "").toLowerCase().includes(q)) {
+      return false;
+    }
+    return true;
+  });
+
+  container.replaceChildren();
+
+  if (!visible.length) {
+    container.append(el("div", "empty-state",
+      !rawAgents.length
+        ? "No agents defined yet — create one to get started."
+        : "No agents match the current filter."));
+    return;
+  }
+
+  const grid = el("div", "skills-grid");
+  for (const agent of visible) {
+    const card = el("div", "skill-card agent-card");
+    const head = el("div", "skill-card-head");
+    const nameSpan = el("span", "skill-card-name bold", agent.name);
+    head.append(nameSpan);
+    const badges = el("div", "skill-card-badges");
+    badges.append(el("span", "tag-chip", "agent"));
+    head.append(badges);
+    card.append(head);
+
+    if (agent.description) {
+      card.append(el("div", "skill-card-desc", agent.description));
+    }
+    if (agent.goal) {
+      const goalEl = el("div", "skill-card-desc muted");
+      goalEl.textContent = `Goal: ${agent.goal}`;
+      card.append(goalEl);
+    }
+
+    // Skills section - each linking to its skill card
+    const skillsRow = el("div", "skill-card-targets");
+    for (const sk of (agent.skills || [])) {
+      const skChip = el("button", "tag-chip skill-link-chip", sk);
+      skChip.title = `View skill ${sk}`;
+      skChip.onclick = (e) => {
+        e.stopPropagation();
+        skillShowingAgents = false;
+        skillFilterText = sk;
+        renderSkills();
+        const skillObj = (STATE?.prompts?.skills || []).find((s) => s.name === sk);
+        if (skillObj) openSkillDrawer(skillObj);
+      };
+      skillsRow.append(skChip);
+    }
+    card.append(skillsRow);
+
+    // Machines section - each with "N of 20"
+    const machRow = el("div", "skill-card-targets muted small");
+    for (const mname of (agent.machines || [])) {
+      const mach = machinesInfo.find((m) => m.name === mname);
+      const count = mach ? mach.selected : 1;
+      const limit = mach ? mach.limit : 20;
+      const chip = el("span", "tag-chip machine-chip", `${mname} (${count} of ${limit})`);
+      machRow.append(chip);
+    }
+    card.append(machRow);
+
+    // Card actions
+    const actions = el("div", "skill-card-actions");
+    const editBtn = el("button", "ghost tiny", "Edit agent →");
+    editBtn.onclick = () => {
+      editingAgentName = agent.name;
+      renderSkills();
+    };
+    actions.append(editBtn);
+    card.append(actions);
+
+    grid.append(card);
+  }
+  container.append(grid);
+}
+
+function newAgentForm() {
+  const wrap = el("div", "new-skill-form");
+  wrap.append(el("h3", "", "New agent"));
+
+  const field = (label, ph, val, onInput) => {
+    const f = el("div", "graph-field");
+    f.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text";
+    if (ph) inp.placeholder = ph;
+    inp.value = val || "";
+    inp.addEventListener("input", () => onInput(inp.value));
+    f.append(inp);
+    wrap.append(f);
+    return inp;
+  };
+
+  const nameInput = field("Name (slug)", "my-agent", newAgentFieldDraft.name,
+    (v) => { newAgentFieldDraft.name = v; });
+  const descInput = field("Description", "One-line summary", newAgentFieldDraft.description,
+    (v) => { newAgentFieldDraft.description = v; });
+  const goalInput = field("Goal", "Intended outcome", newAgentFieldDraft.goal,
+    (v) => { newAgentFieldDraft.goal = v; });
+
+  const focusNext = (next) => (e) => { if (e.key === "Enter") { e.preventDefault(); next.focus(); } };
+  nameInput.addEventListener("keydown", focusNext(descInput));
+  descInput.addEventListener("keydown", focusNext(goalInput));
+
+  // Skills picker limited to skills targeting mitos-agent
+  const skillsWrap = el("div", "graph-field");
+  skillsWrap.append(el("label", "", "Skills (mitos-agent target)"));
+  const skillsRow = el("div", "target-checks");
+  const availableSkills = (STATE?.prompts?.skills || [])
+    .filter((s) => (s.targets || []).includes("mitos-agent"));
+
+  const skillBoxes = {};
+  for (const s of availableSkills) {
+    const label = el("label", "target-check");
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = s.name;
+    if (newAgentFieldDraft.skills && newAgentFieldDraft.skills.includes(s.name)) {
+      cb.checked = true;
+    }
+    cb.onchange = () => {
+      newAgentFieldDraft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    };
+    label.append(cb, document.createTextNode(" " + s.name));
+    skillsRow.append(label);
+    skillBoxes[s.name] = cb;
+  }
+  skillsWrap.append(skillsRow);
+  wrap.append(skillsWrap);
+
+  const editor = buildContextualEditor({
+    value: newAgentDraftBody,
+    onInput(value) { newAgentDraftBody = value; },
+    statusText(value) { return `${value.length.toLocaleString()} chars · new agent body`; },
+  });
+  wrap.append(editor.root);
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input", "detail-reason");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+
+  const create = el("button", "accept", "Create agent");
+  create.onclick = async () => {
+    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    const fm = {
+      description: descInput.value.trim(),
+      goal: goalInput.value.trim(),
+      skills,
+    };
+    const res = await fetch("/api/agents/new", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nameInput.value.trim(),
+        frontmatter: fm,
+        body: editor.textarea.value,
+        reason: reason.value,
+      }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      newAgentOpen = false;
+      resetNewAgentDraft();
+      agentsData = null;
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  };
+
+  const cancel = el("button", "ghost", "Cancel");
+  cancel.onclick = () => {
+    newAgentOpen = false;
+    resetNewAgentDraft();
+    renderSkills();
+  };
+
+  const btns = el("div", "action-group");
+  btns.append(create, cancel);
+  actions.append(reason, btns);
+  wrap.append(actions);
+  return wrap;
+}
+
+function editAgentForm(agentName) {
+  const agent = ((agentsData && agentsData.agents) || []).find((a) => a.name === agentName);
+  if (!agent) {
+    editingAgentName = null;
+    return el("div", "empty-state", `Agent ${agentName} not found.`);
+  }
+
+  if (!agentEditDraft[agentName]) {
+    agentEditDraft[agentName] = {
+      description: agent.description || "",
+      goal: agent.goal || "",
+      skills: [...(agent.skills || [])],
+      body: agent.body || "",
+    };
+  }
+  const draft = agentEditDraft[agentName];
+
+  const wrap = el("div", "new-skill-form");
+  wrap.append(el("h3", "", `Edit agent: ${agentName}`));
+
+  const field = (label, ph, val, onInput) => {
+    const f = el("div", "graph-field");
+    f.append(el("label", "", label));
+    const inp = el("input");
+    inp.type = "text";
+    if (ph) inp.placeholder = ph;
+    inp.value = val || "";
+    inp.addEventListener("input", () => onInput(inp.value));
+    f.append(inp);
+    wrap.append(f);
+    return inp;
+  };
+
+  const descInput = field("Description", "One-line summary", draft.description,
+    (v) => { draft.description = v; });
+  const goalInput = field("Goal", "Intended outcome", draft.goal,
+    (v) => { draft.goal = v; });
+
+  // Skills picker limited to skills targeting mitos-agent
+  const skillsWrap = el("div", "graph-field");
+  skillsWrap.append(el("label", "", "Skills (mitos-agent target)"));
+  const skillsRow = el("div", "target-checks");
+  const availableSkills = (STATE?.prompts?.skills || [])
+    .filter((s) => (s.targets || []).includes("mitos-agent"));
+
+  const skillBoxes = {};
+  for (const s of availableSkills) {
+    const label = el("label", "target-check");
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = s.name;
+    if (draft.skills && draft.skills.includes(s.name)) {
+      cb.checked = true;
+    }
+    cb.onchange = () => {
+      draft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    };
+    label.append(cb, document.createTextNode(" " + s.name));
+    skillsRow.append(label);
+    skillBoxes[s.name] = cb;
+  }
+  skillsWrap.append(skillsRow);
+  wrap.append(skillsWrap);
+
+  const editor = buildContextualEditor({
+    value: draft.body,
+    onInput(value) { draft.body = value; },
+    statusText(value) { return `${value.length.toLocaleString()} chars · agent · ${agentName}`; },
+  });
+  wrap.append(editor.root);
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input", "detail-reason");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+
+  const save = el("button", "accept", "Save agent");
+  save.onclick = async () => {
+    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    const fields = {
+      description: descInput.value.trim(),
+      goal: goalInput.value.trim(),
+      skills,
+    };
+    const res = await fetch("/api/propose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "agent",
+        ident: agentName,
+        fields,
+        body: editor.textarea.value,
+        reason: reason.value,
+      }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      delete agentEditDraft[agentName];
+      editingAgentName = null;
+      agentsData = null;
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 5000);
+    }
+  };
+
+  const cancel = el("button", "ghost", "Cancel");
+  cancel.onclick = () => {
+    editingAgentName = null;
+    renderSkills();
+  };
+
+  const btns = el("div", "action-group");
+  btns.append(save, cancel);
+  actions.append(reason, btns);
   wrap.append(actions);
   return wrap;
 }

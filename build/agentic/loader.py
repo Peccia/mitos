@@ -241,6 +241,23 @@ class Agent:
     body: str
     source: Path
 
+    @property
+    def frontmatter(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "goal": self.goal,
+            "skills": list(self.skills),
+        }
+
+    @property
+    def rel(self) -> str:
+        parts = self.source.parts
+        if "registry" in parts:
+            idx = parts.index("registry")
+            return "/".join(parts[idx + 1:])
+        return self.source.as_posix()
+
 
 @dataclass
 class Registry:
@@ -501,6 +518,43 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
     return out
 
 
+def validate_agent_file_content(text: str, rel: str, stem: str, skills: dict[str, Skill],
+                                source: Path | None = None) -> tuple[Agent | None, str | None]:
+    """Validate an agent Markdown document (frontmatter + body).
+    Returns (Agent, None) on success, or (None, error_str) on failure."""
+    try:
+        meta, body = _split_frontmatter(text, rel)
+    except RegistryError as e:
+        return None, str(e)
+    bad = set(meta) - KNOWN_AGENT_KEYS
+    if bad:
+        return None, f"{rel}: unknown frontmatter key(s) {sorted(bad)} — known: {sorted(KNOWN_AGENT_KEYS)}"
+    name = meta.get("name")
+    if not name or not isinstance(name, str):
+        return None, f"{rel}: agent missing or empty 'name'"
+    if stem and name != stem:
+        return None, f"{rel}: agent 'name' {name!r} does not match filename stem {stem!r}"
+    if not re.fullmatch(r"[a-z0-9-]+", name):
+        return None, f"{rel}: agent 'name' {name!r} is not a valid slug (lowercase [a-z0-9-]+)"
+    desc = meta.get("description")
+    if not desc or not isinstance(desc, str) or not desc.strip():
+        return None, f"{rel}: agent missing or empty 'description'"
+    goal = meta.get("goal")
+    if not goal or not isinstance(goal, str) or not goal.strip():
+        return None, f"{rel}: agent missing or empty 'goal'"
+    sk_list = meta.get("skills")
+    if not sk_list or not isinstance(sk_list, list) or not all(isinstance(s, str) and s.strip() for s in sk_list):
+        return None, f"{rel}: agent missing or empty 'skills'"
+    for s in sk_list:
+        if s not in skills:
+            return None, f"{rel}: agent {name!r} references unknown skill {s!r}"
+        if "mitos-agent" not in skills[s].targets:
+            return None, f"{rel}: agent {name!r} references skill {s!r} whose targets do not include 'mitos-agent'"
+    agent = Agent(name=name, description=desc.strip(), goal=goal.strip(),
+                  skills=sk_list, body=body.strip("\n"), source=source or Path(rel))
+    return agent, None
+
+
 def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path) -> dict[str, Agent]:
     out: dict[str, Agent] = {}
     if not adir.is_dir():
@@ -510,33 +564,10 @@ def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path) -> dict[s
             rel = af.relative_to(root).as_posix()
         except ValueError:
             rel = af.as_posix()
-        meta, body = _split_frontmatter(af.read_text(encoding="utf-8"), rel)
-        bad = set(meta) - KNOWN_AGENT_KEYS
-        if bad:
-            raise RegistryError(f"{rel}: unknown frontmatter key(s) {sorted(bad)} — known: {sorted(KNOWN_AGENT_KEYS)}")
-        name = meta.get("name")
-        if not name or not isinstance(name, str):
-            raise RegistryError(f"{rel}: agent missing or empty 'name'")
-        if name != af.stem:
-            raise RegistryError(f"{rel}: agent 'name' {name!r} does not match filename stem {af.stem!r}")
-        if not re.fullmatch(r"[a-z0-9-]+", name):
-            raise RegistryError(f"{rel}: agent 'name' {name!r} is not a valid slug (lowercase [a-z0-9-]+)")
-        desc = meta.get("description")
-        if not desc or not isinstance(desc, str) or not desc.strip():
-            raise RegistryError(f"{rel}: agent missing or empty 'description'")
-        goal = meta.get("goal")
-        if not goal or not isinstance(goal, str) or not goal.strip():
-            raise RegistryError(f"{rel}: agent missing or empty 'goal'")
-        sk_list = meta.get("skills")
-        if not sk_list or not isinstance(sk_list, list) or not all(isinstance(s, str) and s.strip() for s in sk_list):
-            raise RegistryError(f"{rel}: agent missing or empty 'skills'")
-        for s in sk_list:
-            if s not in skills:
-                raise RegistryError(f"{rel}: agent {name!r} references unknown skill {s!r}")
-            if "mitos-agent" not in skills[s].targets:
-                raise RegistryError(f"{rel}: agent {name!r} references skill {s!r} whose targets do not include 'mitos-agent'")
-        out[name] = Agent(name=name, description=desc.strip(), goal=goal.strip(),
-                          skills=sk_list, body=body.strip("\n"), source=af)
+        agent, err = validate_agent_file_content(af.read_text(encoding="utf-8"), rel, af.stem, skills, af)
+        if err:
+            raise RegistryError(err)
+        out[agent.name] = agent
     return out
 
 

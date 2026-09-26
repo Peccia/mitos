@@ -291,6 +291,12 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
     skill = next((s for s in reg.skills.values() if s.rel == rp), None)
     if skill is not None:
         return skill.body, proposed, True, ""
+    prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
+    if prompt is not None:
+        return prompt.body, proposed, True, ""
+    agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+    if agent is not None:
+        return agent.body, proposed, True, ""
     dest = reg.root / "registry" / rp
     if dest.is_file():
         return render.strip_frontmatter(dest.read_text(encoding="utf-8")), proposed, True, ""
@@ -326,6 +332,12 @@ def _current_source_text(reg: Registry, meta: dict) -> str | None:
     skill = next((s for s in reg.skills.values() if s.rel == rp), None)
     if skill is not None:
         return skill.body
+    prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
+    if prompt is not None:
+        return prompt.body
+    agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+    if agent is not None:
+        return agent.body
     dest = reg.root / "registry" / rp
     return (render.strip_frontmatter(dest.read_text(encoding="utf-8"))
             if dest.is_file() else None)
@@ -1162,6 +1174,12 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
             return {"ok": False, "error": f"unknown partial {ident!r}"}
         registry_path = ident
         current_text = reg.partials[logical].body
+    elif kind == "agent":
+        agent = reg.agents.get(ident)
+        if agent is None:
+            return {"ok": False, "error": f"unknown agent {ident!r}"}
+        registry_path = agent.rel
+        current_text = agent.body
     else:
         return {"ok": False, "error": f"unknown kind {kind!r}"}
     # registry_path is registry-controlled (a known skill.rel / partial key), but guard
@@ -1199,16 +1217,21 @@ _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platfor
                          "targets", "category", "scope",
                          "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
+_AGENT_META_WHITELIST = {"description", "goal", "skills"}
 
 
 def _meta_whitelist(kind: str) -> set[str]:
-    return _SKILL_META_WHITELIST if kind == "skill" else _PROMPT_META_WHITELIST
+    if kind == "skill":
+        return _SKILL_META_WHITELIST
+    elif kind == "agent":
+        return _AGENT_META_WHITELIST
+    return _PROMPT_META_WHITELIST
 
 
 def _meta_dict(fm: dict, whitelist: set[str]) -> dict:
-    """The editable-field subset of a skill/prompt's frontmatter, for the console's
+    """The editable-field subset of a skill/prompt/agent's frontmatter, for the console's
     metadata panel. List-shaped fields default to [] rather than "" when absent."""
-    return {k: fm.get(k, [] if k in ("targets", "platforms") else "") for k in whitelist}
+    return {k: fm.get(k, [] if k in ("targets", "platforms", "skills") else "") for k in whitelist}
 
 
 def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[dict, str | None]:
@@ -1232,6 +1255,10 @@ def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[di
             if not isinstance(val, list) or not val:
                 return {}, "platforms must be a non-empty list"
             merged["platforms"] = [str(p) for p in val]
+        elif key == "skills" and kind == "agent":
+            if not isinstance(val, list) or not val or not all(isinstance(s, str) and s.strip() for s in val):
+                return {}, "skills must be a non-empty list of skill names"
+            merged["skills"] = [str(s).strip() for s in val]
         else:
             merged[key] = str(val)
     return merged, None
@@ -1273,6 +1300,10 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         obj = reg.prompts.get(ident)
         if obj is None:
             return {"ok": False, "error": f"unknown prompt {ident!r}"}
+    elif kind == "agent":
+        obj = reg.agents.get(ident)
+        if obj is None:
+            return {"ok": False, "error": f"unknown agent {ident!r}"}
     else:
         return {"ok": False, "error": f"unknown kind {kind!r} for metadata editing"}
     registry_path = obj.rel
@@ -1294,8 +1325,22 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         if scope_err:
             return {"ok": False, "error": scope_err}
 
-    payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
-              + "---\n\n" + str(body).rstrip("\n") + "\n")
+    if kind == "agent":
+        agent_obj = loader.Agent(
+            name=ident,
+            description=str(new_fm.get("description", "")).strip(),
+            goal=str(new_fm.get("goal", "")).strip(),
+            skills=[str(s).strip() for s in (new_fm.get("skills") or [])],
+            body=str(body).rstrip("\n"),
+            source=obj.source,
+        )
+        payload = render.render_agent(agent_obj)
+        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source)
+        if v_err:
+            return {"ok": False, "error": v_err}
+    else:
+        payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
+                  + "---\n\n" + str(body).rstrip("\n") + "\n")
     meta = {
         "registry_path": registry_path,
         "kind": "drift",
@@ -1361,6 +1406,14 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         scope_err = loader.validate_skill_scope(skill.name, fm)
         if scope_err:
             return scope_err
+    elif "/agents/" in rp or rp.startswith("agents/") or rp.startswith("local/agents/"):
+        stem = PurePosixPath(rp).stem
+        agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+        if agent is not None and fm.get("name") != agent.name:
+            return f"{rp!r}: 'name' must not change"
+        _, err = loader.validate_agent_file_content(payload, rp, stem, reg.skills)
+        if err:
+            return err
     else:
         prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
         if prompt is not None:
@@ -1550,6 +1603,118 @@ def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
+def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
+                      body: str, reason: str = "") -> dict:
+    """Propose a brand-new agent as a `kind: new` inbox candidate. The console never
+    writes registry/ directly (invariant #3) — accept routes through route_into_registry.
+    Always lands in the user's private overlay (registry/local/agents/<name>.md), never core.
+    Returns {ok, id, registry_path} or {ok: False, error}."""
+    name = str(name).strip()
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    if not re.fullmatch(r"[a-z0-9-]+", name):
+        return {"ok": False, "error": "agent 'name' is not a valid slug (lowercase [a-z0-9-]+)"}
+    if name in reg.agents:
+        return {"ok": False, "error": f"agent {name!r} already exists"}
+    if not str(body).strip():
+        return {"ok": False, "error": "body is required"}
+
+    desc = str(frontmatter_fields.get("description", "")).strip()
+    goal = str(frontmatter_fields.get("goal", "")).strip()
+    skills = frontmatter_fields.get("skills")
+    if not isinstance(skills, list):
+        skills = []
+
+    temp_agent = loader.Agent(
+        name=name,
+        description=desc,
+        goal=goal,
+        skills=[str(s).strip() for s in skills],
+        body=str(body).rstrip("\n"),
+        source=Path(f"local/agents/{name}.md"),
+    )
+    payload = render.render_agent(temp_agent)
+
+    # Reuse loader's validator on the candidate text
+    _, err = loader.validate_agent_file_content(
+        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source)
+    if err:
+        return {"ok": False, "error": err}
+
+    registry_path = f"local/agents/{name}.md"
+    meta = {
+        "registry_path": registry_path,
+        "kind": "new",
+        "source": {"machine": socket.gethostname() or "console", "tool": "console"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": _now(),
+        "note": "new agent created in the operator console",
+    }
+    if reason:
+        meta["reason"] = reason
+    try:
+        cid = _write_candidate(reg, _slug_path(registry_path), meta, f"{name}.md", payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
+def agents_index(reg: Registry) -> dict:
+    """Index of agents and machines deploying them for the console (GET /api/agents).
+    Returns {"agents": [{name, description, goal, skills, machines, source}],
+             "machines": [{name, selected, limit: 20}]}."""
+    real = commands.real_machines(reg)
+    mitos_machines = [
+        m for m in real
+        if "mitos-agent" in (reg.machines.get(m) or {}).get("targets", [])
+    ]
+    target_machines = mitos_machines if mitos_machines else real
+
+    machine_selected: dict[str, list[str]] = {}
+    machines_out = []
+    for mname in sorted(target_machines):
+        mcfg = reg.machines.get(mname) or {"name": mname, "targets": ["mitos-agent"]}
+        try:
+            sel = loader.selected_agents(reg, mcfg)
+        except Exception:
+            sel = []
+        machine_selected[mname] = sel
+        machines_out.append({
+            "name": mname,
+            "selected": len(sel),
+            "limit": loader.MAX_ACTIVE_AGENTS,
+        })
+
+    agents_out = []
+    for agent in sorted(reg.agents.values(), key=lambda a: a.name):
+        try:
+            src_str = agent.source.relative_to(reg.root / "registry").as_posix()
+        except ValueError:
+            try:
+                src_str = agent.source.relative_to(reg.root).as_posix()
+            except ValueError:
+                src_str = agent.source.as_posix()
+        agent_machines = [
+            mname for mname in sorted(target_machines)
+            if agent.name in machine_selected.get(mname, [])
+        ]
+        agents_out.append({
+            "name": agent.name,
+            "description": agent.description,
+            "goal": agent.goal,
+            "skills": list(agent.skills),
+            "body": agent.body,
+            "machines": agent_machines,
+            "source": src_str,
+        })
+
+    return {
+        "agents": agents_out,
+        "machines": machines_out,
+    }
 
 
 # ── prompt library ───────────────────────────────────────────────────────────
@@ -2546,6 +2711,8 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 return self._json(200, load_dismissed(holder["reg"], slug, pool))
             if self.path == "/api/org":
                 return self._json(200, org_index(holder["reg"]))
+            if self.path == "/api/agents":
+                return self._json(200, agents_index(holder["reg"]))
             if self.path.startswith("/api/org/tree"):
                 from urllib.parse import parse_qs, urlsplit
                 q = parse_qs(urlsplit(self.path).query)
@@ -2574,6 +2741,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/project/edit", "/api/project/new",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
+                                  "/api/agents/new",
                                   "/api/org/new-domain", "/api/ops/compile",
                                   "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
                 return self._json(404, {"ok": False, "error": "not found"})
@@ -2640,7 +2808,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 ident = str(body.get("ident", ""))
                 text = str(body.get("body", ""))
                 reason = str(body.get("reason", "") or "")
-                if kind in ("skill", "prompt"):
+                if kind in ("skill", "prompt", "agent"):
                     fields = body.get("fields")
                     res = body.get("resources") if kind == "skill" else None
                     result = propose_meta_edit(
@@ -2659,6 +2827,14 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     fm if isinstance(fm, dict) else {},
                     str(body.get("body", "")), str(body.get("reason", "") or ""),
                     resources=res if isinstance(res, dict) else None)
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/agents/new":
+                # propose a brand-new agent — only ever writes inbox/ (kind: new)
+                fm = body.get("frontmatter")
+                result = propose_new_agent(
+                    holder["reg"], str(body.get("name", "")),
+                    fm if isinstance(fm, dict) else {},
+                    str(body.get("body", "")), str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/org/new-domain":
                 # the "+ ORG" button — propose a new domain-template skill (kind: new)

@@ -3049,3 +3049,214 @@ def test_add_document_type_dropdown_defaults_to_document():
     add = app[app.index('"+ Doc"'):]
     add = add[:add.index("renderRegistryRows(g)")]
     assert 'type: (STATE.known_doc_types || ["document"])[0]' in add
+
+
+# ── Milestone 2: Agents in console ───────────────────────────────────────────
+def test_api_agents_shape():
+    """GET /api/agents returns the expected payload shape: agents list with
+    name, description, goal, skills, machines, source; machines list with
+    name, selected, limit."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "test-agent.md"
+    agent_file.write_text(
+        "---\n"
+        "name: test-agent\n"
+        "description: Test agent description.\n"
+        "goal: Help test.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nDo test things.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    res = review.agents_index(loaded)
+    assert "agents" in res
+    assert "machines" in res
+    assert isinstance(res["agents"], list)
+    assert isinstance(res["machines"], list)
+
+    agent_entry = next((a for a in res["agents"] if a["name"] == "test-agent"), None)
+    assert agent_entry is not None
+    expected_agent_keys = {"name", "description", "goal", "skills", "machines", "source"}
+    assert expected_agent_keys <= set(agent_entry.keys())
+    assert agent_entry["description"] == "Test agent description."
+    assert agent_entry["goal"] == "Help test."
+    assert agent_entry["skills"] == ["new-session"]
+    assert "local/agents/test-agent.md" in agent_entry["source"]
+
+    for m in res["machines"]:
+        assert {"name", "selected", "limit"} <= set(m.keys())
+        assert m["limit"] == 20
+        assert isinstance(m["selected"], int)
+
+
+def test_propose_new_agent_lands_in_inbox_not_registry():
+    """propose_new_agent writes only to inbox/ (kind: new), never touching registry/
+    directly (invariant #3). Deciding accept routes it into registry/local/agents/."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    out = review.propose_new_agent(
+        treg, "scout-agent",
+        {"description": "Scout things.", "goal": "Find stuff.", "skills": ["new-session"]},
+        "# Instructions\n\nScout around.",
+        reason="initial scaffold"
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/scout-agent.md"
+
+    # Invariant #3: registry has not been modified
+    reg_target = tmp / "registry" / "local" / "agents" / "scout-agent.md"
+    assert not reg_target.exists()
+
+    candidates = review.load_candidates(treg)
+    cand = next((c for c in candidates if c["id"] == out["id"]), None)
+    assert cand is not None
+    assert cand["kind"] == "new"
+    assert cand["acceptable"]
+
+    # Accept the candidate
+    dec_res = review.decide(treg, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+    assert reg_target.is_file()
+    content = reg_target.read_text(encoding="utf-8")
+    assert "name: scout-agent" in content
+    assert "description: Scout things." in content
+    assert "goal: Find stuff." in content
+    assert "skills:" in content
+    assert "Scout around." in content
+
+    # The new agent is now loadable
+    reloaded = loader.load(tmp)
+    assert "scout-agent" in reloaded.agents
+
+
+def test_propose_new_agent_validates():
+    """propose_new_agent enforces M1 agent validation rules on candidate text."""
+    from agentic import review
+
+    treg, _tmp = _temp_registry()
+
+    # Empty name
+    assert not review.propose_new_agent(treg, "", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Bad slug
+    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Empty description
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Empty goal
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "", "skills": ["new-session"]}, "body")["ok"]
+    # Empty skills
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": []}, "body")["ok"]
+    # Unknown skill
+    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
+    assert not res["ok"]
+    assert "unknown skill" in res["error"]
+    # Empty body
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "")["ok"]
+
+
+def test_propose_agent_meta_edit_lands_in_inbox():
+    """propose_meta_edit accepts kind='agent' for description, goal, skills,
+    writing a verbatim candidate that updates the agent file when accepted."""
+    from agentic import review
+    import yaml as _y
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "worker.md").write_text(
+        "---\n"
+        "name: worker\n"
+        "description: Original description.\n"
+        "goal: Original goal.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nWork hard.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    out = review.propose_meta_edit(
+        loaded, "agent", "worker",
+        {"description": "Updated description.", "goal": "Updated goal."},
+        "Work hard."
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/worker.md"
+
+    candidates = review.load_candidates(loaded)
+    cand = next(c for c in candidates if c["id"] == out["id"])
+    assert cand["acceptable"]
+    meta_on_disk = _y.safe_load((tmp / "registry" / "local" / "inbox" / out["id"] / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta_on_disk.get("verbatim") is True
+
+    dec_res = review.decide(loaded, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+
+    text = (adir / "worker.md").read_text(encoding="utf-8")
+    assert "description: Updated description." in text
+    assert "goal: Updated goal." in text
+    assert "Work hard." in text
+
+
+def test_propose_agent_body_edit():
+    """propose_edit accepts kind='agent' for body editing, preserving frontmatter on accept."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "coder.md").write_text(
+        "---\n"
+        "name: coder\n"
+        "description: Code agent.\n"
+        "goal: Write code.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nInitial instructions.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    out = review.propose_edit(
+        loaded, "agent", "coder",
+        "# Instructions\n\nUpdated instructions.\n",
+        reason="improve prompt"
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/coder.md"
+
+    dec_res = review.decide(loaded, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+
+    text = (adir / "coder.md").read_text(encoding="utf-8")
+    assert "name: coder" in text
+    assert "description: Code agent." in text
+    assert "goal: Write code." in text
+    assert "Updated instructions." in text
+    assert "Initial instructions." not in text
+
+
+def test_agents_section_hidden_without_flag():
+    """The Agents chip and grid are gated behind hasMitosAgent() in app.js."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    # Flag gate predicate exists
+    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
+
+    # Agents chip is gated behind hasMitosAgent()
+    assert "if (hasMitosAgent()) {" in app
+    assert 'const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");' in app
+
+    # Agents grid rendering is gated behind hasMitosAgent()
+    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid(gridWrap);" in app
+
+    # + New agent button is gated behind hasMitosAgent()
+    assert 'if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn = el("button", "accept", "+ New agent");' in app
+
+    # Fetch is gated behind hasMitosAgent()
+    assert "if (!agentsData && hasMitosAgent()) {" in app
+
