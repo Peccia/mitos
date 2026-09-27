@@ -5,11 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.8] - 2026-09-27
 
 ### Added
+- **Custom Agents management and deployment.** Custom agent definitions are now first-class registry entities in `registry/agents/*.md` and the user's overlay `registry/local/agents/*.md`. Loaded with canonical frontmatter (`name`, `description`, `goal`, `skills`), validated against required skills and targets, and emitted to `assistant_root/agents/<name>.md` for the `mitos-agent` target. Enforces a per-machine active agent limit (maximum 20) with machine-side curation via `agents: {include: [...] | exclude: [...]}`.
+- **Operator Console Custom Agents UI & APIs.** New `/api/agents` and `/api/agents/new` endpoints in `review.py`. Added Agents toolbar chip, grid, card, and detail inspector views, as well as create and edit proposal forms with candidate drafting and local storage persistence in `app.js`.
 - **Pictures are first-class entries in the knowledge graph.** A PNG, JPEG, GIF or WebP file is now typed `image` and stored as a `schema:ImageObject` — a reference and a description, never the picture itself. Its line in the generated `AGENTS.md`/`AGENTS_DETAILS.md` reads `(<date> · image)`, and a project that holds one gets a single extra line telling the harness to open such entries as images, not text. Projects without pictures compile byte-for-byte as before. SVG, HEIC and TIFF keep their own type, because a vision model cannot view them.
 - **The console's document editor has a Type dropdown** over the supported kinds (`document`, `spreadsheet`, `presentation`, `form`, `pdf`, `markdown`, `image`). A document added with **+ Doc** starts on `document`; an existing one keeps its kind. An image cannot be applied with an empty description — for a picture, the description is the only text a harness can match it on.
+- **Effort Done state with Implemented Document reference.** Efforts in the Knowledge Graph now support an explicit `Done` state paired with an `Implemented Document` reference, recording completed SDLC work and linking back to the implemented document.
+- **Lineage spine & reading-aware requirements receipts.** `requirements-receipt` v1.2.0: Added support for `reading:` lines reporting the plan's working interpretation copied verbatim from the milestones matrix. Multiple evidence pointers are preserved and validated.
+- **Knowledge Graph UI enhancements.** Added collapsible Discovery pane and effort sections, graph filtering, aliases, and moves. Added hidden work items toggle menu in the operator console.
 
 ### Changed
 - **Generated document lines label only non-`document` kinds.** `(2026-07-10 · document)` now reads `(2026-07-10)`; a sheet, pdf, markdown file or picture keeps its `· <type>` label. A plain document is the default, so the label only spent tokens. Redeploy to regenerate `AGENTS.md`/`AGENTS_DETAILS.md`.
@@ -17,9 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Editing a document in the console no longer erases its stored link. The editor never sent `webUrl`, so every edit wiped it; an omitted link is now kept.
-
-### Fixed
 - A `context.builder` project node (Mitos self-hosting) on a machine that deploys `mitos-agent` now lists its cloned repos as the generated `## Navigation` roster, like every other project node. Before, the agent host had the checkouts on disk but its node named none, so Mitos Agent grounded every session on zero code. Recompile and redeploy the agent host to pick it up; nothing else changes.
+- Fixed prompt modal dismiss behavior and skills filter focus handling in the operator console.
 
 ## [0.1.7] - 2026-09-18
 
