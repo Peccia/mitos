@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sys
+
+import yaml
 from pathlib import Path
 
 from conftest import (
@@ -86,6 +88,20 @@ def test_strip_frontmatter():
     body = render.strip_frontmatter(rendered)
     assert not body.lstrip().startswith("---")
     assert skill.body.split("\n", 1)[0] in body
+
+def test_mitos_agent_skill_keeps_declared_scripts():
+    """A skill's `scripts:` (agent abilities) reaches the deployed mitos-agent SKILL.md
+    as authored; the other targets' standard frontmatter never carries it."""
+    from dataclasses import replace as _replace
+    skill = next(iter(reg.skills.values()))
+    decl = [{"name": "status", "file": "scripts/read_logs.py", "effect": "read",
+             "argv": ["status"], "env": ["API_CONTROLLER_URL"],
+             "args": {"since": {"type": "string", "pattern": "^[0-9]{1,4}[mhd]$"}}}]
+    s = _replace(skill, frontmatter={**skill.frontmatter, "scripts": decl})
+    fm = yaml.safe_load(render.render_skill(s, "mitos-agent").split("---")[1])
+    assert fm["scripts"] == decl
+    assert "scripts" not in render.render_skill(s, "claude-code").split("---")[1]
+    assert "scripts" not in yaml.safe_load(render.render_skill(skill, "mitos-agent").split("---")[1])
 
 def test_rewrite_registry_body_preserves_frontmatter(tmp_path=None):
     import tempfile

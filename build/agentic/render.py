@@ -571,6 +571,11 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
         tag_meta = fm.get("mitos_agent")
         if tag_meta:
             meta["metadata"] = {"mitos_agent": tag_meta}
+        # Scripts the skill declares as agent abilities (name, file, effect, argv, env, args).
+        # Passed through as authored: the harness reading them is their validator and treats
+        # a malformed entry as absent, so the compiler neither interprets nor rewrites them.
+        if fm.get("scripts"):
+            meta["scripts"] = fm["scripts"]
         return _frontmatter_doc(meta, b)
     if target in ("claude-code", "claude-app", "antigravity"):
         # Agent Skills standard frontmatter: name + description. Antigravity follows
