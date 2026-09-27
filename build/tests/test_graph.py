@@ -411,6 +411,48 @@ def test_friendly_doc_type_mapping():
     assert friendly_doc_type("text/markdown") == "markdown"
     assert friendly_doc_type("md") == "md"
     assert friendly_doc_type("") == ""
+    # vision-viewable rasters collapse to one kind; other image subtypes keep theirs
+    for raw in ("image/png", "image/jpeg", "image/gif", "image/webp",
+                "png", "jpg", "jpeg", "gif", "webp", "PNG"):
+        assert friendly_doc_type(raw) == "image", raw
+    assert friendly_doc_type("image/svg+xml") == "svg+xml"
+    assert friendly_doc_type("image/heic") == "heic"
+
+
+def test_image_object_canonical_roundtrip():
+    """An image document serializes as schema:ImageObject with no additionalType, and
+    round-trips byte-identically; only refs are stored (no binary). A hand-written
+    DigitalDocument typed `png` normalizes to the image kind on read."""
+    import json
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="example-project", name="Example Project", description="d",
+                            documents=[graph.Document("imgID", "Board", "whiteboard photo",
+                                                      "2026-01-01", doc_type="image"),
+                                       _doc("docID", "Spec", "s", "2026-01-02")])
+    once = graph.canonical_jsonld(pg)
+    nodes = {n.get("identifier"): n for n in json.loads(once)["@graph"]}
+    assert nodes["imgID"]["@type"] == "ImageObject"
+    assert "additionalType" not in nodes["imgID"]
+    assert nodes["docID"]["@type"] == "DigitalDocument"
+    assert set(nodes["imgID"]) <= {"@id", "@type", "identifier", "name", "description",
+                                   "dateModified", "isPartOf", "url", "keywords",
+                                   graph.STORE_PRED}
+    p = _write_graph(once)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert next(d for d in reloaded.documents if d.drive_id == "imgID").doc_type == "image"
+        assert graph.canonical_jsonld(reloaded) == once
+        assert [r["id"] for r in graph.run_query(reloaded, "documents")].count("imgID") == 1
+    finally:
+        p.unlink()
+    legacy = once.replace('"@type": "ImageObject",', '"@type": "DigitalDocument",\n'
+                          '      "additionalType": "png",')
+    p = _write_graph(legacy)
+    try:
+        assert next(d for d in graph.load_project_graph(p).documents
+                    if d.drive_id == "imgID").doc_type == "image"
+    finally:
+        p.unlink()
 
 
 def test_graph_web_url_round_trip_and_drive_fallback():
@@ -1415,3 +1457,91 @@ def test_project_with_only_hidden_efforts_and_no_root_docs_emits_no_documents_ye
         out = render(pg)
         assert "_No documents mapped yet._" in out
         assert "Parked" not in out
+
+
+# ── Effort completion state (schema:creativeWorkStatus + peccia:evaluation) ───
+def _done_graph(status="done", evaluation="EXAMPLEDOCID"):
+    from agentic import graph
+    proj_iri = "http://peccia.net/project/p"
+    done = graph.CreativeWork(id="shipped", name="Shipped Work", description="d",
+                              is_part_of=proj_iri, goal="ship it",
+                              deliverables=("tests",), status=status, evaluation=evaluation)
+    active = graph.CreativeWork(id="active", name="Active Work", description="a",
+                                is_part_of=proj_iri)
+    doc = graph.Document(drive_id="EXAMPLEDOCID", name="Implemented", description="",
+                         date_modified="2026-09-01", is_part_of=done.iri)
+    return graph.ProjectGraph(slug="p", name="P", description="", documents=[doc],
+                              efforts=[done, active])
+
+
+def _expect_graph_error(jsonld, label):
+    from agentic import graph
+    p = _write_graph(jsonld)
+    try:
+        try:
+            graph.load_project_graph(p)
+        except graph.GraphError:
+            return
+        raise AssertionError(f"expected GraphError for: {label}")
+    finally:
+        p.unlink()
+
+
+def test_creativework_status_and_evaluation_round_trips_canonical_jsonld():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph())
+    assert '"creativeWorkStatus": "done"' in jsonld
+    assert f'"{graph.EVALUATION_PRED}": {{\n        "@id": "{graph.DOCUMENT_NS}EXAMPLEDOCID"' in jsonld
+    p = _write_graph(jsonld)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == jsonld
+        e = next(e for e in reloaded.efforts if e.id == "shipped")
+        assert (e.status, e.evaluation) == ("done", "EXAMPLEDOCID")
+    finally:
+        p.unlink()
+
+
+def test_creativework_active_omits_status_and_evaluation():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph())
+    assert jsonld.count('"creativeWorkStatus"') == 1
+    assert jsonld.count(graph.EVALUATION_PRED) == 1
+
+
+def test_effort_status_line_is_the_contract_grammar():
+    from agentic import graph
+    golden = "_Status: Done · Implemented Document: `EXAMPLEDOCID`._"
+    for render in (graph.project_index_markdown, graph.project_details_markdown,
+                   graph.project_full_markdown):
+        out = render(_done_graph())
+        assert golden + "\n" in out
+        # placed after the goal, before deliverables; the active effort carries no line
+        assert out.index("**Goal:** ship it") < out.index(golden) < out.index(
+            "_Expected deliverables: tests._")
+        assert out.count("_Status:") == 1
+        assert "_Status: Done._\n" in render(_done_graph(evaluation=""))
+
+
+def test_loader_rejects_unknown_status():
+    from agentic import graph
+    for bad in ("in-progress", "Done"):
+        _expect_graph_error(graph.canonical_jsonld(_done_graph(status=bad)), bad)
+
+
+def test_loader_rejects_evaluation_without_done():
+    from agentic import graph
+    _expect_graph_error(graph.canonical_jsonld(_done_graph(status="")), "eval w/o done")
+
+
+def test_loader_rejects_dangling_evaluation_reference():
+    from agentic import graph
+    _expect_graph_error(graph.canonical_jsonld(_done_graph(evaluation="MISSINGDOC")),
+                        "dangling evaluation")
+
+
+def test_loader_rejects_duplicate_status_triples():
+    from agentic import graph
+    jsonld = graph.canonical_jsonld(_done_graph()).replace(
+        '"creativeWorkStatus": "done"', '"creativeWorkStatus": ["done", "shipped"]')
+    _expect_graph_error(jsonld, "duplicate status")

@@ -63,6 +63,17 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    (`org_routing=False`): they instruct nobody to load a skill, and that surface is exactly the
    harness that must produce the deliverables.
 
+   A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. The
+   `· <type>` label appears only for a kind other than the default `document` (a sheet, a
+   pdf, a picture — the kinds that change which tool to reach for); a plain document, or an
+   untyped one, shows the date alone. When
+   any document in the project is typed `image` (a `schema:ImageObject` — a picture a
+   vision model can view), the details and full views add ONE line directly after the
+   connection intro: `_Entries typed `image` are pictures: open one by its ID as an
+   image, never as text (see your document store skill's Images section)._`
+   (`graph.IMAGE_HINT`). The titles-only index never carries it, and a project without
+   images renders byte-identically.
+
 ## Local vs. connection: the split that keeps context lean
 
 `## Navigation` is **local only** (files, repos, routing); store folder paths live in the
@@ -106,7 +117,10 @@ is still ordinary, adoptable drift.
 Only project nodes whose checkouts are actually siblings of the file get a roster — the
 workstation `local_path` node, the `agentic_context_root` reference mount, and the `mitos-agent`
 operating tree (which clones repos into `<assistant_root>/Projects/<name>/<basename>/` as
-siblings of the project node). An `agentic_tree:` mount puts clones beside the mount rather
+siblings of the project node). That includes a `context.builder` project such as Mitos
+self-hosting: on a machine that also deploys `mitos-agent`, its node carries the roster too;
+on an `agents-md`-only machine it does not, because nothing clones beside it there.
+An `agentic_tree:` mount puts clones beside the mount rather
 than inside it.
 
 ## Skills

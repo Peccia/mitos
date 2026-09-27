@@ -88,6 +88,19 @@ The **Knowledge Graph** tab is Stage 3 of mapping your workspace documents into 
 5. Click **Propose selected**. This writes a `kind: graph` candidate into your Inbox.
 6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which compiles into the Agentic Context roster on your next deploy.
 
+### 🖼️ Document type and images
+The document editor carries a **Type** dropdown over the supported kinds (`document`,
+`spreadsheet`, `presentation`, `form`, `pdf`, `markdown`, `image` — `graph.KNOWN_DOC_TYPES`).
+A document added by hand with **+ Doc** starts on `document`; an existing or staged one keeps
+the kind its store reported (an untyped one shows `(unset)` rather than being typed silently
+on edit, and a store kind outside the list stays selectable). Only non-`document` kinds are
+labeled in the generated `AGENTS.md`/`AGENTS_DETAILS.md` lines. A PNG/JPEG/GIF/WebP kind
+arriving from a store or the API (`png`, `image/png`, …) is normalized server-side to `image`
+and stored as a `schema:ImageObject`. **Apply refuses an image with an empty Description** — for a picture,
+the description is the only text a harness can match it on. Images are edited, removed, and
+recovered exactly like any other document; editing never strips a stored link (`webUrl` is
+preserved when the editor omits it).
+
 ### 🗂️ Discovery and Recovery
 
 The left column is tabbed: **Discovery** (staged files not yet mapped — the checklist above) and
@@ -188,6 +201,29 @@ omits the receipt, and the owner may have a reason.
 
 The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
 
+### ✔️ Done state on efforts
+
+The effort editor has a **Mark as Done** checkbox and an **Implemented Document ID** field. Done
+is the effort's completion state (`schema:creativeWorkStatus`). The only allowed value is
+`done`; an effort with no status is active. The Implemented Document ID must be a document
+mapped in the same project, and it only works with Done ticked. The server rejects an unknown
+status, an Implemented Document ID without Done, and an ID that matches no document. Like every
+other edit, marking an effort Done creates a `kind: graph` candidate in the Inbox. Once
+accepted, the effort's registry row shows a **Done** badge and an `Implemented Document: <id>`
+line. Before that, the Inbox card shows the change as `Effort <id>: active → done`.
+
+Other edits won't clear Done. If an effort edit leaves out `status` or `evaluation`, the stored
+values stay; sending an empty value clears them. An accept merges only the efforts that
+candidate touched, so accepting an older candidate later won't undo Done.
+
+In **Tweak & map**, the identity peek may find an Implemented Document fragment for an effort in
+this project. If it does, the card also shows **Mark effort as Done with this Implemented
+Document**. The checkbox starts unticked, because mapping a document doesn't change an
+effort's status by itself. If you tick it, the effort edit goes into the same draft, so one
+proposal carries both the mapping and the Done change. From the CLI, `python build/compile.py
+graph --project <slug> --complete-effort <id> [--evaluation-doc <doc-id>]` proposes the same
+change without writing the graph.
+
 ### 🔎 Requirements coverage on efforts
 
 Beside it sits a **Requirements coverage** checkbox group — the *interview contract*, the mirror
@@ -250,6 +286,17 @@ provenance, so they sit there as a single compact line rather than a grid of car
   through the accept path today. Edit the skill's `targets:` list by hand in its `SKILL.md` to
   exclude a tool.
 - **Import from .zip**: A placeholder for a future release — no backend yet.
+
+### 🤖 Agents in the Console
+
+When `mitos_agent: true` is enabled in `registry/local/user.yaml`, the Skills toolbar reveals an **Agents** chip alongside "Orgs only".
+
+- **Agents Chip & Grid**: Clicking **Agents** swaps the grid from skills to agent cards, sharing the search input to filter agents by name, description, or goal.
+- **Agent Cards**: Each card displays the agent's name, description, **Goal** (intended outcome), assigned skills (each clickable to view that skill's card and drawer), and the machines where the agent is active with their current count and cap (e.g. `example-linux (1 of 20)`).
+- **+ New agent**: Form providing inputs for name (slug), description, goal, a skills picker constrained to skills that target `mitos-agent`, and an embedded Contextual Editor for the agent's Markdown body instructions. Submitting writes a `kind: new` candidate to `registry/local/inbox/`.
+- **Edit agent**: Clicking **Edit agent →** on any card opens the edit form for that agent's description, goal, assigned skills, and body. Submitting proposes a `kind: drift` candidate to the Inbox.
+- **Draft Preservation**: Like skill forms, agent forms maintain in-memory drafts (`newAgentFieldDraft`, `newAgentDraftBody`, `agentEditDraft`) that survive re-renders and tab switches until saved or cancelled.
+- **Inbox Proposal Flow**: The console never writes to `registry/` directly (console invariant #3). Once proposed, review the candidate's diff in the **Inbox** tab and click **Accept** to write or update `registry/local/agents/<name>.md`.
 
 ---
 

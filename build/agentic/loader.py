@@ -60,6 +60,8 @@ def is_manual_skill_target(tspec: dict) -> bool:
 # the same posture as every other registry file.
 KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
                    "default_deliverables", "mitos_agent"}
+MAX_ACTIVE_AGENTS = 20
+KNOWN_AGENT_KEYS = {"name", "description", "goal", "skills"}
 # The subset of KNOWN_USER_KEYS whose value is a list, not a string.
 _USER_LIST_KEYS = {"default_deliverables"}
 # The subset whose value is a bool. YAML's `true` is the only accepted spelling — the
@@ -229,6 +231,35 @@ class Prompt:
 
 
 @dataclass
+class Agent:
+    """An assistant-lane agent, authored in registry/agents/<name>.md (or registry/local/agents/).
+    Curated per machine under `agents: {include: [...] | exclude: [...]}`."""
+    name: str
+    description: str
+    goal: str
+    skills: list[str]
+    body: str
+    source: Path
+
+    @property
+    def frontmatter(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "goal": self.goal,
+            "skills": list(self.skills),
+        }
+
+    @property
+    def rel(self) -> str:
+        parts = self.source.parts
+        if "registry" in parts:
+            idx = parts.index("registry")
+            return "/".join(parts[idx + 1:])
+        return self.source.as_posix()
+
+
+@dataclass
 class Registry:
     root: Path                     # repo root
     partials: dict[str, Partial]   # keyed by registry-relative path
@@ -243,6 +274,7 @@ class Registry:
     user: dict = field(default_factory=lambda: dict(_DEFAULT_USER))  # given_name,
                                    # full_name, email, location — core defaults merged
                                    # with registry/local/user.yaml (field-level overlay)
+    agents: dict[str, Agent] = field(default_factory=dict)  # name -> Agent (registry/agents/)
 
     def partial(self, rel: str) -> Partial:
         if rel not in self.partials:
@@ -369,6 +401,7 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
     reg = Registry(root=root, partials=partials, skills=skills, servers=servers,
                    projects=projects, targets=targets, machines=machines, graphs=graphs,
                    prompts=prompts, user=user)
+    reg.agents = _load_agents(reg, ignore_local=ignore_local)
     _validate(reg)
     return reg
 
@@ -483,6 +516,100 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
         data["_is_local"] = is_local
         out[slug] = data
     return out
+
+
+def validate_agent_file_content(text: str, rel: str, stem: str, skills: dict[str, Skill],
+                                source: Path | None = None) -> tuple[Agent | None, str | None]:
+    """Validate an agent Markdown document (frontmatter + body).
+    Returns (Agent, None) on success, or (None, error_str) on failure."""
+    try:
+        meta, body = _split_frontmatter(text, rel)
+    except RegistryError as e:
+        return None, str(e)
+    bad = set(meta) - KNOWN_AGENT_KEYS
+    if bad:
+        return None, f"{rel}: unknown frontmatter key(s) {sorted(bad)} — known: {sorted(KNOWN_AGENT_KEYS)}"
+    name = meta.get("name")
+    if not name or not isinstance(name, str):
+        return None, f"{rel}: agent missing or empty 'name'"
+    if stem and name != stem:
+        return None, f"{rel}: agent 'name' {name!r} does not match filename stem {stem!r}"
+    if not re.fullmatch(r"[a-z0-9-]+", name):
+        return None, f"{rel}: agent 'name' {name!r} is not a valid slug (lowercase [a-z0-9-]+)"
+    desc = meta.get("description")
+    if not desc or not isinstance(desc, str) or not desc.strip():
+        return None, f"{rel}: agent missing or empty 'description'"
+    goal = meta.get("goal")
+    if not goal or not isinstance(goal, str) or not goal.strip():
+        return None, f"{rel}: agent missing or empty 'goal'"
+    sk_list = meta.get("skills")
+    if not sk_list or not isinstance(sk_list, list) or not all(isinstance(s, str) and s.strip() for s in sk_list):
+        return None, f"{rel}: agent missing or empty 'skills'"
+    for s in sk_list:
+        if s not in skills:
+            return None, f"{rel}: agent {name!r} references unknown skill {s!r}"
+        if "mitos-agent" not in skills[s].targets:
+            return None, f"{rel}: agent {name!r} references skill {s!r} whose targets do not include 'mitos-agent'"
+    agent = Agent(name=name, description=desc.strip(), goal=goal.strip(),
+                  skills=sk_list, body=body.strip("\n"), source=source or Path(rel))
+    return agent, None
+
+
+def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path) -> dict[str, Agent]:
+    out: dict[str, Agent] = {}
+    if not adir.is_dir():
+        return out
+    for af in sorted(adir.glob("*.md")):
+        try:
+            rel = af.relative_to(root).as_posix()
+        except ValueError:
+            rel = af.as_posix()
+        agent, err = validate_agent_file_content(af.read_text(encoding="utf-8"), rel, af.stem, skills, af)
+        if err:
+            raise RegistryError(err)
+        out[agent.name] = agent
+    return out
+
+
+def _load_agents(reg_or_root: Registry | Path, skills: dict[str, Skill] | None = None, *, ignore_local: bool = False) -> dict[str, Agent]:
+    """Load agents from registry/agents/*.md and registry/local/agents/*.md with
+    last-layer-wins precedence."""
+    if isinstance(reg_or_root, Registry):
+        root = reg_or_root.root
+        reg_skills = reg_or_root.skills if skills is None else skills
+    else:
+        root = reg_or_root
+        reg_skills = skills or {}
+    core_dir = root / "registry"
+    local_dir = core_dir / LOCAL_OVERLAY
+    out = _load_agents_dir(core_dir / "agents", reg_skills, root)
+    if local_dir.is_dir() and not ignore_local:
+        local_out = _load_agents_dir(local_dir / "agents", reg_skills, root)
+        out = _overlay(out, local_out)
+    return out
+
+
+def selected_agents(reg: Registry, machine: dict) -> list[str]:
+    """Active agents deployed to a machine running the mitos-agent target.
+    Empty unless the machine has the mitos-agent target.
+    Curated via optional machine-side `agents: {include: [...] | exclude: [...]}`.
+    At most MAX_ACTIVE_AGENTS (20) may be active."""
+    if "mitos-agent" not in (machine.get("targets") or []):
+        return []
+    mag = machine.get("agents") or {}
+    inc = mag.get("include")
+    exc = set(mag.get("exclude") or [])
+    if inc is not None:
+        selected = [a for a in reg.agents if a in inc]
+    else:
+        selected = [a for a in reg.agents if a not in exc]
+    name = machine.get("name", "machine")
+    if len(selected) > MAX_ACTIVE_AGENTS:
+        raise RegistryError(
+            f"mitos-agent allows at most {MAX_ACTIVE_AGENTS} active agents; "
+            f"{name} selects {len(selected)}: exclude some under `agents:` in machines/{name}.yaml"
+        )
+    return selected
 
 
 def _validate_default_deliverables(names, label: str, graphmod) -> None:
@@ -666,6 +793,21 @@ def _validate(reg: Registry) -> None:
             raise RegistryError(
                 f"skill {s.name!r}: requires_server {req!r} is not a server in "
                 f"connections/servers.yaml; known: {', '.join(sorted(known_servers))}")
+    # agents: must be valid slug, non-empty fields, skills must exist and target mitos-agent
+    for agent in reg.agents.values():
+        if not re.fullmatch(r"[a-z0-9-]+", agent.name):
+            raise RegistryError(f"agent {agent.name!r} is not a valid slug (lowercase [a-z0-9-]+)")
+        if not agent.description or not agent.description.strip():
+            raise RegistryError(f"agent {agent.name!r}: missing or empty 'description'")
+        if not agent.goal or not agent.goal.strip():
+            raise RegistryError(f"agent {agent.name!r}: missing or empty 'goal'")
+        if not agent.skills or not isinstance(agent.skills, list):
+            raise RegistryError(f"agent {agent.name!r}: 'skills' must be a non-empty list")
+        for s in agent.skills:
+            if s not in reg.skills:
+                raise RegistryError(f"agent {agent.name!r} references unknown skill {s!r}")
+            if "mitos-agent" not in reg.skills[s].targets:
+                raise RegistryError(f"agent {agent.name!r} references skill {s!r} whose targets do not include 'mitos-agent'")
     # prompts may omit targets (console-only is valid); when targets are set they must be known
     for p in reg.prompts.values():
         bad = set(p.targets) - KNOWN_TARGETS
@@ -684,10 +826,8 @@ def _validate(reg: Registry) -> None:
                 f"on a CreativeWork node); remove 'org:' from the manifest")
         if "agents" in proj:
             raise RegistryError(
-                f"project {slug}: 'agents' is no longer a manifest field — the agents "
-                f"lane was retired (0.1.3 batch 1: skills already cover the reusable-"
-                f"behavior story, and Claude Code ships a built-in code-reviewer agent); "
-                f"remove 'agents:' from the manifest")
+                f"project {slug}: 'agents' is not a manifest field — agents are registry "
+                f"resources in registry/agents/, curated per machine under `agents:`")
         if "aliases" in proj:
             aliases = proj["aliases"]
             if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
@@ -1080,6 +1220,43 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"machine {name}: skills.{tname} lists skill(s) in BOTH "
                         f"include and exclude: {sorted(both)}")
+        # 7. agents (optional): curation of active agents for mitos-agent —
+        #    `{include: [...] | exclude: [...]}`.
+        mag = m.get("agents")
+        if mag is not None:
+            if not isinstance(mag, dict):
+                raise RegistryError(f"machine {name}: 'agents' must be a mapping "
+                                    f"({{include: [...]}} or {{exclude: [...]}})")
+            inc, exc = mag.get("include"), mag.get("exclude")
+            for label, lst in (("include", inc), ("exclude", exc)):
+                if lst is None:
+                    continue
+                if not isinstance(lst, list):
+                    raise RegistryError(
+                        f"machine {name}: agents.{label} must be a list")
+                bad = set(lst) - set(reg.agents)
+                if bad:
+                    raise RegistryError(
+                        f"machine {name}: agents.{label} references "
+                        f"unknown agent(s) {sorted(bad)}")
+            both = set(inc or []) & set(exc or [])
+            if both:
+                raise RegistryError(
+                    f"machine {name}: agents lists agent(s) in BOTH "
+                    f"include and exclude: {sorted(both)}")
+        sel_agents = selected_agents(reg, m)
+        if sel_agents:
+            from . import planner as plannermod
+            sk_spec = reg.targets.get("mitos-agent", {}).get("skills", {})
+            machine_skills = {s.name for s in plannermod._selected_skills(reg, sk_spec, m)}
+            for aname in sel_agents:
+                agent = reg.agents[aname]
+                for sk in agent.skills:
+                    if sk not in machine_skills:
+                        raise RegistryError(
+                            f"machine {name}: selected agent {agent.name!r} requires "
+                            f"skill {sk!r}, which is not deployed to this machine"
+                        )
     # Skill curation (include:/exclude:) is a PERSONAL choice — which of the compatible
     # skills a given box actually wants — not compiler spec. targets/*.yaml is core and
     # NOT overlayable (see AGENTS.md), so a curation list living there is a fork tax on

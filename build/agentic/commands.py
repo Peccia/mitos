@@ -777,14 +777,24 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
 
 
 # ── graph ────────────────────────────────────────────────────────────────────
-def cmd_graph(reg: Registry, project: str | None, query: str) -> int:
+def cmd_graph(reg: Registry, project: str | None, query: str, *,
+              complete_effort: str | None = None,
+              evaluation_doc: str | None = None) -> int:
     """Inspect/validate the knowledge graph and run a saved SPARQL query.
 
     With no --project, list every loaded project graph. With one, validate it (loading
     already did, loudly), report whether it is canonically serialized, and print the
     result of the named saved query (default: its document index).
+
+    `--complete-effort` instead PROPOSES marking an effort Done: it lands a `kind: graph`
+    Inbox candidate and never writes the graph (invariant #3) — accept it in the console.
     """
     from . import graph as graphmod
+    if evaluation_doc and not complete_effort:
+        print("error: --evaluation-doc requires --complete-effort")
+        return 2
+    if complete_effort:
+        return _propose_complete_effort(reg, project, complete_effort, evaluation_doc or "")
     if not reg.graphs:
         print("no project graphs — add registry/graph/<slug>.jsonld "
               "(see the knowledge-graph design).")
@@ -812,6 +822,39 @@ def cmd_graph(reg: Registry, project: str | None, query: str) -> int:
     print(f"\nquery {query!r}: {len(rows)} row(s)")
     for r in rows:
         print("  " + "  ".join(f"{k}={v}" for k, v in r.items()))
+    return 0
+
+
+def _propose_complete_effort(reg: Registry, project: str | None, effort_id: str,
+                             evaluation_doc: str) -> int:
+    """`graph --complete-effort`: propose status "done" (and the evaluation reference) for one
+    effort through review.propose_graph_change. Every other effort field rides along unchanged
+    (the valve would preserve them anyway; sending them keeps the candidate self-describing)."""
+    from . import review
+    if not project:
+        print("error: --complete-effort requires --project")
+        return 2
+    pg = reg.graphs.get(project)
+    effort = next((e for e in pg.efforts if e.id == effort_id), None) if pg else None
+    if effort is None:
+        have = ", ".join(e.id for e in pg.efforts) if pg else "no graph"
+        print(f"error: no effort {effort_id!r} in project {project!r} (have: {have or 'none'})")
+        return 2
+    out = review.propose_graph_change(reg, project, documents=[], efforts=[{
+        "id": effort.id, "name": effort.name, "description": effort.description,
+        "orgDomain": effort.org_domain, "goal": effort.goal,
+        "deliverables": list(effort.deliverables),
+        "requirementsCoverage": list(effort.requirements_coverage),
+        "keywords": effort.keywords, "hidden": effort.hidden,
+        "status": "done", "evaluation": evaluation_doc}],
+        reason=f"CLI complete-effort {effort_id}")
+    if not out["ok"]:
+        print(f"error: {out['error']}")
+        return 2
+    print(f"proposed: inbox/{out['id']} — marks {effort_id!r} Done"
+          + (f" with Implemented Document {evaluation_doc!r}" if evaluation_doc else ""))
+    print("review and accept it in the console Inbox (`mitos review`); the graph is unchanged "
+          "until then.")
     return 0
 
 

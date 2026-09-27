@@ -12,7 +12,7 @@ import re
 
 import yaml
 
-from .loader import Prompt, Registry, Skill, SkillResource, document_stores
+from .loader import Agent, Prompt, Registry, Skill, SkillResource, document_stores
 
 # how many lines plain_document inserts between sections ("\n\n" -> one blank line)
 _SEP_LINES = 1
@@ -597,6 +597,19 @@ def render_prompt(prompt: Prompt, target: str) -> str:
 def _frontmatter_doc(meta: dict, body: str) -> str:
     fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip("\n")
     return f"---\n{fm}\n---\n\n{body.rstrip(chr(10))}\n"
+
+
+# ── Agents ───────────────────────────────────────────────────────────────────
+def render_agent(agent: Agent) -> str:
+    """Render an agent Markdown file with YAML frontmatter in canonical order:
+    name, description, goal, skills."""
+    meta = {
+        "name": agent.name,
+        "description": agent.description,
+        "goal": agent.goal,
+        "skills": agent.skills,
+    }
+    return _frontmatter_doc(meta, agent.body)
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────

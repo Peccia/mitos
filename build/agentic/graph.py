@@ -27,6 +27,13 @@ PECCIA = "http://peccia.net/"
 PROJECT_NS = PECCIA + "project/"
 DOCUMENT_NS = PECCIA + "document/"
 CREATIVE_WORK_NS = PECCIA + "creativework/"
+# A document whose kind is "image" is a picture a vision model can view; it serializes as
+# schema:ImageObject (no additionalType). Mirrors connectors.base.IMAGE_KIND. Raster
+# extensions found as additionalType on a hand-written node normalize to it on read.
+IMAGE_KIND = "image"
+_IMAGE_KINDS = {"image", "png", "jpg", "jpeg", "gif", "webp"}
+IMAGE_HINT = ("_Entries typed `image` are pictures: open one by its ID as an image, never "
+              "as text (see your document store skill's Images section)._")
 # org_domain is not a schema.org term — an explicit http://peccia.net/ predicate (rather
 # than borrowing an ill-fitting schema.org property) keeps it honest that this is Mitos's
 # own vocabulary: an effort's org-domain tag names which org-* skill governs work on
@@ -113,6 +120,14 @@ STORE_PRED = PECCIA + "store"
 # from deployed context trees (AGENTS.md, CLAUDE.md) while staying in the graph.
 # Omit-when-absent/false, same as project hidden.
 HIDDEN_PRED = PECCIA + "hidden"
+# An effort's completion state is the public schema:creativeWorkStatus term (schema.org has a
+# fitting one, so no peccia: term is minted). Closed vocabulary: "" (active, omitted) or "done" —
+# no workflow states (Invariant #10). evaluation is a peccia IRI naming the Implemented Document
+# (a DigitalDocument in the same graph) the Done transition was recorded against; it cannot
+# exist without status "done".
+STATUS_PRED = SCHEMA + "creativeWorkStatus"
+KNOWN_STATUSES = ("done",)
+EVALUATION_PRED = PECCIA + "evaluation"
 
 # The @context every stored graph carries (kept verbatim in canonical output). An
 # explicit @vocab — not the bare "https://schema.org" string — so terms resolve offline
@@ -176,6 +191,8 @@ class CreativeWork:
                                         # contract). A tuple for the same reason as above.
     keywords: str = ""    # schema:keywords — optional comma-separated tags/aliases
     hidden: bool = False  # peccia:hidden — whether this effort is hidden from deployed trees
+    status: str = ""      # schema:creativeWorkStatus — "" (active) or "done" (KNOWN_STATUSES)
+    evaluation: str = ""  # peccia:evaluation — Drive ID of the Implemented Document; needs "done"
 
     @property
     def iri(self) -> str:
@@ -194,6 +211,50 @@ class ProjectGraph:
     @property
     def iri(self) -> str:
         return PROJECT_NS + self.slug
+
+
+# Friendly names for the store MIME types the fleet actually meets. Anything else falls
+# back to the subtype tail ("text/markdown" → "markdown", "vnd.google-apps.drawing" →
+# "drawing") so no store type is ever silently dropped.
+_MIME_FRIENDLY = {
+    "application/vnd.google-apps.document": "document",
+    "application/vnd.google-apps.spreadsheet": "spreadsheet",
+    "application/vnd.google-apps.presentation": "presentation",
+    "application/vnd.google-apps.form": "form",
+    "application/vnd.google-apps.folder": "folder",
+    "application/pdf": "pdf",
+}
+
+# Raster formats a vision model can view collapse to one kind, "image" — the graph
+# serializes that kind as schema:ImageObject. SVG/HEIC/TIFF are deliberately absent: they
+# keep their subtype and behave as generic documents.
+_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+
+
+# The kinds the console offers when a document is mapped by hand (its Type dropdown), in
+# display order. "document" is the default kind: it is the one the generated doc lines leave
+# UNLABELED, so only an entry an agent must open differently (a sheet, a picture) spends
+# tokens on a type. Enumeration can still record any other kind a store reports.
+DEFAULT_DOC_KIND = "document"
+KNOWN_DOC_TYPES = (DEFAULT_DOC_KIND, "spreadsheet", "presentation", "form", "pdf",
+                   "markdown", IMAGE_KIND)
+
+
+def friendly_doc_type(raw: str) -> str:
+    """A short, agent-facing document kind from a store's raw MIME type. Already-short
+    values (a file extension from the local connector) pass through unchanged; empty
+    stays empty — the graph field is optional (omit-when-absent)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if raw in _MIME_FRIENDLY:
+        return _MIME_FRIENDLY[raw]
+    if raw.lower() in _IMAGE_MIMES or raw.lower() in _IMAGE_EXTS or raw.lower() == IMAGE_KIND:
+        return IMAGE_KIND
+    if "/" in raw:
+        return raw.rsplit("/", 1)[-1].rsplit(".", 1)[-1] or raw
+    return raw
 
 
 # ── Load + validate ──────────────────────────────────────────────────────────
@@ -216,6 +277,9 @@ def load_project_graph(path: Path) -> ProjectGraph:
             raise GraphError(
                 f"{path.name}: effort {effort.id!r} isPartOf {effort.is_part_of} but "
                 f"this file's project is {proj_iri}")
+    doc_ids = {d.drive_id for _p, d in docs}
+    for effort in efforts:
+        check_effort_status(effort, doc_ids, path.name)
     for part_of, _doc in docs:
         if part_of != proj_iri and part_of not in effort_iris:
             raise GraphError(
@@ -232,6 +296,25 @@ def load_project_graph(path: Path) -> ProjectGraph:
     efforts_sorted = sorted(efforts, key=lambda e: (e.name.lower(), e.id))
     return ProjectGraph(slug=slug, name=proj_name, description=proj_desc,
                         documents=documents, efforts=efforts_sorted, path=path)
+
+
+def check_effort_status(effort: CreativeWork, doc_ids, label: str) -> None:
+    """Validate an effort's completion state against the closed vocabulary and the graph's
+    documents: status is "" or a KNOWN_STATUSES term; an evaluation needs status "done" and
+    must name a document in the same graph. Raises GraphError."""
+    if effort.status and effort.status not in KNOWN_STATUSES:
+        raise GraphError(
+            f"{label}: effort {effort.id!r} has unknown status {effort.status!r} — "
+            f"allowed: {', '.join(KNOWN_STATUSES)} (or absent for active)")
+    if effort.evaluation:
+        if effort.status != "done":
+            raise GraphError(
+                f"{label}: effort {effort.id!r} names evaluation {effort.evaluation!r} but "
+                f"is not done — an evaluation requires status 'done'")
+        if effort.evaluation not in doc_ids:
+            raise GraphError(
+                f"{label}: effort {effort.id!r} evaluation {effort.evaluation!r} is not a "
+                f"document in this project graph")
 
 
 def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
@@ -267,12 +350,14 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                 f"{label}: blank node found — every node must be an IRI "
                 f"(give it an http://peccia.net/ id)")
 
-    allowed = {str(SDO("Project")), str(SDO("DigitalDocument")), str(SDO("CreativeWork"))}
+    allowed = {str(SDO("Project")), str(SDO("DigitalDocument")), str(SDO("CreativeWork")),
+               str(SDO("ImageObject"))}
 
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
-    raw_efforts: list[tuple[str, str, str, str, str, tuple[str, ...], tuple[str, ...], str]] = []
-    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage, keywords)
+    raw_efforts: list[tuple] = []
+    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage, keywords,
+    #   hidden, status, evaluation)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -282,8 +367,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
         if unknown:
             raise GraphError(
                 f"{label}: node {subj} has unsupported type(s) {sorted(unknown)} — only "
-                f"schema:Project, schema:CreativeWork, and schema:DigitalDocument "
-                f"are allowed")
+                f"schema:Project, schema:CreativeWork, schema:DigitalDocument, and "
+                f"schema:ImageObject are allowed")
         s = str(subj)
         if str(SDO("Project")) in types:
             if not s.startswith(PROJECT_NS):
@@ -312,18 +397,38 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
             keywords = str(keywords_val) if keywords_val is not None else ""
             hidden_val = g.value(subj, URIRef(HIDDEN_PRED))
             hidden = bool(hidden_val and str(hidden_val).lower() in ("true", "1"))
+            status_vals = list(g.objects(subj, URIRef(STATUS_PRED)))
+            if len(status_vals) > 1:
+                raise GraphError(
+                    f"{label}: CreativeWork {subj} has multiple schema:creativeWorkStatus values")
+            status = str(status_vals[0]) if status_vals else ""
+            eval_vals = list(g.objects(subj, URIRef(EVALUATION_PRED)))
+            if len(eval_vals) > 1:
+                raise GraphError(
+                    f"{label}: CreativeWork {subj} has multiple peccia:evaluation values")
+            evaluation = ""
+            if eval_vals:
+                ev = str(eval_vals[0])
+                if not (isinstance(eval_vals[0], URIRef) and ev.startswith(DOCUMENT_NS)):
+                    raise GraphError(
+                        f"{label}: CreativeWork {subj} peccia:evaluation must be a "
+                        f"{DOCUMENT_NS}<id> IRI, got {ev!r}")
+                evaluation = ev[len(DOCUMENT_NS):]
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
                                 str(domain_val) if domain_val is not None else "",
                                 str(goal_val) if goal_val is not None else "",
-                                deliv_vals, cover_vals, keywords, hidden))
+                                deliv_vals, cover_vals, keywords, hidden, status, evaluation))
 
-    effort_iris = {iri for iri, _, _, _, _, _, _, _, _ in raw_efforts}
+    effort_iris = {r[0] for r in raw_efforts}
 
-    # ── Pass 2: validate DigitalDocument nodes ────────────────────────────────
+    # ── Pass 2: validate DigitalDocument / ImageObject nodes ─────────────────
+    # An ImageObject is a document that is a picture: same identifier/IRI/isPartOf
+    # invariants, same Document record, doc_type "image".
     docs: list[tuple[str, Document]] = []
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
-        if str(SDO("DigitalDocument")) not in types:
+        is_image = str(SDO("ImageObject")) in types
+        if str(SDO("DigitalDocument")) not in types and not is_image:
             continue
         s = str(subj)
         if not s.startswith(DOCUMENT_NS):
@@ -356,6 +461,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
         web_url = str(url_val) if url_val is not None else ""
         type_val = g.value(subj, SDO("additionalType"))
         doc_type = str(type_val) if type_val is not None else ""
+        if (is_image and not doc_type) or doc_type.lower() in _IMAGE_KINDS:
+            doc_type = IMAGE_KIND
         store_val = g.value(subj, URIRef(STORE_PRED))
         store = str(store_val) if store_val is not None else ""
         docs.append((part_of_str, Document(drive_id=drive_id, name=name,
@@ -370,7 +477,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for iri, name, desc, org_domain, goal, deliverables, coverage, keywords, hidden in raw_efforts:
+    for (iri, name, desc, org_domain, goal, deliverables, coverage, keywords, hidden,
+         status, evaluation) in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
@@ -380,7 +488,9 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                                     deliverables=deliverables,
                                     requirements_coverage=coverage,
                                     keywords=keywords,
-                                    hidden=hidden))
+                                    hidden=hidden,
+                                    status=status,
+                                    evaluation=evaluation))
 
     return projects, docs, efforts
 
@@ -473,12 +583,16 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             effort_node["keywords"] = e.keywords
         if e.hidden:
             effort_node[HIDDEN_PRED] = True
+        if e.status:
+            effort_node["creativeWorkStatus"] = e.status
+        if e.evaluation:
+            effort_node[EVALUATION_PRED] = {"@id": DOCUMENT_NS + e.evaluation}
         graph_nodes.append(effort_node)
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
         doc_node: dict = {
             "@id": d.iri,
-            "@type": "DigitalDocument",
+            "@type": "ImageObject" if d.doc_type == IMAGE_KIND else "DigitalDocument",
             "identifier": d.drive_id,
             "name": d.name,
             "description": d.description,
@@ -489,7 +603,7 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             doc_node["url"] = d.web_url
         if d.keywords:
             doc_node["keywords"] = d.keywords
-        if d.doc_type:
+        if d.doc_type and d.doc_type != IMAGE_KIND:
             doc_node["additionalType"] = d.doc_type
         if d.store:
             doc_node[STORE_PRED] = d.store
@@ -550,7 +664,8 @@ SAVED_QUERIES: dict[str, str] = {
     "documents": """
         PREFIX schema: <https://schema.org/>
         SELECT ?id ?name ?description ?modified WHERE {
-            ?doc a schema:DigitalDocument ;
+            VALUES ?t { schema:DigitalDocument schema:ImageObject }
+            ?doc a ?t ;
                  schema:identifier ?id ;
                  schema:name ?name ;
                  schema:description ?description ;
@@ -610,11 +725,13 @@ def _cap(docs: list, limit: int = INDEX_LIMIT) -> tuple[list, int]:
 
 def _concise_entry(d: Document) -> str:
     """One condensed bullet per document: title, document ID, modified date (plus the
-    document type when known — the tool-selection hint), then description and tags only
-    when present. No URL — the document store resolves by ID.
+    document type when it is known AND not the default `document` — the tool-selection
+    hint only earns its tokens when it changes which tool to reach for), then description
+    and tags only when present. No URL — the document store resolves by ID.
     Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference,
     so the claude-code and mitos-agent surfaces render identically."""
-    meta = f"{d.date_modified} · {d.doc_type}" if d.doc_type else d.date_modified
+    labeled = d.doc_type and d.doc_type != DEFAULT_DOC_KIND
+    meta = f"{d.date_modified} · {d.doc_type}" if labeled else d.date_modified
     line = f"- **{d.name}** `{d.drive_id}` ({meta})"
     if d.description:
         line += f" — {d.description}"
@@ -680,6 +797,17 @@ def _effort_deliverables_line(e: CreativeWork) -> list[str]:
     return [f"_Expected deliverables: {', '.join(e.deliverables)}._", ""]
 
 
+def _effort_status_line(e: CreativeWork) -> list[str]:
+    """The completion line under an effort's goal — the cross-repo contract grammar (MitosAgent's
+    tree parser reads it with an anchored regex; change both together). Active efforts render
+    nothing, so existing trees stay byte-identical."""
+    if e.status != "done":
+        return []
+    if e.evaluation:
+        return [f"_Status: Done · Implemented Document: `{e.evaluation}`._", ""]
+    return ["_Status: Done._", ""]
+
+
 def _effort_keywords_line(e: CreativeWork) -> list[str]:
     """The alias line under an effort's heading (schema:keywords on CreativeWork):
     names alternative phrases or aliases that route to this effort."""
@@ -712,7 +840,7 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
 
 def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool,
                intro: str, entry_fn, include_effort_desc: bool,
-               org_routing: bool = True) -> str:
+               org_routing: bool = True, image_hint: bool = False) -> str:
     """Shared renderer for all three document blocks — the connection-section grammar.
 
     The connection heading (`<Name> (`key`)`) is emitted at `level` (`#` for the standalone
@@ -727,6 +855,8 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
     if emit_heading:
         lines += [f"{h} {heading}", ""]
     lines += [intro, ""]
+    if image_hint and any(d.doc_type == IMAGE_KIND for d in pg.documents):
+        lines += [IMAGE_HINT, ""]
     visible_efforts = [e for e in pg.efforts if not e.hidden]
     groups, _has_efforts = _grouped(pg)
     has_visible_efforts = bool(visible_efforts)
@@ -746,6 +876,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
+            lines += _effort_status_line(e)
             lines += _effort_deliverables_line(e)
             lines += _effort_coverage_line(e)
             lines += _effort_keywords_line(e)
@@ -813,7 +944,7 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=True, intro=intro, entry_fn=entry_fn,
                       org_routing=org_routing,
-                      include_effort_desc=True)
+                      include_effort_desc=True, image_hint=True)
 
 
 def project_full_markdown(pg: ProjectGraph,
@@ -852,7 +983,8 @@ def project_full_markdown(pg: ProjectGraph,
 
     return _doc_block(pg, heading=_conn_heading(pg, heading), level=level,
                       emit_heading=emit_heading, intro=intro, entry_fn=entry_fn,
-                      include_effort_desc=True, org_routing=org_routing)
+                      include_effort_desc=True, org_routing=org_routing,
+                      image_hint=True)
 
 
 def _by_recency(documents: list) -> list:

@@ -273,6 +273,111 @@ def test_propose_project_edit_clearing_repo_removes_repo_notes_too():
     assert "repo_notes" not in text
 
 
+def test_graph_index_exposes_effort_keywords_and_project_skills():
+    from dataclasses import replace
+    from agentic.review import graph_index
+    treg, _ = _temp_registry()
+    treg.projects["example-project"]["skills"] = ["tests"]
+    pg = treg.graphs["example-project"]
+    assert pg.efforts, "example-project should have at least one effort"
+    pg.efforts = [replace(pg.efforts[0], keywords="alias1, alias2")] + list(pg.efforts[1:])
+
+    idx = graph_index(treg)
+    proj_entry = next(p for p in idx if p["slug"] == "example-project")
+    assert "skills" in proj_entry
+    assert proj_entry["skills"] == ["tests"]
+
+    effort_entry = next(e for e in proj_entry["efforts"] if e["id"] == pg.efforts[0].id)
+    assert "keywords" in effort_entry
+    assert effort_entry["keywords"] == "alias1, alias2"
+
+
+def test_propose_project_edit_sets_and_clears_skills():
+    """Setting skills lands in the candidate and survives Accept round-trip; passing []
+    clears the skills key from the manifest cleanly."""
+    from agentic import loader as loadermod
+    from agentic.review import decide, load_candidates, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "git-auto-commit"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: git-auto-commit\nscope: project\ntargets: [claude-code]\n---\nbody\n",
+        encoding="utf-8",
+    )
+    treg = loadermod.load(tmp)
+
+    out = propose_project_edit(treg, "example-project", {"skills": ["git-auto-commit"]}, "")
+    assert out["ok"], out
+    assert out["registry_path"] == "projects/example-project.yaml"
+
+    candidates = load_candidates(treg)
+    cand = next(c for c in candidates if c["id"] == out["id"])
+    assert "skills:" in cand["payload"]
+    assert "git-auto-commit" in cand["payload"]
+
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"].get("skills") == ["git-auto-commit"]
+
+    # Clearing skills with [] removes the key
+    out2 = propose_project_edit(reloaded, "example-project", {"skills": []}, "")
+    assert out2["ok"], out2
+    result2 = decide(reloaded, out2["id"], "accept", "")
+    assert result2["ok"], result2
+    reloaded2 = loadermod.load(tmp)
+    assert "skills" not in reloaded2.projects["example-project"]
+    written = tmp / "registry" / "projects" / "example-project.yaml"
+    assert "skills:" not in written.read_text(encoding="utf-8")
+
+
+def test_propose_project_edit_rejects_unknown_skill():
+    from agentic.review import propose_project_edit
+
+    treg, _ = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"skills": ["unknown-skill-xyz"]}, "")
+    assert not out["ok"]
+    assert "unknown skill 'unknown-skill-xyz'" in out["error"]
+
+
+def test_propose_project_edit_rejects_non_list_skills():
+    from agentic.review import propose_project_edit
+
+    treg, _ = _temp_registry()
+    out = propose_project_edit(treg, "example-project", {"skills": "git-auto-commit"}, "")
+    assert not out["ok"]
+    assert "skills must be a list" in out["error"]
+
+
+def test_propose_project_edit_leaves_skills_untouched_when_absent():
+    """Pass-through regression: an edit not naming skills leaves existing bindings untouched."""
+    import yaml as _y
+    from agentic import loader as loadermod
+    from agentic.review import decide, propose_project_edit
+
+    treg, tmp = _temp_registry()
+    skill_dir = tmp / "registry" / "skills" / "git-auto-commit"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: git-auto-commit\nscope: project\ntargets: [claude-code]\n---\nbody\n",
+        encoding="utf-8",
+    )
+    proj_path = tmp / "registry" / "projects" / "example-project.yaml"
+    proj_data = _y.safe_load(proj_path.read_text(encoding="utf-8"))
+    proj_data["skills"] = ["git-auto-commit"]
+    proj_path.write_text(_y.safe_dump(proj_data), encoding="utf-8")
+    treg = loadermod.load(tmp)
+
+    out = propose_project_edit(treg, "example-project", {"description": "updated description"}, "")
+    assert out["ok"], out
+    result = decide(treg, out["id"], "accept", "")
+    assert result["ok"], result
+
+    reloaded = loadermod.load(tmp)
+    assert reloaded.projects["example-project"].get("skills") == ["git-auto-commit"]
+
+
 def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     """propose_new_skill needs no new acceptance-path logic: route_into_registry already
     writes a brand-new file verbatim when the target path doesn't exist (commands.py),
@@ -2374,6 +2479,33 @@ def test_app_js_propose_graph_draft_includes_hidden():
     assert "hidden: !!x.hidden" in app
 
 
+def test_app_js_hides_hidden_efforts_with_drawer():
+    """Ensure app.js excludes hidden efforts from the main registry list and provides
+    the slide-out Hidden drawer with unhide capabilities, and excludes ID column."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
+    html = (review.UI_DIR / "index.html").read_text(encoding="utf-8")
+
+    # State and functions exist
+    assert "let hiddenDrawerOpen = false;" in app
+    assert "function hiddenEffortsFor(g)" in app
+    assert "function renderHiddenDrawer(g)" in app
+    assert "toggleHiddenBtn" in app
+    assert "effort.hidden && !isCurrentEffortEditor" in app
+    assert "!e.hidden" in app
+    assert "rrow-name-content" in app
+
+    # HTML and CSS drawer exist
+    assert 'id="hidden-work-drawer"' in html
+    assert "#hidden-work-drawer" in css
+    assert "#hidden-work-drawer.open" in css
+    assert ".hidden-effort-card" in css
+    assert ".hidden-effort-actions" in css
+
+
+
+
 def test_api_graph_effort_hidden_toggle_end_to_end():
     """HTTP API test: toggle effort hidden on and off via /api/graph and /api/decide,
     verifying it reflects in /api/state."""
@@ -2567,6 +2699,34 @@ def test_propose_graph_change_preserves_existing_org_domain():
         "the orgDomain tag must survive into the proposed JSON-LD"
 
 
+def test_propose_graph_change_preserves_effort_keywords_when_key_absent():
+    """Pin the review.py:795 behavior: re-proposing an effort without naming keywords
+    preserves the existing aliases on disk, protecting against stale/partial drafts."""
+    import json
+    from agentic import review, loader as loadermod
+
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+
+    out1 = review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch Prep", "keywords": "legacy-alias, alt-tag"}])
+    assert out1["ok"], out1
+    review.decide(treg, out1["id"], "accept", "")
+    treg = loadermod.load(tmp)
+
+    # Now propose an edit without "keywords" in the effort dict
+    out2 = review.propose_graph_change(treg, slug, [], [], efforts=[
+        {"id": "launch-prep", "name": "Launch Prep Renamed"}])
+    assert out2["ok"], out2
+
+    cand = sorted((tmp / "registry" / "local" / "inbox").glob("*/*.jsonld"))[-1]
+    body = json.loads(cand.read_text(encoding="utf-8"))
+    work_nodes = [n for n in body["@graph"] if str(n.get("@id", "")).endswith("launch-prep")]
+    assert work_nodes, "launch-prep effort node must exist in candidate"
+    assert any("legacy-alias" in json.dumps(n) for n in work_nodes), \
+        "existing keywords must be preserved when the key is omitted in the proposal"
+
+
 def test_org_prefixed_user_skill_is_not_treated_as_an_org_domain_skill():
     """`org-` is a naming convention the core org skills happen to follow, not an identity
     test. A user skill called `org-software-implementation-plan` — no `org_domain:`, targeting
@@ -2620,3 +2780,483 @@ def test_flag_never_hides_a_skill_a_coding_workstation_deploys():
 
     for name in ("org-software", "org-design", "org-marketing"):
         assert not visible(by_name[name]), f"{name} is an org skill and must be hidden"
+
+
+# ── Effort Done state through the Inbox valve ─────────────────────────────────
+def _done_rig():
+    """A temp registry whose first project has one Implemented Document under effort
+    `ship`, accepted and reloaded — the starting point for Done-state valve tests."""
+    from agentic import loader as loadermod, review
+    treg, tmp = _temp_registry()
+    slug = next(iter(treg.projects))
+    out = review.propose_graph_change(
+        treg, slug,
+        documents=[{"id": "EXAMPLEDOCID", "name": "Implemented", "dateModified": "2026-09-01",
+                    "parentId": "ship"}],
+        efforts=[{"id": "ship", "name": "Ship It", "goal": "g"},
+                 {"id": "other", "name": "Other Work"}])
+    assert out["ok"], out
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    return loadermod.load(tmp), tmp, slug
+
+
+def _accept(treg, tmp, out):
+    from agentic import loader as loadermod, review
+    assert out["ok"], out
+    res = review.decide(treg, out["id"], "accept", "")
+    assert res["ok"], res
+    return loadermod.load(tmp)
+
+
+def _effort(treg, slug, eid):
+    return next(e for e in treg.graphs[slug].efforts if e.id == eid)
+
+
+def _mark_done(treg, slug):
+    from agentic import review
+    return review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "goal": "g", "status": "done",
+         "evaluation": "EXAMPLEDOCID"}])
+
+
+def test_propose_effort_edit_without_status_keys_preserves_done():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(
+        treg, slug, [], efforts=[{"id": "ship", "name": "Ship It Renamed", "hidden": True}]))
+    e = _effort(treg, slug, "ship")
+    assert (e.name, e.status, e.evaluation) == ("Ship It Renamed", "done", "EXAMPLEDOCID")
+
+
+def test_propose_effort_explicit_empty_status_clears_done():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(
+        treg, slug, [], efforts=[{"id": "ship", "name": "Ship It", "status": "",
+                                  "evaluation": ""}]))
+    e = _effort(treg, slug, "ship")
+    assert (e.status, e.evaluation) == ("", "")
+
+
+def test_propose_rejects_unknown_status():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    for bad in ("in-progress", "Done"):
+        out = review.propose_graph_change(treg, slug, [], efforts=[
+            {"id": "ship", "name": "Ship It", "status": bad}])
+        assert not out["ok"] and "status" in out["error"], out
+
+
+def test_propose_rejects_dangling_evaluation():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    out = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "status": "done", "evaluation": "MISSINGDOC"}])
+    assert not out["ok"] and "MISSINGDOC" in out["error"], out
+    out = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "ship", "name": "Ship It", "evaluation": "EXAMPLEDOCID"}])
+    assert not out["ok"], "an evaluation without status done must be rejected"
+
+
+def test_propose_rejects_removing_the_evaluation_document():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    out = review.propose_graph_change(treg, slug, [], removals=["EXAMPLEDOCID"])
+    assert not out["ok"] and "EXAMPLEDOCID" in out["error"], out
+    # clearing the evaluation in the same proposal makes the removal legal
+    out = review.propose_graph_change(treg, slug, [], removals=["EXAMPLEDOCID"], efforts=[
+        {"id": "ship", "name": "Ship It", "evaluation": ""}])
+    assert out["ok"], out
+
+
+def test_propose_doc_mapping_alone_never_changes_effort_status():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, review.propose_graph_change(treg, slug, documents=[
+        {"id": "EXAMPLEDOCID", "name": "Implemented", "dateModified": "2026-09-02",
+         "parentId": "ship"}]))
+    assert _effort(treg, slug, "ship").status == ""
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, review.propose_graph_change(treg, slug, documents=[
+        {"id": "OTHERDOCID", "name": "Other", "dateModified": "2026-09-03",
+         "parentId": "other"}]))
+    assert _effort(treg, slug, "ship").status == "done"
+
+
+def test_two_candidates_accepted_out_of_order_preserves_done():
+    """Candidate A (a goal tweak on `other`) is proposed BEFORE candidate B marks `ship` done;
+    accepting A after B must not roll `ship` back — A's fragment carries a stale `ship`."""
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    a = review.propose_graph_change(treg, slug, [], efforts=[
+        {"id": "other", "name": "Other Work", "goal": "new goal"}])
+    assert a["ok"], a
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    treg = _accept(treg, tmp, a)
+    assert _effort(treg, slug, "ship").status == "done"
+    assert _effort(treg, slug, "other").goal == "new goal"
+
+
+def test_graph_candidate_summary_includes_effort_delta():
+    from agentic import review
+    treg, _tmp, slug = _done_rig()
+    out = _mark_done(treg, slug)
+    assert out["ok"], out
+    cand = next(c for c in review.load_candidates(treg) if c["id"] == out["id"])
+    assert cand["effort_delta"] == [{"id": "ship", "status": ["", "done"],
+                                     "evaluation": ["", "EXAMPLEDOCID"]}]
+    assert cand["no_changes"] is False
+
+
+def test_graph_index_exposes_effort_status_and_evaluation():
+    from agentic import review
+    treg, tmp, slug = _done_rig()
+    treg = _accept(treg, tmp, _mark_done(treg, slug))
+    idx = next(g for g in review.graph_index(treg) if g["slug"] == slug)
+    e = next(e for e in idx["efforts"] if e["id"] == "ship")
+    assert (e["status"], e["evaluation"]) == ("done", "EXAMPLEDOCID")
+
+
+def _ui_src(name):
+    from agentic import review
+    return (review.UI_DIR / name).read_text(encoding="utf-8")
+
+
+def test_app_js_propose_graph_draft_includes_status_and_evaluation():
+    """The draft payload forwards completion state only when the draft carries the key — an
+    absent key is the server's preserve-when-absent signal, so a stale draft cannot un-mark Done."""
+    src = _ui_src("app.js")
+    body = src[src.index("async function proposeGraphDraft"):]
+    body = body[:body.index("\n}\n")]
+    assert 'if ("status" in x) item.status = x.status ?? "";' in body
+    assert 'if ("evaluation" in x) item.evaluation = x.evaluation ?? "";' in body
+    # both Edit-button draft seeds and the effort editor carry the fields
+    assert src.count('status: effort.status || ""') == 3
+    assert 'status: inputs.status.checked ? "done" : ""' in src
+
+
+def test_app_js_tweak_offers_done_only_on_identity_peek():
+    src = _ui_src("app.js")
+    tweak = src[src.index("async function openTweak"):]
+    tweak = tweak[:tweak.index("\n}\n")]
+    assert "openEditor.vals.implementedFor = effortId;" in tweak
+    assert "Mark effort as Done with this Implemented Document" in src
+    assert 'status: "done", evaluation: doc.id' in src
+
+
+def test_app_js_renders_done_badge_and_evaluation_ref():
+    src = _ui_src("app.js")
+    assert '"badge badge-done", "Done"' in src
+    assert 'el("div", "effort-evaluation")' in src
+    assert "effortDeltaSummary(c)" in src
+
+
+def test_style_css_defines_badge_done_classes():
+    css = _ui_src("style.css")
+    assert ".badge.badge-done" in css and ".effort-evaluation" in css
+
+
+def _seed_and_accept(docs):
+    from agentic import review
+    treg, tmp = _temp_registry()
+    out = review.propose_graph_change(treg, "example-project", docs, reason="seed")
+    assert out["ok"], out
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    return tmp
+
+
+def _graph_doc(tmp, did):
+    from agentic import graph
+    pg = graph.load_project_graph(tmp / "registry" / "graph" / "example-project.jsonld")
+    return next(d for d in pg.documents if d.drive_id == did)
+
+
+def test_propose_graph_change_normalizes_image_type():
+    """A hand-typed `png`/`image/png` becomes the one `image` kind (stored as ImageObject)."""
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "whiteboard", "dateModified": "2026-01-01",
+         "type": "png"},
+        {"id": "I2", "name": "Shot", "description": "screenshot", "dateModified": "2026-01-01",
+         "type": "image/png"}])
+    assert _graph_doc(tmp, "I1").doc_type == "image"
+    assert _graph_doc(tmp, "I2").doc_type == "image"
+    raw = (tmp / "registry" / "graph" / "example-project.jsonld").read_text(encoding="utf-8")
+    assert '"@type": "ImageObject"' in raw
+
+
+def test_propose_graph_change_preserves_web_url_when_omitted():
+    """The console's editor sends no webUrl; an edit must not strip the stored link."""
+    from agentic import review
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "d", "dateModified": "2026-01-01",
+         "webUrl": "https://example.com/board", "type": "image"}])
+    reg = loader.load(tmp)
+    out = review.propose_graph_change(reg, "example-project", [
+        {"id": "I1", "name": "Board v2", "description": "d", "dateModified": "2026-01-02"}])
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    d = _graph_doc(tmp, "I1")
+    assert d.name == "Board v2" and d.web_url == "https://example.com/board"
+    assert d.doc_type == "image"
+
+
+def test_app_js_refuses_empty_description_for_image_type():
+    """Contract on the console: `type` rides stagedDoc and proposeGraphDraft, the editor has
+    a Type field, and Apply refuses an image with no description."""
+    import re
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    staged = app[app.index("function stagedDoc("):]
+    assert re.search(r"type:\s*d\.type", staged[:staged.index("\n}")])
+    draft = app[app.index("async function proposeGraphDraft("):]
+    assert "type: x.type" in draft[:draft.index("const removals")]
+    card = app[app.index("function editorCard("):]
+    card = card[:card.index("\nfunction ")]
+    assert 'wrap.append(el("label", "", "Type"))' in card and "inputs.type = sel" in card
+    assert "STATE.known_doc_types" in card
+    assert "isImageKind(doc.type) && !doc.description" in card
+    guard = card.index("isImageKind(doc.type) && !doc.description")
+    assert card.index("return;", guard) < card.index("draftUpsert(", guard)
+
+
+def test_remove_image_object_moves_to_recovery():
+    """Removing an ImageObject runs the shared document path: gone from the graph,
+    auto-dismissed into Recovery."""
+    from agentic import graph, review
+    tmp = _seed_and_accept([
+        {"id": "I1", "name": "Board", "description": "d", "dateModified": "2026-01-01",
+         "type": "image"}])
+    out = review.propose_graph_change(loader.load(tmp), "example-project", [],
+                                      removals=["I1"], reason="drop image")
+    assert review.decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    pg = graph.load_project_graph(tmp / "registry" / "graph" / "example-project.jsonld")
+    assert "I1" not in {d.drive_id for d in pg.documents}
+    dismissed = review.load_dismissed(loader.load(tmp), "example-project")["documents"]
+    assert [x["id"] for x in dismissed] == ["I1"]
+
+
+def test_add_document_type_dropdown_defaults_to_document():
+    """The console's Type dropdown offers graph.KNOWN_DOC_TYPES (served in state), and a
+    hand-added document starts on the first of them, `document`."""
+    from agentic import graph, review
+    treg, _tmp = _temp_registry()
+    assert review.state(treg)["known_doc_types"] == list(graph.KNOWN_DOC_TYPES)
+    assert graph.KNOWN_DOC_TYPES[0] == graph.DEFAULT_DOC_KIND == "document"
+    assert graph.IMAGE_KIND in graph.KNOWN_DOC_TYPES
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+    add = app[app.index('"+ Doc"'):]
+    add = add[:add.index("renderRegistryRows(g)")]
+    assert 'type: (STATE.known_doc_types || ["document"])[0]' in add
+
+
+# ── Milestone 2: Agents in console ───────────────────────────────────────────
+def test_api_agents_shape():
+    """GET /api/agents returns the expected payload shape: agents list with
+    name, description, goal, skills, machines, source; machines list with
+    name, selected, limit."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "test-agent.md"
+    agent_file.write_text(
+        "---\n"
+        "name: test-agent\n"
+        "description: Test agent description.\n"
+        "goal: Help test.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nDo test things.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    res = review.agents_index(loaded)
+    assert "agents" in res
+    assert "machines" in res
+    assert isinstance(res["agents"], list)
+    assert isinstance(res["machines"], list)
+
+    agent_entry = next((a for a in res["agents"] if a["name"] == "test-agent"), None)
+    assert agent_entry is not None
+    expected_agent_keys = {"name", "description", "goal", "skills", "machines", "source"}
+    assert expected_agent_keys <= set(agent_entry.keys())
+    assert agent_entry["description"] == "Test agent description."
+    assert agent_entry["goal"] == "Help test."
+    assert agent_entry["skills"] == ["new-session"]
+    assert "local/agents/test-agent.md" in agent_entry["source"]
+
+    for m in res["machines"]:
+        assert {"name", "selected", "limit"} <= set(m.keys())
+        assert m["limit"] == 20
+        assert isinstance(m["selected"], int)
+
+
+def test_propose_new_agent_lands_in_inbox_not_registry():
+    """propose_new_agent writes only to inbox/ (kind: new), never touching registry/
+    directly (invariant #3). Deciding accept routes it into registry/local/agents/."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    out = review.propose_new_agent(
+        treg, "scout-agent",
+        {"description": "Scout things.", "goal": "Find stuff.", "skills": ["new-session"]},
+        "# Instructions\n\nScout around.",
+        reason="initial scaffold"
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/scout-agent.md"
+
+    # Invariant #3: registry has not been modified
+    reg_target = tmp / "registry" / "local" / "agents" / "scout-agent.md"
+    assert not reg_target.exists()
+
+    candidates = review.load_candidates(treg)
+    cand = next((c for c in candidates if c["id"] == out["id"]), None)
+    assert cand is not None
+    assert cand["kind"] == "new"
+    assert cand["acceptable"]
+
+    # Accept the candidate
+    dec_res = review.decide(treg, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+    assert reg_target.is_file()
+    content = reg_target.read_text(encoding="utf-8")
+    assert "name: scout-agent" in content
+    assert "description: Scout things." in content
+    assert "goal: Find stuff." in content
+    assert "skills:" in content
+    assert "Scout around." in content
+
+    # The new agent is now loadable
+    reloaded = loader.load(tmp)
+    assert "scout-agent" in reloaded.agents
+
+
+def test_propose_new_agent_validates():
+    """propose_new_agent enforces M1 agent validation rules on candidate text."""
+    from agentic import review
+
+    treg, _tmp = _temp_registry()
+
+    # Empty name
+    assert not review.propose_new_agent(treg, "", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Bad slug
+    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Empty description
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Empty goal
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "", "skills": ["new-session"]}, "body")["ok"]
+    # Empty skills
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": []}, "body")["ok"]
+    # Unknown skill
+    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
+    assert not res["ok"]
+    assert "unknown skill" in res["error"]
+    # Empty body
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "")["ok"]
+
+
+def test_propose_agent_meta_edit_lands_in_inbox():
+    """propose_meta_edit accepts kind='agent' for description, goal, skills,
+    writing a verbatim candidate that updates the agent file when accepted."""
+    from agentic import review
+    import yaml as _y
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "worker.md").write_text(
+        "---\n"
+        "name: worker\n"
+        "description: Original description.\n"
+        "goal: Original goal.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nWork hard.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    out = review.propose_meta_edit(
+        loaded, "agent", "worker",
+        {"description": "Updated description.", "goal": "Updated goal."},
+        "Work hard."
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/worker.md"
+
+    candidates = review.load_candidates(loaded)
+    cand = next(c for c in candidates if c["id"] == out["id"])
+    assert cand["acceptable"]
+    meta_on_disk = _y.safe_load((tmp / "registry" / "local" / "inbox" / out["id"] / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta_on_disk.get("verbatim") is True
+
+    dec_res = review.decide(loaded, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+
+    text = (adir / "worker.md").read_text(encoding="utf-8")
+    assert "description: Updated description." in text
+    assert "goal: Updated goal." in text
+    assert "Work hard." in text
+
+
+def test_propose_agent_body_edit():
+    """propose_edit accepts kind='agent' for body editing, preserving frontmatter on accept."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "coder.md").write_text(
+        "---\n"
+        "name: coder\n"
+        "description: Code agent.\n"
+        "goal: Write code.\n"
+        "skills: [new-session]\n"
+        "---\n\n"
+        "# Instructions\n\nInitial instructions.\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    out = review.propose_edit(
+        loaded, "agent", "coder",
+        "# Instructions\n\nUpdated instructions.\n",
+        reason="improve prompt"
+    )
+    assert out["ok"], out
+    assert out["registry_path"] == "local/agents/coder.md"
+
+    dec_res = review.decide(loaded, out["id"], "accept", "")
+    assert dec_res["ok"], dec_res
+
+    text = (adir / "coder.md").read_text(encoding="utf-8")
+    assert "name: coder" in text
+    assert "description: Code agent." in text
+    assert "goal: Write code." in text
+    assert "Updated instructions." in text
+    assert "Initial instructions." not in text
+
+
+def test_agents_section_hidden_without_flag():
+    """The Agents chip and grid are gated behind hasMitosAgent() in app.js."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    # Flag gate predicate exists
+    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
+
+    # Agents chip is gated behind hasMitosAgent()
+    assert "if (hasMitosAgent()) {" in app
+    assert 'const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");' in app
+
+    # Agents grid rendering is gated behind hasMitosAgent()
+    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid(gridWrap);" in app
+
+    # + New agent button is gated behind hasMitosAgent()
+    assert 'if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn = el("button", "accept", "+ New agent");' in app
+
+    # Fetch is gated behind hasMitosAgent()
+    assert "if (!agentsData && hasMitosAgent()) {" in app
+

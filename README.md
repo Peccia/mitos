@@ -366,14 +366,16 @@ orphan case is mapped in [Managing state & drift](docs/managing-state.md).
 ## The knowledge graph + connectors
 
 Mitos keeps a **lean [schema.org](https://schema.org/) index** of where each project's
-authoritative documents live — two types (`Project`, `DigitalDocument`), keyed by document ID,
+authoritative documents live — `Project`, `DigitalDocument` (and `ImageObject` for a picture), keyed by document ID,
 storing references and short descriptions, never document bodies. It routes an agent to the
 *correct, current* document instead of letting it guess. Each document may carry an optional
 `additionalType` — a friendly kind (`spreadsheet`, `document`, `pdf`, …) captured from the
 store's MIME type at enumeration — rendered beside the modified date in the deployed doc
 lines so the agent picks the right tool (sheets vs docs) before touching the store. Absent
 on older graphs, and everything still renders — the field is omit-when-absent like `url`
-and `keywords`.
+and `keywords`. PNG/JPEG/GIF/WebP files collapse to the kind `image` and serialize as a
+`schema:ImageObject` node (no `additionalType`) — a reference and a description, never the
+image bytes; the deployed doc lines then tell the harness to open such an entry as an image.
 
 You map documents into the graph through **one human-gated valve** — a `kind: graph` candidate
 in `inbox/` that you accept in the console. Building it is **three independent stages**, so the
@@ -440,7 +442,9 @@ deps (the deterministic verbs never import them):
 - **Mock (`mock`)** — in-process demo for tests and dry runs (`--backend mock`).
 
 Nothing writes the graph directly. Inspect any project with
-`python build/compile.py graph --project <slug>`.
+`python build/compile.py graph --project <slug>`. To mark an effort Done, run
+`python build/compile.py graph --project <slug> --complete-effort <id> [--evaluation-doc <doc-id>]`.
+This creates an Inbox candidate; the graph doesn't change until you accept it.
 
 ## Operator console
 
@@ -482,7 +486,7 @@ reference:
 | `adopt <path>` | Pull an in-place edit on a deployed file back into the registry. |
 | `harvest [--machine M] [--adopt-all]` | Digest of `harvest`-policy drift — proposals from self-improving tools. |
 | `review [--port N] [--no-open]` | The operator console (localhost; default port 8765). |
-| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. |
+| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. Add `--complete-effort <id> [--evaluation-doc <doc-id>]` to propose marking an effort Done (creates an Inbox candidate only). |
 | `mitos.py init` / `project add` / `connect` / `connectors` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) / list the available connectors — the separate, optional entrypoint. |
 | `mitos.py sync --machine M [init\|clone --hub URL\|status]` | Set up (`init`/`clone`) or run git-only overlay sync across your machines: pull → deploy → push. |
 | `mitos.py update --machine M [--dry-run] [--json]` | Unattended core pull → overlay pull → deploy; never force, prune, or push. `--json` prints one `schema: 1` outcome (see [managing state](docs/managing-state.md#automating-an-update)). |

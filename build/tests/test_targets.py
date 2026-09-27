@@ -232,6 +232,53 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert out.section_bodies
     assert any(render.is_generated_source(s) for s, _ in out.section_bodies)
 
+def _builder_rig(targets, repos=True):
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = targets
+    rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+    rig.projects["mitos"]["document_store"] = "gws"
+    if repos:
+        rig.projects["mitos"]["repo"] = [
+            "https://github.com/you/mitos.git", "https://github.com/you/mitos-agent.git"]
+        rig.projects["mitos"]["repo_notes"] = {"mitos": "the compiler"}
+    else:
+        rig.projects["mitos"].pop("repo", None)
+    rig.graphs["mitos"] = graphmod.ProjectGraph(
+        slug="mitos", name="Mitos", description="test description",
+        documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
+        efforts=[], path=None)
+    outs = planner.plan_machine(rig, "example-windows")
+    return next(o for o in outs if o.deploy_path == "C:/Projects/Mitos/AGENTS.md"
+                and o.target == "agents-md")
+
+
+def test_builder_lane_renders_repo_roster_on_assistant_host():
+    """On a machine that hosts the assistant tree, plan_clones puts the project's checkouts
+    beside the builder-context node, so the node lists them as the generated `## Navigation`
+    roster. Without it the agent host grounded on a node that named no checkout."""
+    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"])
+    assert "## Navigation" in out.content
+    assert "- `mitos/` — the compiler" in out.content
+    assert "- `mitos-agent/`" in out.content
+    assert "github.com/you/mitos.git" not in out.content
+    assert render.GENERATED_NAV in [s for s, _ in out.section_bodies]
+    assert "Design Review" in out.content          # the document index still follows
+
+
+def test_builder_lane_no_roster_without_assistant_tree():
+    """Only where the checkouts sit beside the node: an agents-md-only machine gets none."""
+    out = _builder_rig(["claude-code", "agents-md"])
+    assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
+    assert "- `mitos/`" not in out.content
+
+
+def test_builder_lane_no_roster_without_repos():
+    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"], repos=False)
+    assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
+
+
 def test_multi_store_project_renders_one_connection_section_per_store():
     """A project bound to two stores (document_store: a list) gets one `## <Name>
     (`key`)` section per store in its generated AGENTS.md, each holding only that
@@ -2284,3 +2331,123 @@ def test_agent_only_skills_have_no_harness_shell_steps():
                     problems.append(f"{path.parent.name}: body line {n}: `{s}` "
                                     f"(agent-only skill runs a shell step; hand it to the owner)")
     assert not problems, "\n".join(problems)
+
+
+def test_agents_md_image_hint_line():
+    """A project holding an image renders `(date · image)` and one hint line after the
+    intro in the details and full views; the titles-only index never carries it, and a
+    project without images renders byte-identically to before (no hint)."""
+    from agentic import graph as g
+    plain = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document")])
+    with_img = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document"),
+        g.Document("I1", "Board", "whiteboard", "2026-01-01", doc_type="image")])
+    for render in (g.project_details_markdown, g.project_full_markdown):
+        out = render(with_img)
+        assert out.count(g.IMAGE_HINT) == 1
+        intro_at = out.index("Resolve a document by its ID.")
+        assert intro_at < out.index(g.IMAGE_HINT) < out.index("Spec")
+        assert "(2026-01-01 · image)" in out
+        assert g.IMAGE_HINT not in render(plain)
+    assert g.IMAGE_HINT not in g.project_index_markdown(with_img)
+    assert ("Knowledge-graph documents for this project. Resolve a document by its ID.\n\n- "
+            in g.project_full_markdown(plain, emit_heading=False))
+    # the default kind is never labeled; every other kind is
+    assert "`D1` (2026-01-02)" in g.project_full_markdown(with_img)
+
+
+def test_only_non_document_kinds_are_labeled():
+    """`document` is the default kind, so its line carries the date alone; a sheet, a pdf or
+    a picture keeps its `· <type>` label in both the details and the full views."""
+    from agentic import graph as g
+    pg = g.ProjectGraph(slug="p", name="P", description="", documents=[
+        g.Document("D1", "Spec", "s", "2026-01-02", doc_type="document"),
+        g.Document("S1", "Budget", "b", "2026-01-03", doc_type="spreadsheet"),
+        g.Document("U1", "Notes", "n", "2026-01-04")])
+    for render in (g.project_details_markdown, g.project_full_markdown):
+        out = render(pg)
+        assert "`D1` (2026-01-02) —" in out and "· document" not in out
+        assert "`S1` (2026-01-03 · spreadsheet)" in out
+        assert "`U1` (2026-01-04) —" in out
+
+
+def test_plan_mitos_agent_emits_agents():
+    import copy
+    from agentic import planner
+    from agentic.loader import Agent
+    rig = _connected_rig("example-linux")
+    rig.agents["crm"] = Agent(
+        name="crm",
+        description="Personal CRM agent",
+        goal="Manage personal relationships and notes",
+        skills=["gws"],
+        body="# Instructions\nManage contacts.\n",
+        source=Path("registry/agents/crm.md")
+    )
+    outs = planner.plan_machine(rig, "example-linux")
+    agent_outs = [o for o in outs if o.deploy_path.endswith("agents/crm.md")]
+    assert len(agent_outs) == 1
+    out = agent_outs[0]
+    assert out.target == "mitos-agent"
+    assert out.drift_policy == "harvest"
+    assert out.deploy_path.endswith("/agents/crm.md")
+    expected = (
+        "---\n"
+        "name: crm\n"
+        "description: Personal CRM agent\n"
+        "goal: Manage personal relationships and notes\n"
+        "skills:\n"
+        "- gws\n"
+        "---\n\n"
+        "# Instructions\n"
+        "Manage contacts.\n"
+    )
+    assert out.content == expected
+
+
+def test_no_agents_output_byte_identical():
+    import copy
+    from agentic import planner
+    rig = copy.deepcopy(reg)
+    rig.agents = {}
+    outs = planner.plan_machine(rig, "example-linux")
+    assert not any("/agents/" in o.deploy_path for o in outs)
+
+
+def test_deselected_agent_then_prune():
+    import json as _json
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    from agentic.loader import Agent
+    reg2 = _connected_rig("example-linux")
+    reg2.agents["crm"] = Agent(
+        name="crm",
+        description="Personal CRM agent",
+        goal="Manage personal relationships and notes",
+        skills=["gws"],
+        body="# Instructions\nManage contacts.\n",
+        source=Path("registry/agents/crm.md")
+    )
+    root = Path(__import__("tempfile").mkdtemp(prefix="ae-prune-agent-"))
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    crm_path = next(o.deploy_path for o in planner.plan_machine(reg2, "example-linux")
+                    if o.deploy_path.endswith("agents/crm.md"))
+    dest = root / safe_rel(crm_path)
+    assert dest.exists()
+
+    # deselect via machine-side exclude: deploy reports an orphan but keeps the file
+    reg2.machines["example-linux"]["agents"] = {"exclude": ["crm"]}
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root) == 0
+    assert dest.exists(), "without --prune the deployed agent copy must remain"
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert crm_path in files, "orphan lock entry must be kept for a later --prune"
+
+    # prune: deleted, lock entry dropped
+    assert cmd_deploy(reg2, "example-linux", dry_run=False, force=False, root=root,
+                      prune=True) == 0
+    assert not dest.exists()
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["example-linux"]["files"]
+    assert crm_path not in files

@@ -1679,3 +1679,202 @@ def test_project_aliases_validation():
     # Valid aliases list passes
     rig.projects[slug]["aliases"] = ["sensual predictions", "apdicts"]
     _validate(rig)
+
+
+# ── Agent loading, curation, and validation ──────────────────────────────────
+def test_agent_loads_and_validates():
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "agents"
+    adir.mkdir(parents=True)
+    agent_file = adir / "personal-crm.md"
+    agent_file.write_text(
+        "---\n"
+        "name: personal-crm\n"
+        "description: Manage personal contacts and CRM\n"
+        "goal: Keep relationships organized and up to date\n"
+        "skills: [new-session]\n"
+        "---\n"
+        "# Instructions\n"
+        "Help the owner manage personal contacts.\n",
+        encoding="utf-8"
+    )
+    reg2 = loader.load(tmp)
+    assert "personal-crm" in reg2.agents
+    ag = reg2.agents["personal-crm"]
+    assert ag.name == "personal-crm"
+    assert ag.description == "Manage personal contacts and CRM"
+    assert ag.goal == "Keep relationships organized and up to date"
+    assert ag.skills == ["new-session"]
+    assert "Help the owner manage personal contacts." in ag.body
+    assert ag.source == agent_file
+
+
+def test_agent_refuses_unknown_skill():
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "agents"
+    adir.mkdir(parents=True)
+    agent_file = adir / "bad-skill-agent.md"
+    agent_file.write_text(
+        "---\n"
+        "name: bad-skill-agent\n"
+        "description: desc\n"
+        "goal: goal\n"
+        "skills: [unknown-skill]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    try:
+        loader.load(tmp)
+        raise AssertionError("expected RegistryError for unknown skill in agent")
+    except loader.RegistryError as e:
+        assert "bad-skill-agent" in str(e)
+        assert "unknown-skill" in str(e)
+
+
+def test_agent_refuses_non_mitos_agent_skill():
+    # Skill exists, but doesn't target mitos-agent
+    treg, tmp = _temp_registry()
+    sdir = tmp / "registry" / "skills" / "claude-only"
+    sdir.mkdir(parents=True)
+    (sdir / "SKILL.md").write_text(
+        "---\n"
+        "name: claude-only\n"
+        "description: only for claude\n"
+        "targets: [claude-code]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    adir = tmp / "registry" / "agents"
+    adir.mkdir(parents=True)
+    agent_file = adir / "bad-target-agent.md"
+    agent_file.write_text(
+        "---\n"
+        "name: bad-target-agent\n"
+        "description: desc\n"
+        "goal: goal\n"
+        "skills: [claude-only]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    try:
+        loader.load(tmp)
+        raise AssertionError("expected RegistryError for agent skill not targeting mitos-agent")
+    except loader.RegistryError as e:
+        assert "bad-target-agent" in str(e)
+        assert "claude-only" in str(e)
+
+
+def test_agent_refuses_name_mismatch():
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "agents"
+    adir.mkdir(parents=True)
+    agent_file = adir / "agent-one.md"
+    agent_file.write_text(
+        "---\n"
+        "name: agent-different\n"
+        "description: desc\n"
+        "goal: goal\n"
+        "skills: [gws]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    try:
+        loader.load(tmp)
+        raise AssertionError("expected RegistryError for agent name mismatch")
+    except loader.RegistryError as e:
+        assert "agent-one" in str(e)
+        assert "does not match filename stem" in str(e)
+
+
+def test_agent_refuses_unknown_key():
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "agents"
+    adir.mkdir(parents=True)
+    agent_file = adir / "agent-bad-key.md"
+    agent_file.write_text(
+        "---\n"
+        "name: agent-bad-key\n"
+        "description: desc\n"
+        "goal: goal\n"
+        "skills: [gws]\n"
+        "extra_key: foo\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    try:
+        loader.load(tmp)
+        raise AssertionError("expected RegistryError for unknown frontmatter key in agent")
+    except loader.RegistryError as e:
+        assert "agent-bad-key" in str(e)
+        assert "unknown frontmatter key(s)" in str(e)
+
+
+def test_curation_accepts_twenty_agents():
+    import copy
+    from agentic.loader import Agent, _validate
+    rig = copy.deepcopy(reg)
+    # Populate rig with 20 agents
+    for i in range(20):
+        name = f"agent-{i:02d}"
+        rig.agents[name] = Agent(
+            name=name, description=f"Agent {i}", goal=f"Goal {i}",
+            skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
+        )
+    _validate(rig)
+    selected = loader.selected_agents(rig, rig.machines["example-linux"])
+    assert len(selected) == 20
+
+
+def test_curation_refuses_more_than_twenty_agents():
+    import copy
+    from agentic.loader import Agent, _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    for i in range(21):
+        name = f"agent-{i:02d}"
+        rig.agents[name] = Agent(
+            name=name, description=f"Agent {i}", goal=f"Goal {i}",
+            skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
+        )
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for >20 active agents")
+    except RegistryError as e:
+        msg = str(e)
+        assert "20" in msg
+        assert "example-linux" in msg
+
+
+def test_machine_agent_missing_curated_skill():
+    import copy
+    from agentic.loader import Agent, _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.agents["crm-agent"] = Agent(
+        name="crm-agent", description="CRM", goal="Goal",
+        skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
+    )
+    # Exclude new-session skill from mitos-agent target on example-linux
+    rig.machines["example-linux"]["skills"] = {"mitos-agent": {"exclude": ["new-session"]}}
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for missing curated skill")
+    except RegistryError as e:
+        msg = str(e)
+        assert "crm-agent" in msg
+        assert "new-session" in msg
+
+
+def test_manifest_agents_key_still_rejected():
+    import copy
+    from agentic.loader import _validate, RegistryError
+    rig = copy.deepcopy(reg)
+    rig.projects["example-project"]["agents"] = ["something"]
+    try:
+        _validate(rig)
+        raise AssertionError("expected RegistryError for project agents key")
+    except RegistryError as e:
+        assert "'agents' is not a manifest field — agents are registry resources in registry/agents/, curated per machine under `agents:`" in str(e)

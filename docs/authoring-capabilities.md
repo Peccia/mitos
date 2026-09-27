@@ -1,6 +1,6 @@
 # Authoring Custom Capabilities Guide
 
-Mitos allows you to extend your agent organization by authoring two kinds of reusable text assets: **Skills** and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
+Mitos allows you to extend your agent organization by authoring three kinds of reusable text assets: **Skills**, **Agents**, and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
 
 ---
 
@@ -207,6 +207,56 @@ prompts:
   - bug-report
 ```
 The prompt compiles to `<project-root>/.claude/commands/bug-report.md`.
+
+---
+
+## 🤖 3. Authoring Agents
+
+An **Agent** is a customized persona for the Mitos Agent assistant harness. It bundles an intended goal, instructions, and a set of deployed skills to perform dedicated workflows (e.g. personal CRM, technical planning).
+
+### File Location
+Agents are authored as individual Markdown files:
+- `registry/agents/<name>.md` (public core)
+- `registry/local/agents/<name>.md` (private local overlay)
+
+### Agent File Schema
+The file must begin with YAML frontmatter containing `name`, `description`, `goal`, and `skills`:
+
+```markdown
+---
+name: personal-crm
+description: "Manages contacts, follow-ups, and interaction notes"
+goal: "Help keep personal contacts and communication organized"
+skills: [gws]
+---
+
+# Instructions
+You are a digital assistant specializing in contact relationship management.
+Follow these guidelines to track conversations and record notes...
+```
+
+### Validation Rules
+- **Name**: Must be a valid slug (`[a-z0-9-]+`) and exactly match the filename stem (e.g. `personal-crm.md` must declare `name: personal-crm`).
+- **Fields**: `description` and `goal` must be non-empty strings. `skills` must be a non-empty list of skill names.
+- **Closed Schema**: Only `name`, `description`, `goal`, and `skills` are permitted in frontmatter.
+- **Skill Compatibility**: Each skill in `skills:` must exist in the registry and declare `mitos-agent` in its `targets:`.
+- **Machine Deployment**: Each required skill must actually be deployed to the machine running the agent (not excluded by skill curation).
+
+### The 20-Agent Limit
+Mitos Agent enforces a hard limit of at most **20 active agents** per machine. If a machine selects more than 20 agents, compilation fails. You can curate which agents deploy to a machine using `agents:` in the machine profile (`machines/<name>.yaml` or `registry/local/machines/<name>.yaml`):
+
+```yaml
+agents:
+  include: [personal-crm, tech-lead]       # Deploy ONLY these agents
+  # exclude: [unwanted-agent]              # Deploy all EXCEPT these
+```
+
+### Removing Agents
+When an agent is removed or deselected, its deployed file on the host machine becomes an orphan. To clean up deselected or deleted agents from the target host, run deploy with `--prune`:
+
+```bash
+python build/compile.py deploy --machine <machine-name> --prune
+```
 
 ---
 

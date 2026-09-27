@@ -36,6 +36,9 @@ Cover what would break for a caller:
 That last one matters most for anything guarded. A refusal that is not tested is a refusal that
 quietly stops happening the next time someone edits nearby.
 
+A requirement whose acceptance reads `Given …, when …, then …` names its first test: do the *when*,
+assert the *then*.
+
 ## 3. Make a failure diagnosable
 
 The value of a test is what it tells you when it fails at 3am.

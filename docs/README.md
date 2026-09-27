@@ -42,7 +42,7 @@ How to index your workspace documents into the Mitos knowledge graph so your age
 Take control of your registry and author your own skills and prompts:
 
 - **[Operator console](operator-console.md)** — Running the local `review` console to reconcile proposals, curate knowledge graphs, author skills, and use the Prompt Library.
-- **[Authoring custom capabilities](authoring-capabilities.md)** — A guide to writing and binding custom Skills, Subagents, and Prompts in Mitos.
+- **[Authoring custom capabilities](authoring-capabilities.md)** — A guide to writing and binding custom Skills, Agents, and Prompts in Mitos.
 - **[The Implemented Document's identity fragment](implemented-document-identity.md)** — The shared JSON-LD contract that lets a planning tool stamp a finished piece of work, and how the console's map-to-effort flow reads that stamp as a hint.
 
 ---

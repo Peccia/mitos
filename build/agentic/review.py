@@ -76,12 +76,13 @@ def load_candidates(reg: Registry) -> list[dict]:
         project, doc_ids, removal_ids, effort_ids, effort_removal_ids = \
             _graph_candidate_targets(reg, meta, payload)
         doc_delta = _doc_delta(reg, meta, payload)
+        effort_delta = _effort_delta(reg, meta, payload)
         # A graph candidate with nothing to add/change and no in-flight removal is a
         # true no-op — the console de-emphasizes (never hides) Accept for it; the
         # server-side accept path is the real check either way.
         no_changes = (meta.get("kind") == "graph"
                      and not doc_delta.get("added") and not doc_delta.get("changed")
-                     and not doc_delta.get("removed"))
+                     and not doc_delta.get("removed") and not effort_delta)
         registry_path = meta.get("registry_path") or ""
         out.append({
             "id": folder.name,
@@ -96,6 +97,7 @@ def load_candidates(reg: Registry) -> list[dict]:
             "effort_ids": effort_ids,
             "effort_removal_ids": effort_removal_ids,
             "doc_delta": doc_delta,
+            "effort_delta": effort_delta,
             "no_changes": no_changes,
             "store": meta.get("store", ""),
             "source": meta.get("source") or {},
@@ -184,6 +186,35 @@ def _doc_delta(reg: Registry, meta: dict, payload: str) -> dict:
     return {"added": added, "changed": changed, "removed": removed}
 
 
+def _effort_delta(reg: Registry, meta: dict, payload: str) -> list[dict]:
+    """Completion-state changes a `kind: graph` candidate would make, per effort:
+    [{id, status: [old, new], evaluation: [old, new]}] for each effort whose status or
+    evaluation differs from the current graph. Scoped to `efforts_touched` when the candidate
+    records it — the fragment carries every effort, and only touched ones are merged. [] for a
+    non-graph or unparsable candidate."""
+    if meta.get("kind") != "graph":
+        return []
+    slug = meta.get("project") or ""
+    from . import graph as graphmod
+    try:
+        _name, _desc, _docs, efforts = graphmod.parse_fragment(payload, slug)
+    except graphmod.GraphError:
+        return []
+    touched = meta.get("efforts_touched")
+    existing_pg = reg.graphs.get(slug)
+    existing = {e.id: e for e in (existing_pg.efforts if existing_pg else [])}
+    out = []
+    for e in sorted(efforts, key=lambda e: e.id):
+        if touched is not None and e.id not in touched:
+            continue
+        prior = existing.get(e.id)
+        old = (prior.status, prior.evaluation) if prior else ("", "")
+        if old != (e.status, e.evaluation):
+            out.append({"id": e.id, "status": [old[0], e.status],
+                        "evaluation": [old[1], e.evaluation]})
+    return out
+
+
 def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, str]:
     """(current_registry_text, proposed_text, acceptable, note) for one candidate —
     derived exactly as accept would route it, so the diff shows what accept would do."""
@@ -195,7 +226,7 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
             return "", payload, False, f"unknown project {slug!r} for graph candidate"
         try:
             merged = _merged_graph(reg, slug, payload, meta.get("removals"),
-                                   meta.get("effort_removals"))
+                                   meta.get("effort_removals"), meta.get("efforts_touched"))
         except graphmod.GraphError as e:
             return "", payload, False, f"invalid graph fragment: {e}"
         current = (graphmod.canonical_jsonld(reg.graphs[slug])
@@ -260,6 +291,12 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
     skill = next((s for s in reg.skills.values() if s.rel == rp), None)
     if skill is not None:
         return skill.body, proposed, True, ""
+    prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
+    if prompt is not None:
+        return prompt.body, proposed, True, ""
+    agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+    if agent is not None:
+        return agent.body, proposed, True, ""
     dest = reg.root / "registry" / rp
     if dest.is_file():
         return render.strip_frontmatter(dest.read_text(encoding="utf-8")), proposed, True, ""
@@ -295,6 +332,12 @@ def _current_source_text(reg: Registry, meta: dict) -> str | None:
     skill = next((s for s in reg.skills.values() if s.rel == rp), None)
     if skill is not None:
         return skill.body
+    prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
+    if prompt is not None:
+        return prompt.body
+    agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+    if agent is not None:
+        return agent.body
     dest = reg.root / "registry" / rp
     return (render.strip_frontmatter(dest.read_text(encoding="utf-8"))
             if dest.is_file() else None)
@@ -480,13 +523,22 @@ def _graph_file(reg: Registry, slug: str) -> Path:
 
 def _merged_graph(reg: Registry, slug: str, fragment_text: str,
                   removals: list[str] | None = None,
-                  effort_removals: list[str] | None = None):
+                  effort_removals: list[str] | None = None,
+                  efforts_touched: list[str] | None = None):
     """The project graph as it WOULD be after accepting this candidate: the existing
     graph (or a fresh one) with the fragment's documents and efforts upserted,
     `removals` dropped, and `effort_removals` removed (resetting their child docs to
     project root). Pure — writes nothing. Raises graph.GraphError on an invalid
     fragment or a missing-name new project. Effort removals are applied before effort
-    and doc upserts so any re-parented docs in the fragment land cleanly."""
+    and doc upserts so any re-parented docs in the fragment land cleanly.
+
+    `efforts_touched` (from candidate meta) scopes the effort upserts: the fragment carries
+    every effort as it stood at propose time, so upserting them all would let a stale
+    candidate roll back an effort another candidate changed since (e.g. un-mark it Done).
+    An untouched effort is still added when the base lacks it, so the fragment's documents
+    keep a parent. None (a legacy candidate without the key) upserts every fragment effort.
+    The merged completion state is re-validated, so an accept can never land a dangling
+    evaluation reference."""
     from . import graph as graphmod
     name, desc, docs, efforts = graphmod.parse_fragment(fragment_text, slug)
     path = _graph_file(reg, slug)
@@ -512,7 +564,10 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
         if eid:
             base = graphmod.remove_effort(base, eid)
     from dataclasses import replace as _dc_replace
+    base_ids = {x.id for x in base.efforts}
     for e in efforts:
+        if efforts_touched is not None and e.id not in efforts_touched and e.id in base_ids:
+            continue
         # keep every parsed field (notably org_domain) — only normalise the parent IRI;
         # a positional reconstruction here would silently drop fields added later.
         base = graphmod.upsert_effort(base, _dc_replace(e, is_part_of=base.iri))
@@ -522,6 +577,9 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
         rid = str(rid).strip()
         if rid:
             base = graphmod.remove_document(base, rid)
+    doc_ids = {d.drive_id for d in base.documents}
+    for e in base.efforts:
+        graphmod.check_effort_status(e, doc_ids, f"{slug}.jsonld")
     base.path = path
     return base
 
@@ -551,7 +609,7 @@ def _apply_graph_candidate(reg: Registry, meta: dict, payload: str) -> tuple[lis
             for rid in removals if rid in by_id]
     try:
         merged = _merged_graph(reg, slug, payload, meta.get("removals"),
-                               meta.get("effort_removals"))
+                               meta.get("effort_removals"), meta.get("efforts_touched"))
         write_text(_graph_file(reg, slug), graphmod.canonical_jsonld(merged))
     except graphmod.GraphError as e:
         return [], f"invalid graph fragment: {e}"
@@ -723,7 +781,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
         return {"ok": False, "error": f"unknown project {slug!r}"}
 
     # ── parse document dicts ──────────────────────────────────────────────────
-    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store` (an
+    # An upsert replaces the whole node, so a caller that doesn't send `type`/`store`/`webUrl` (an
     # older console payload) must not wipe an existing annotation — preserve each from the
     # current graph when the key is absent.
     existing = {d.drive_id: d for d in (reg.graphs.get(slug).documents
@@ -741,8 +799,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 date_modified=str(d["dateModified"]).strip(),
                 is_part_of=parent_iri,
                 keywords=str(d.get("keywords", "")).strip(),
-                web_url=str(d.get("webUrl", "")).strip(),
-                doc_type=(str(d["type"]).strip() if "type" in d
+                web_url=(str(d["webUrl"]).strip() if "webUrl" in d
+                         else (prior.web_url if prior else "")),
+                doc_type=(graphmod.friendly_doc_type(str(d["type"])) if "type" in d
                           else (prior.doc_type if prior else "")),
                 store=(str(d["store"]).strip() if "store" in d
                       else (store or (prior.store if prior else "")))))
@@ -793,6 +852,18 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
             hidden_val = bool(e_dict["hidden"]) if "hidden" in e_dict else prev_hidden
             prev_kw = effective_efforts[eid].keywords if eid in effective_efforts else ""
             kw_val = str(e_dict.get("keywords", prev_kw)).strip()
+            # Completion state is preserve-when-absent too: a rename or visibility toggle
+            # must never silently un-mark a Done effort. An explicit "" clears it.
+            prev_status = effective_efforts[eid].status if eid in effective_efforts else ""
+            status_val = (str(e_dict["status"] or "").strip() if "status" in e_dict
+                          else prev_status)
+            prev_eval = effective_efforts[eid].evaluation if eid in effective_efforts else ""
+            eval_val = (str(e_dict["evaluation"] or "").strip() if "evaluation" in e_dict
+                        else prev_eval)
+            if status_val and status_val not in graphmod.KNOWN_STATUSES:
+                return {"ok": False, "error": f"unknown status {status_val!r} for effort "
+                                              f"{eid!r}; valid: "
+                                              f"{', '.join(graphmod.KNOWN_STATUSES)} (or empty)"}
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
@@ -802,7 +873,9 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 deliverables=_deliv,
                 requirements_coverage=_cover,
                 keywords=kw_val,
-                hidden=hidden_val)
+                hidden=hidden_val,
+                status=status_val,
+                evaluation=eval_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -813,6 +886,17 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
 
     if not docs and not removals and not efforts and not effort_removals:
         return {"ok": False, "error": "no documents to propose"}
+
+    # Referential integrity for completion state, against the graph as it would stand after
+    # this candidate: an evaluation needs status "done" and a document that still exists —
+    # so removing an effort's Implemented Document needs its evaluation cleared alongside.
+    effective_doc_ids = {d.drive_id for d in existing_pg.documents} if existing_pg else set()
+    effective_doc_ids = (effective_doc_ids | upsert_ids) - set(removals)
+    for e in effective_efforts.values():
+        try:
+            graphmod.check_effort_status(e, effective_doc_ids, "proposal")
+        except graphmod.GraphError as ex:
+            return {"ok": False, "error": str(ex)}
 
     name = (reg.projects[slug].get("name")) or slug
     desc = reg.graphs[slug].description if slug in reg.graphs else ""
@@ -837,6 +921,8 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     }
     if removals:
         meta["removals"] = removals
+    # Only these efforts merge on accept (see _merged_graph) — the fragment carries all of them.
+    meta["efforts_touched"] = sorted(upsert_effort_ids)
     if effort_removals:
         meta["effort_removals"] = effort_removals
     if reason:
@@ -864,7 +950,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables", "hidden", "document_store"}
+                            "default_deliverables", "hidden", "document_store", "skills"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -872,10 +958,10 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
     """Propose an identity/repo edit to a project's manifest as a `kind: project` inbox
     candidate: `name`, `description`, `stage`, `repo` (the full replacement URL list —
     a single URL collapses to a plain string, matching manifest convention), `repo_notes`
-    (the full replacement basename -> description map). Anything not named in `fields` is
-    left untouched — every other manifest key (document_store, local_path, context, skills,
-    agentic_tree, ...) passes through as-is, same "whitelist overlay" shape as
-    propose_meta_edit for skills/prompts.
+    (the full replacement basename -> description map), `skills` (the full replacement
+    bound skills list). Anything not named in `fields` is left untouched — every other
+    manifest key (local_path, context, agentic_tree, ...) passes through as-is, same
+    "whitelist overlay" shape as propose_meta_edit for skills/prompts.
 
     The edited manifest is re-validated against a scratch copy of the whole registry
     (loader._validate) before it ever reaches the inbox — "reject early", not just at
@@ -967,6 +1053,21 @@ def propose_project_edit(reg: Registry, slug: str, fields: dict,
             updated["document_store"] = [str(s).strip() for s in raw_ds if str(s).strip()]
         else:
             return {"ok": False, "error": "document_store must be a string or list of strings"}
+    if "skills" in fields:
+        raw_skills = fields["skills"]
+        if not isinstance(raw_skills, list):
+            return {"ok": False, "error": "skills must be a list"}
+        seen = set()
+        deduped = []
+        for s in raw_skills:
+            item = str(s).strip()
+            if item and item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        if deduped:
+            updated["skills"] = deduped
+        else:
+            updated.pop("skills", None)
 
     import copy
     trial = copy.deepcopy(reg)
@@ -1073,6 +1174,12 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
             return {"ok": False, "error": f"unknown partial {ident!r}"}
         registry_path = ident
         current_text = reg.partials[logical].body
+    elif kind == "agent":
+        agent = reg.agents.get(ident)
+        if agent is None:
+            return {"ok": False, "error": f"unknown agent {ident!r}"}
+        registry_path = agent.rel
+        current_text = agent.body
     else:
         return {"ok": False, "error": f"unknown kind {kind!r}"}
     # registry_path is registry-controlled (a known skill.rel / partial key), but guard
@@ -1110,16 +1217,21 @@ _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platfor
                          "targets", "category", "scope",
                          "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
+_AGENT_META_WHITELIST = {"description", "goal", "skills"}
 
 
 def _meta_whitelist(kind: str) -> set[str]:
-    return _SKILL_META_WHITELIST if kind == "skill" else _PROMPT_META_WHITELIST
+    if kind == "skill":
+        return _SKILL_META_WHITELIST
+    elif kind == "agent":
+        return _AGENT_META_WHITELIST
+    return _PROMPT_META_WHITELIST
 
 
 def _meta_dict(fm: dict, whitelist: set[str]) -> dict:
-    """The editable-field subset of a skill/prompt's frontmatter, for the console's
+    """The editable-field subset of a skill/prompt/agent's frontmatter, for the console's
     metadata panel. List-shaped fields default to [] rather than "" when absent."""
-    return {k: fm.get(k, [] if k in ("targets", "platforms") else "") for k in whitelist}
+    return {k: fm.get(k, [] if k in ("targets", "platforms", "skills") else "") for k in whitelist}
 
 
 def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[dict, str | None]:
@@ -1143,6 +1255,10 @@ def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[di
             if not isinstance(val, list) or not val:
                 return {}, "platforms must be a non-empty list"
             merged["platforms"] = [str(p) for p in val]
+        elif key == "skills" and kind == "agent":
+            if not isinstance(val, list) or not val or not all(isinstance(s, str) and s.strip() for s in val):
+                return {}, "skills must be a non-empty list of skill names"
+            merged["skills"] = [str(s).strip() for s in val]
         else:
             merged[key] = str(val)
     return merged, None
@@ -1184,6 +1300,10 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         obj = reg.prompts.get(ident)
         if obj is None:
             return {"ok": False, "error": f"unknown prompt {ident!r}"}
+    elif kind == "agent":
+        obj = reg.agents.get(ident)
+        if obj is None:
+            return {"ok": False, "error": f"unknown agent {ident!r}"}
     else:
         return {"ok": False, "error": f"unknown kind {kind!r} for metadata editing"}
     registry_path = obj.rel
@@ -1205,8 +1325,22 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         if scope_err:
             return {"ok": False, "error": scope_err}
 
-    payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
-              + "---\n\n" + str(body).rstrip("\n") + "\n")
+    if kind == "agent":
+        agent_obj = loader.Agent(
+            name=ident,
+            description=str(new_fm.get("description", "")).strip(),
+            goal=str(new_fm.get("goal", "")).strip(),
+            skills=[str(s).strip() for s in (new_fm.get("skills") or [])],
+            body=str(body).rstrip("\n"),
+            source=obj.source,
+        )
+        payload = render.render_agent(agent_obj)
+        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source)
+        if v_err:
+            return {"ok": False, "error": v_err}
+    else:
+        payload = ("---\n" + yaml.safe_dump(new_fm, sort_keys=False, allow_unicode=True)
+                  + "---\n\n" + str(body).rstrip("\n") + "\n")
     meta = {
         "registry_path": registry_path,
         "kind": "drift",
@@ -1272,6 +1406,14 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         scope_err = loader.validate_skill_scope(skill.name, fm)
         if scope_err:
             return scope_err
+    elif "/agents/" in rp or rp.startswith("agents/") or rp.startswith("local/agents/"):
+        stem = PurePosixPath(rp).stem
+        agent = next((a for a in reg.agents.values() if a.rel == rp), None)
+        if agent is not None and fm.get("name") != agent.name:
+            return f"{rp!r}: 'name' must not change"
+        _, err = loader.validate_agent_file_content(payload, rp, stem, reg.skills)
+        if err:
+            return err
     else:
         prompt = next((p for p in reg.prompts.values() if p.rel == rp), None)
         if prompt is not None:
@@ -1463,6 +1605,118 @@ def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
     return {"ok": True, "id": cid, "registry_path": registry_path}
 
 
+def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
+                      body: str, reason: str = "") -> dict:
+    """Propose a brand-new agent as a `kind: new` inbox candidate. The console never
+    writes registry/ directly (invariant #3) — accept routes through route_into_registry.
+    Always lands in the user's private overlay (registry/local/agents/<name>.md), never core.
+    Returns {ok, id, registry_path} or {ok: False, error}."""
+    name = str(name).strip()
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    if not re.fullmatch(r"[a-z0-9-]+", name):
+        return {"ok": False, "error": "agent 'name' is not a valid slug (lowercase [a-z0-9-]+)"}
+    if name in reg.agents:
+        return {"ok": False, "error": f"agent {name!r} already exists"}
+    if not str(body).strip():
+        return {"ok": False, "error": "body is required"}
+
+    desc = str(frontmatter_fields.get("description", "")).strip()
+    goal = str(frontmatter_fields.get("goal", "")).strip()
+    skills = frontmatter_fields.get("skills")
+    if not isinstance(skills, list):
+        skills = []
+
+    temp_agent = loader.Agent(
+        name=name,
+        description=desc,
+        goal=goal,
+        skills=[str(s).strip() for s in skills],
+        body=str(body).rstrip("\n"),
+        source=Path(f"local/agents/{name}.md"),
+    )
+    payload = render.render_agent(temp_agent)
+
+    # Reuse loader's validator on the candidate text
+    _, err = loader.validate_agent_file_content(
+        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source)
+    if err:
+        return {"ok": False, "error": err}
+
+    registry_path = f"local/agents/{name}.md"
+    meta = {
+        "registry_path": registry_path,
+        "kind": "new",
+        "source": {"machine": socket.gethostname() or "console", "tool": "console"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": _now(),
+        "note": "new agent created in the operator console",
+    }
+    if reason:
+        meta["reason"] = reason
+    try:
+        cid = _write_candidate(reg, _slug_path(registry_path), meta, f"{name}.md", payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
+def agents_index(reg: Registry) -> dict:
+    """Index of agents and machines deploying them for the console (GET /api/agents).
+    Returns {"agents": [{name, description, goal, skills, machines, source}],
+             "machines": [{name, selected, limit: 20}]}."""
+    real = commands.real_machines(reg)
+    mitos_machines = [
+        m for m in real
+        if "mitos-agent" in (reg.machines.get(m) or {}).get("targets", [])
+    ]
+    target_machines = mitos_machines if mitos_machines else real
+
+    machine_selected: dict[str, list[str]] = {}
+    machines_out = []
+    for mname in sorted(target_machines):
+        mcfg = reg.machines.get(mname) or {"name": mname, "targets": ["mitos-agent"]}
+        try:
+            sel = loader.selected_agents(reg, mcfg)
+        except Exception:
+            sel = []
+        machine_selected[mname] = sel
+        machines_out.append({
+            "name": mname,
+            "selected": len(sel),
+            "limit": loader.MAX_ACTIVE_AGENTS,
+        })
+
+    agents_out = []
+    for agent in sorted(reg.agents.values(), key=lambda a: a.name):
+        try:
+            src_str = agent.source.relative_to(reg.root / "registry").as_posix()
+        except ValueError:
+            try:
+                src_str = agent.source.relative_to(reg.root).as_posix()
+            except ValueError:
+                src_str = agent.source.as_posix()
+        agent_machines = [
+            mname for mname in sorted(target_machines)
+            if agent.name in machine_selected.get(mname, [])
+        ]
+        agents_out.append({
+            "name": agent.name,
+            "description": agent.description,
+            "goal": agent.goal,
+            "skills": list(agent.skills),
+            "body": agent.body,
+            "machines": agent_machines,
+            "source": src_str,
+        })
+
+    return {
+        "agents": agents_out,
+        "machines": machines_out,
+    }
+
+
 # ── prompt library ───────────────────────────────────────────────────────────
 _FAVORITES_FILE = "registry/local/prompt-favorites.yaml"
 
@@ -1604,8 +1858,8 @@ def prompt_index(reg: Registry) -> dict:
         "resources": {relpath: r.text for relpath, r in s.resources.items()},
         # projects whose manifest `skills:` list names this skill — the read-only
         # "where does scope: project actually apply" view (renderSkillScopeSection).
-        # Editing this list happens in the project manifest YAML directly; the console
-        # doesn't write project manifests (see docs/managing-state.md, invariant #3).
+        # Projects bind skills via each project's manifest YAML or the console's
+        # Project panel (Knowledge Graph → Edit properties → Bound skills).
         "bound_projects": sorted(slug for slug, proj in reg.projects.items()
                                  if s.name in (proj.get("skills") or [])),
         "deploys_here": s.name in live_skills,
@@ -2157,6 +2411,7 @@ def graph_index(reg: Registry) -> list[dict]:
             "document_store": proj.get("document_store") or "none",
             "hidden": bool(proj.get("hidden")),
             "is_local": bool(proj.get("_is_local")),
+            "skills": list(proj.get("skills") or []),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),
             # The deliverables a NEW effort under this project starts checked with —
@@ -2176,7 +2431,9 @@ def graph_index(reg: Registry) -> list[dict]:
                          "orgDomain": e.org_domain, "goal": e.goal,
                          "deliverables": list(e.deliverables),
                          "requirementsCoverage": list(e.requirements_coverage),
-                         "hidden": bool(e.hidden)}
+                         "keywords": e.keywords,
+                         "hidden": bool(e.hidden),
+                         "status": e.status, "evaluation": e.evaluation}
                         for e in (pg.efforts if pg else [])],
             "documents": [{"id": d.drive_id, "name": d.name,
                            "description": d.description, "dateModified": d.date_modified,
@@ -2273,6 +2530,9 @@ def state(reg: Registry) -> dict:
         # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
         # term to the registry constant surfaces in the UI with no client edit.
         "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        # The document kinds the editor's Type dropdown offers (graph.KNOWN_DOC_TYPES), first
+        # entry the default for a hand-mapped document.
+        "known_doc_types": list(graphmod.KNOWN_DOC_TYPES),
         # Which skill(s) declare `delivers: <term>` — the authoring-time answer to "does anything
         # actually produce this?", so the effort editor can say so where the declaration is made.
         # Registry-wide, deliberately NOT per machine: `deploy --dry-run` already reports the exact
@@ -2451,6 +2711,8 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 return self._json(200, load_dismissed(holder["reg"], slug, pool))
             if self.path == "/api/org":
                 return self._json(200, org_index(holder["reg"]))
+            if self.path == "/api/agents":
+                return self._json(200, agents_index(holder["reg"]))
             if self.path.startswith("/api/org/tree"):
                 from urllib.parse import parse_qs, urlsplit
                 q = parse_qs(urlsplit(self.path).query)
@@ -2479,6 +2741,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/project/edit", "/api/project/new",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
+                                  "/api/agents/new",
                                   "/api/org/new-domain", "/api/ops/compile",
                                   "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
                 return self._json(404, {"ok": False, "error": "not found"})
@@ -2545,7 +2808,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 ident = str(body.get("ident", ""))
                 text = str(body.get("body", ""))
                 reason = str(body.get("reason", "") or "")
-                if kind in ("skill", "prompt"):
+                if kind in ("skill", "prompt", "agent"):
                     fields = body.get("fields")
                     res = body.get("resources") if kind == "skill" else None
                     result = propose_meta_edit(
@@ -2564,6 +2827,14 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     fm if isinstance(fm, dict) else {},
                     str(body.get("body", "")), str(body.get("reason", "") or ""),
                     resources=res if isinstance(res, dict) else None)
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/agents/new":
+                # propose a brand-new agent — only ever writes inbox/ (kind: new)
+                fm = body.get("frontmatter")
+                result = propose_new_agent(
+                    holder["reg"], str(body.get("name", "")),
+                    fm if isinstance(fm, dict) else {},
+                    str(body.get("body", "")), str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/org/new-domain":
                 # the "+ ORG" button — propose a new domain-template skill (kind: new)

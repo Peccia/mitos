@@ -16,7 +16,7 @@ import yaml
 from . import render
 from .io import safe_rel
 from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_local_path,
-                     _repo_basename, document_stores)
+                     _repo_basename, document_stores, selected_agents)
 
 # A dynamically discovered agentic branch: any partial whose logical key matches
 # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch (see
@@ -1260,6 +1260,18 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.agentic_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
                     (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
+                if (hosts_assistant_tree(machine) and _project_repo_entries(proj)
+                        and sections):
+                    # The agent host clones this project's repos beside the node (plan_clones),
+                    # so the node lists them as the generated `## Navigation` roster, exactly as
+                    # the ctx_key lane does. Without it the harness greps a node that names no
+                    # checkout and grounds on zero code. The builder partial is the last source;
+                    # anything ahead of it (none on an assistant host) stays a region of its own.
+                    b_src, b_body = sections[-1]
+                    regions = list(sections[:-1]) + _project_node_regions(
+                        proj, b_src, b_body.rstrip("\n"), gen_body)
+                    regions = [(s, b.rstrip("\n")) for s, b in regions if b.strip()]
+                    combined_sections = regions
                 outputs.append(Output(
                     target="agents-md", kind="text", deploy_path=deploy_path,
                     dist_rel=f"agents-md/{safe_rel(deploy_path)}",
@@ -1331,6 +1343,24 @@ def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
                 drift_policy=policy, sources=[skill.rel],
             ))
             outputs += _skill_resource_outputs(skill, resources, "mitos-agent", base_dir, policy)
+    # agents
+    ag = spec.get("agents")
+    if home and ag:
+        agent_dir = f"{home.rstrip('/')}/{ag.get('subdir', 'agents')}"
+        policy = ag.get("drift_policy", "harvest")
+        for agent_name in selected_agents(reg, reg.machines[machine_name]):
+            agent = reg.agents[agent_name]
+            deploy_path = f"{agent_dir}/{agent.name}.md"
+            try:
+                agent_rel = agent.source.relative_to(reg.root).as_posix()
+            except (ValueError, AttributeError):
+                agent_rel = str(agent.source)
+            outputs.append(Output(
+                target="mitos-agent", kind="text", deploy_path=deploy_path,
+                dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
+                content=render.render_agent(agent),
+                drift_policy=policy, sources=[agent_rel],
+            ))
     # mcp.json — a WHOLE file Mitos owns (invariant #7 does not apply to this lane), carrying
     # every wired store keyed by server name so §5.4's resolve(id, store) can pick the right
     # server for a multi-store project. No surgical merge, no owned_keys.

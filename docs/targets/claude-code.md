@@ -31,8 +31,7 @@ entirely and always deploy globally, regardless of the value set.
 
 Set/edit `scope` via the Operator Console's Skills tab (**Skills & Orgs** when
 `mitos_agent: true`; each skill card's **Scope** section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
-`scope: project` skill is controlled by editing each project's manifest `skills:` list — the
-console shows the current bindings read-only but does not write project manifests.
+`scope: project` skill is controlled by each project's manifest `skills:` list — edited directly in `registry/projects/<slug>.yaml` or from the console's Project panel (**Edit properties → Bound skills**).
 
 ## Slash-command prompts — `.claude/commands/`
 
