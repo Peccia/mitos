@@ -847,8 +847,11 @@ def test_compile_status_stale_then_fresh_then_stale_again():
 
     # mutate a partial the "rig" machine's SOUL.md renders from, then reload the registry
     # (compile_status takes a Registry, not a filesystem path — it must see the new content)
-    identity_dir = tmp / "registry" / "identity"
-    who = next(iter(identity_dir.glob("*.md")))
+    # NOTE: must be one of targets/mitos-agent.yaml's context_file.sources — registry/identity/
+    # also holds who-i-am-coding.md, which SOUL.md never reads, and glob("*.md") order is
+    # filesystem-dependent (this previously picked that file on the Linux CI runner and never
+    # on Windows, producing an intermittent false failure here).
+    who = tmp / "registry" / "identity" / "who-i-am.md"
     who.write_text(who.read_text(encoding="utf-8") + "\nedited.\n", encoding="utf-8")
     r2 = loader.load(tmp)
     status = compile_status(r2, dist_dir)
