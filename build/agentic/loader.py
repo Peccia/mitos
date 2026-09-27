@@ -1245,7 +1245,9 @@ def _validate(reg: Registry) -> None:
                     f"machine {name}: agents lists agent(s) in BOTH "
                     f"include and exclude: {sorted(both)}")
         sel_agents = selected_agents(reg, m)
-        if sel_agents:
+        # An `example: true` template is never deployed (compile skips it, deploy refuses it),
+        # so an overlay agent needing a skill the template's store omits must not fail it.
+        if sel_agents and not m.get("example"):
             from . import planner as plannermod
             sk_spec = reg.targets.get("mitos-agent", {}).get("skills", {})
             machine_skills = {s.name for s in plannermod._selected_skills(reg, sk_spec, m)}

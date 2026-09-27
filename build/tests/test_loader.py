@@ -1857,7 +1857,8 @@ def test_machine_agent_missing_curated_skill():
         name="crm-agent", description="CRM", goal="Goal",
         skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
     )
-    # Exclude new-session skill from mitos-agent target on example-linux
+    # Exclude new-session skill from mitos-agent target on a real (non-template) machine
+    rig.machines["example-linux"]["example"] = False
     rig.machines["example-linux"]["skills"] = {"mitos-agent": {"exclude": ["new-session"]}}
     try:
         _validate(rig)
@@ -1866,6 +1867,19 @@ def test_machine_agent_missing_curated_skill():
         msg = str(e)
         assert "crm-agent" in msg
         assert "new-session" in msg
+
+
+def test_example_machine_skips_agent_skill_check():
+    import copy
+    from agentic.loader import Agent, _validate
+    rig = copy.deepcopy(reg)
+    rig.agents["crm-agent"] = Agent(
+        name="crm-agent", description="CRM", goal="Goal",
+        skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
+    )
+    assert rig.machines["example-linux"].get("example") is True
+    rig.machines["example-linux"]["skills"] = {"mitos-agent": {"exclude": ["new-session"]}}
+    _validate(rig)          # a template is never deployed, so it cannot strand the agent
 
 
 def test_manifest_agents_key_still_rejected():
