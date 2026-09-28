@@ -1113,3 +1113,15 @@ def test_cmd_graph_evaluation_doc_requires_complete_effort():
     treg, tmp = _complete_rig()
     rc, out = _run_graph(treg, "example-project", "documents", evaluation_doc="EXAMPLEDOCID")
     assert rc == 2 and "--complete-effort" in out
+
+
+def test_deploy_skipped_machine_exits_nonzero_and_touches_nothing(tmp_path):
+    from agentic import commands
+    treg, tmp = _temp_registry()
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    treg.skipped_machines["rig"] = ["nonexistent-target"]
+    rc = commands.cmd_deploy(treg, "rig", dry_run=False, force=False, root=sandbox)
+    assert rc != 0
+    assert list(sandbox.iterdir()) == []
+

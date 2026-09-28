@@ -5570,6 +5570,21 @@ function renderOpsBar() {
   else if (machines.includes(prevValue)) sel.value = prevValue;
   else if (machines.length) sel.value = machines[0];
   opsMachine = sel.value || null;
+
+  const warnBanner = $("warning-banner");
+  if (warnBanner) {
+    const warnings = (STATE && STATE.warnings) || [];
+    if (warnings.length > 0) {
+      warnBanner.hidden = false;
+      warnBanner.replaceChildren(
+        el("div", "callout-title", "Registry Warning(s)"),
+        ...warnings.map((w) => el("p", null, w))
+      );
+    } else {
+      warnBanner.hidden = true;
+      warnBanner.replaceChildren();
+    }
+  }
 }
 
 function openOpsDrawer() {

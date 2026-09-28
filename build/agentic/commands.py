@@ -149,10 +149,13 @@ def real_machines(reg: Registry) -> list[str]:
 
 
 def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -> int:
+    for w in getattr(reg, "warnings", []):
+        print(w)
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
-    machine_names = real_machines(reg)
-    skipped = [n for n in reg.machines if n not in machine_names]
+    skipped_machines = set(getattr(reg, "skipped_machines", {}).keys())
+    machine_names = [m for m in real_machines(reg) if m not in skipped_machines]
+    skipped = [n for n in reg.machines if n not in machine_names and n not in skipped_machines]
     total = 0
     for machine_name in machine_names:
         outputs = plan_machine(reg, machine_name)
@@ -197,7 +200,8 @@ def compile_status(reg: Registry, dist_dir: Path) -> dict:
     """Read-only: does the registry's current render match what's already in dist_dir/?
     Compares a fresh plan_machine() hash per output against the hashes cmd_compile recorded
     in each machine's manifest.json — no writes, safe to call on every console refresh."""
-    machine_names = real_machines(reg)
+    skipped_machines = set(getattr(reg, "skipped_machines", {}).keys())
+    machine_names = [m for m in real_machines(reg) if m not in skipped_machines]
     stale_machines = []
     for machine_name in machine_names:
         manifest_path = dist_dir / machine_name / "manifest.json"
@@ -561,6 +565,14 @@ def run_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
 
     if machine not in reg.machines:
         return refused(2, f"error: unknown machine {machine!r}")
+    if machine in getattr(reg, "skipped_machines", {}):
+        bad = reg.skipped_machines[machine]
+        t = bad[0] if bad else "unknown"
+        msg = (
+            f"machine {machine}: target '{t}' is not defined — machine skipped. "
+            f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
+        )
+        return refused(1, msg)
     # Example machines are templates: previewing (--dry-run) or sandboxing (--root) is fine,
     # but refuse a real deploy to live paths — copy it into registry/local/machines/ first.
     if reg.machines[machine].get("example") and not dry_run and root is None:

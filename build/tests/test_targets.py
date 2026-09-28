@@ -2451,3 +2451,86 @@ def test_deselected_agent_then_prune():
     files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
                         )["machines"]["example-linux"]["files"]
     assert crm_path not in files
+
+
+# ── Milestone 2: Generic planner & overlay targets ─────────────────────────────
+def test_generic_planner_matches_dedicated_mitos_agent_planner():
+    treg, tmp = _temp_registry()
+    spec = treg.targets["mitos-agent"]
+    paths = treg.machines["rig"]["paths"]
+    m_gen = planner._plan_generic(treg, "rig", spec, paths)
+    m_ded = planner._plan_mitos_agent(treg, "rig", spec, paths)
+    gen_tups = sorted((o.deploy_path, o.kind, o.content) for o in m_gen)
+    ded_tups = sorted((o.deploy_path, o.kind, o.content) for o in m_ded)
+    assert gen_tups == ded_tups
+
+
+def test_overlay_target_with_a_new_name_is_planned():
+    import yaml as _y
+    treg, tmp = _temp_registry()
+    overlay_targets = tmp / "registry" / "local" / "targets"
+    overlay_targets.mkdir(parents=True, exist_ok=True)
+    custom_spec = {
+        "target": "custom-harness",
+        "deploy_to_key": "custom_root",
+        "context_file": {
+            "deploy_to_key": "custom_root",
+            "name": "CUSTOM.md",
+            "render": "claude_md_body",
+        },
+        "skills": {
+            "deploy_to_key": "custom_skills",
+            "subdir": "{name}",
+            "frontmatter": "full",
+        },
+    }
+    (overlay_targets / "custom-harness.yaml").write_text(_y.safe_dump(custom_spec), encoding="utf-8")
+    rig_file = tmp / "machines" / "rig.yaml"
+    rig_cfg = _y.safe_load(rig_file.read_text(encoding="utf-8"))
+    rig_cfg["targets"].append("custom-harness")
+    rig_cfg["paths"]["custom_root"] = f"{tmp.as_posix()}/custom"
+    rig_cfg["paths"]["custom_skills"] = f"{tmp.as_posix()}/custom/skills"
+    rig_file.write_text(_y.safe_dump(rig_cfg), encoding="utf-8")
+
+    fresh = loader.load(tmp)
+    assert "custom-harness" in fresh.target_names
+    planned = planner.plan_machine(fresh, "rig")
+    context_out = next((p for p in planned if p.deploy_path.endswith("CUSTOM.md")), None)
+    assert context_out is not None
+    assert context_out.target == "custom-harness"
+
+
+def test_overlay_target_same_name_as_core_is_rejected():
+    import pytest
+    import yaml as _y
+    treg, tmp = _temp_registry()
+    overlay_targets = tmp / "registry" / "local" / "targets"
+    overlay_targets.mkdir(parents=True, exist_ok=True)
+    (overlay_targets / "claude-code.yaml").write_text(_y.safe_dump({"target": "claude-code"}), encoding="utf-8")
+    with pytest.raises(loader.RegistryError) as exc_info:
+        loader.load(tmp)
+    assert "overlay target collisions not allowed: ['claude-code']" in str(exc_info.value)
+
+
+def test_skill_render_full_preserves_unknown_frontmatter_keys():
+    import yaml as _y
+    from agentic.loader import Skill
+    fm = {
+        "name": "custom-skill",
+        "description": "desc",
+        "targets": ["claude-code", "custom-target"],
+        "mitos_agent": {"special": "config"},
+        "org_domain": "engineering",
+        "delivers": "custom-artifact",
+    }
+    skill = Skill(name="custom-skill", rel="skills/custom-skill/SKILL.md", frontmatter=fm, body="Instructions body\n")
+    rendered = render.render_skill(skill, frontmatter="full")
+    assert rendered.startswith("---\n")
+    raw_fm = rendered.split("---")[1]
+    parsed = _y.safe_load(raw_fm)
+    assert parsed["mitos_agent"] == {"special": "config"}
+    assert parsed["org_domain"] == "engineering"
+    assert parsed["delivers"] == "custom-artifact"
+    assert "targets" not in parsed
+    assert rendered.endswith("Instructions body\n")
+

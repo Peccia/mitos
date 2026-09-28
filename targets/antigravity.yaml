@@ -19,6 +19,7 @@
 # workflow genuinely needs more; do not hand-edit the generated allowlist.
 
 target: antigravity
+project_surface: true
 
 server_alias: gws-mcp-local         # Antigravity refers to the gws server by this alias
 

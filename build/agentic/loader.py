@@ -275,6 +275,12 @@ class Registry:
                                    # full_name, email, location — core defaults merged
                                    # with registry/local/user.yaml (field-level overlay)
     agents: dict[str, Agent] = field(default_factory=dict)  # name -> Agent (registry/agents/)
+    warnings: list[str] = field(default_factory=list)
+    skipped_machines: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def target_names(self) -> set[str]:
+        return set(self.targets.keys())
 
     def partial(self, rel: str) -> Partial:
         if rel not in self.partials:
@@ -375,10 +381,17 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
     targets = _load_dir_of_yaml(root / "targets", key="target")
     machines = _load_dir_of_yaml(root / "machines", key="name")
 
-    # Mitos overlay for machines and connections: same last-layer-wins contract as
-    # partials/skills/projects. Private machine profiles with real hostnames/IPs and
-    # server configs with LAN addresses live in registry/local/ (gitignored).
+    # Mitos overlay for targets, machines and connections: targets are add-only
+    # (same-name overlay target is an error, Q1). Private machine profiles with
+    # real hostnames/IPs and server configs with LAN addresses live in registry/local/ (gitignored).
     if local_dir.is_dir() and not ignore_local:
+        local_targets_dir = local_dir / "targets"
+        if local_targets_dir.is_dir() and any(local_targets_dir.glob("*.yaml")):
+            local_targets = _load_dir_of_yaml(local_targets_dir, key="target")
+            collision = set(targets) & set(local_targets)
+            if collision:
+                raise RegistryError(f"overlay target collisions not allowed: {sorted(collision)}")
+            targets.update(local_targets)
         local_machines_dir = local_dir / "machines"
         if local_machines_dir.is_dir() and any(local_machines_dir.glob("*.yaml")):
             machines = _overlay(machines, _load_dir_of_yaml(local_machines_dir, key="name"))
@@ -589,12 +602,14 @@ def _load_agents(reg_or_root: Registry | Path, skills: dict[str, Skill] | None =
     return out
 
 
-def selected_agents(reg: Registry, machine: dict) -> list[str]:
-    """Active agents deployed to a machine running the mitos-agent target.
-    Empty unless the machine has the mitos-agent target.
+def selected_agents(reg: Registry, machine: dict, target: str | None = None) -> list[str]:
+    """Active agents deployed to a machine running the target (default 'mitos-agent').
+    Empty unless the machine has the target.
     Curated via optional machine-side `agents: {include: [...] | exclude: [...]}`.
     At most MAX_ACTIVE_AGENTS (20) may be active."""
-    if "mitos-agent" not in (machine.get("targets") or []):
+    machine_targets = set(machine.get("targets") or [])
+    active_target = target if target is not None else "mitos-agent"
+    if active_target not in machine_targets:
         return []
     mag = machine.get("agents") or {}
     inc = mag.get("include")
@@ -768,14 +783,14 @@ def _validate(reg: Registry) -> None:
     # audiences reference known targets
     for p in reg.partials.values():
         if p.audience:
-            bad = set(p.audience) - KNOWN_TARGETS
+            bad = set(p.audience) - reg.target_names
             if bad:
                 raise RegistryError(f"{p.rel}: unknown audience(s) {sorted(bad)}")
     # skills reference known targets
     for s in reg.skills.values():
         if not s.targets:
             raise RegistryError(f"{s.rel}: skill has no 'targets'")
-        bad = set(s.targets) - KNOWN_TARGETS
+        bad = set(s.targets) - reg.target_names
         if bad:
             raise RegistryError(f"{s.rel}: unknown target(s) {sorted(bad)}")
     # scope: global (default) | project — see validate_skill_scope / Skill.scope
@@ -810,7 +825,7 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(f"agent {agent.name!r} references skill {s!r} whose targets do not include 'mitos-agent'")
     # prompts may omit targets (console-only is valid); when targets are set they must be known
     for p in reg.prompts.values():
-        bad = set(p.targets) - KNOWN_TARGETS
+        bad = set(p.targets) - reg.target_names
         if bad:
             raise RegistryError(f"{p.rel}: unknown target(s) {sorted(bad)}")
     # org domains live on graph EFFORTS, never on projects — a project can hold
@@ -1045,10 +1060,11 @@ def _validate(reg: Registry) -> None:
             if sname not in reg.skills:
                 raise RegistryError(
                     f"project {slug}: skills binds unknown skill {sname!r}")
-            if not set(reg.skills[sname].targets) & PROJECT_SCOPE_CAPABLE_TARGETS:
+            capable = {t for t, spec in reg.targets.items() if spec.get("project_surface")}
+            if not set(reg.skills[sname].targets) & capable:
                 raise RegistryError(
                     f"project {slug}: bound skill {sname!r} does not target "
-                    f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
+                    f"{sorted(capable)} — a project binding only "
                     f"takes effect on a target with a project-scoped skill surface")
         for pname in (proj.get("prompts") or []):
             if pname not in reg.prompts:
@@ -1082,9 +1098,15 @@ def _validate(reg: Registry) -> None:
     # machines reference known targets
     for name, m in reg.machines.items():
         targets = set(m.get("targets", []))
-        bad = targets - KNOWN_TARGETS
+        bad = targets - reg.target_names
         if bad:
-            raise RegistryError(f"machine {name}: unknown target(s) {sorted(bad)}")
+            reg.skipped_machines[name] = sorted(bad)
+            for t in sorted(bad):
+                reg.warnings.append(
+                    f"machine {name}: target '{t}' is not defined — machine skipped. "
+                    f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
+                )
+            continue
         # Machine roles are exclusive: an agentic-harness machine (mitos-agent) is dedicated
         # to that purpose — it does not also run coding harnesses. This keeps every
         # machine's operating-mount tree (assistant_root) unambiguous and lets the
@@ -1185,7 +1207,7 @@ def _validate(reg: Registry) -> None:
             if not isinstance(msk, dict):
                 raise RegistryError(f"machine {name}: 'skills' must be a mapping of "
                                     f"target -> {{include/exclude}}")
-            bad_targets = set(msk) - KNOWN_TARGETS
+            bad_targets = set(msk) - reg.target_names
             if bad_targets:
                 raise RegistryError(f"machine {name}: skills references unknown "
                                     f"target(s) {sorted(bad_targets)}")

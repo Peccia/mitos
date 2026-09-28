@@ -181,12 +181,16 @@ def test_state_exposes_both_token_sets():
 
 # ── {{returns_root}} (where a harness writes what it produced) ───────────────
 def test_returns_root_is_the_state_dir_a_harness_actually_reads():
-    """On a Mitos Agent machine this must be byte-for-byte the folder `mitos-agent returns`
-    reads — `<assistant_root>/.local-memory/returns` — or records land where nothing looks."""
+    """returns_root expands directly when defined in paths, and does not fall back from assistant_root."""
     from agentic import render
+    # explicit returns_root expands
     out = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
-                                     {"assistant_root": "~/MitosAgent"})
+                                     {"returns_root": "~/MitosAgent/.local-memory/returns"})
     assert out == "write to ~/MitosAgent/.local-memory/returns/x.md"
+    # assistant_root alone does not expand returns_root
+    out_fallback = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
+                                              {"assistant_root": "~/MitosAgent"})
+    assert out_fallback == "write to {{returns_root}}/x.md"
 
 
 def test_returns_root_does_not_reuse_project_roots_fallback():
@@ -311,6 +315,9 @@ def test_expand_skills_root_from_assistant_root():
     r = _FakeReg(user)
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"assistant_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
+    # explicit skills_root also expands
+    assert render.expand_placeholders(
+        r, "ls {{skills_root}}", {"skills_root": "~/CustomAgent/skills"}) == "ls ~/CustomAgent/skills"
     # no assistant_root on this machine → literal
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"projects_root": "C:/Projects"}) == "ls {{skills_root}}"
@@ -658,3 +665,32 @@ def test_the_container_token_and_the_root_token_are_different_places():
     paths, machine = {"assistant_root": "~/MitosAgent"}, {"document_store": "gws"}
     assert render.expand_placeholders(reg, "{{returns_root}}", paths, machine) \
         != render.expand_placeholders(reg, "{{returns_container}}", paths, machine)
+
+
+# ── Generic path token tests (TEST-08) ──────────────────────────────────────────
+def test_any_paths_key_expands_and_unknown_stays_literal():
+    r = _FakeReg({})
+    paths = {"custom_path": "/var/custom/data", "backup_dir": "/backup"}
+    template = "Copy from {{custom_path}} to {{backup_dir}} but not {{unknown_token}}"
+    assert render.expand_placeholders(r, template, paths) == "Copy from /var/custom/data to /backup but not {{unknown_token}}"
+
+
+def test_reverse_expand_round_trips_a_generic_path_token():
+    user = {"given_name": "", "full_name": "", "email": "", "location": ""}
+    machines = {"box1": {"paths": {"custom_store": "/srv/store"}}}
+    r = _FakeReg(user, machines)
+    original = "Data at {{custom_store}}."
+    expanded = "Data at /srv/store."
+    assert render.reverse_expand_placeholders(r, original, expanded) == original
+
+
+def test_full_windows_rig_tests_skill_guards_mitos_returns_fallback():
+    from dataclasses import replace as _replace
+    from conftest import _full_windows_rig
+    from agentic import planner
+    rig = _full_windows_rig()
+    pg = rig.graphs["example-project"]
+    pg.efforts = [_replace(pg.efforts[0], deliverables=("tests",))] + list(pg.efforts[1:])
+    planned = planner.plan_machine(rig, "example-windows")
+    tests_skill = next(p for p in planned if p.deploy_path.replace("\\", "/").endswith("tests/SKILL.md"))
+    assert "C:/Projects/.mitos-returns" in tests_skill.content

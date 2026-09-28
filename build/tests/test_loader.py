@@ -1892,3 +1892,54 @@ def test_manifest_agents_key_still_rejected():
         raise AssertionError("expected RegistryError for project agents key")
     except RegistryError as e:
         assert "'agents' is not a manifest field — agents are registry resources in registry/agents/, curated per machine under `agents:`" in str(e)
+
+
+# ── Milestone 2: unknown target skip & project_surface ─────────────────────────
+def test_machine_with_unknown_target_is_skipped_with_warning():
+    import pytest
+    import yaml as _y
+    from agentic import planner
+    treg, tmp = _temp_registry()
+    mach_file = tmp / "machines" / "unknown-mach.yaml"
+    mach_cfg = {
+        "name": "unknown-mach",
+        "targets": ["nonexistent-target"],
+        "paths": {"projects_root": "C:/Projects"},
+    }
+    mach_file.write_text(_y.safe_dump(mach_cfg), encoding="utf-8")
+    loaded = loader.load(tmp)
+    assert "unknown-mach" in loaded.skipped_machines
+    assert any("machine unknown-mach: target 'nonexistent-target' is not defined — machine skipped." in w and "accept its seed in the inbox" in w for w in loaded.warnings)
+    # plan_machine for the skipped machine is refused with RegistryError
+    with pytest.raises(loader.RegistryError) as exc_info:
+        planner.plan_machine(loaded, "unknown-mach")
+    assert "machine unknown-mach: target 'nonexistent-target' is not defined — machine skipped" in str(exc_info.value)
+    # other machines plan without error
+    rig_planned = planner.plan_machine(loaded, "rig")
+    assert rig_planned
+
+
+def test_project_scope_follows_target_spec():
+    import copy
+    import pytest
+    from agentic.loader import RegistryError, Skill, _validate
+    r = copy.deepcopy(reg)
+    # custom target with project_surface: true
+    r.targets["custom-proj-capable"] = {"project_surface": True}
+    r.skills["custom-skill"] = Skill(
+        name="custom-skill", rel="local/skills/custom-skill/SKILL.md",
+        frontmatter={"targets": ["custom-proj-capable"]}, body="body")
+    r.projects["example-project"]["skills"] = ["custom-skill"]
+    _validate(r)  # must not raise
+
+    # custom target with project_surface: false
+    r2 = copy.deepcopy(reg)
+    r2.targets["custom-not-capable"] = {"project_surface": False}
+    r2.skills["custom-skill2"] = Skill(
+        name="custom-skill2", rel="local/skills/custom-skill2/SKILL.md",
+        frontmatter={"targets": ["custom-not-capable"]}, body="body")
+    r2.projects["example-project"]["skills"] = ["custom-skill2"]
+    with pytest.raises(RegistryError) as exc_info:
+        _validate(r2)
+    assert "project-scoped skill surface" in str(exc_info.value)
+

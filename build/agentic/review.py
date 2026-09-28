@@ -1234,7 +1234,8 @@ def _meta_dict(fm: dict, whitelist: set[str]) -> dict:
     return {k: fm.get(k, [] if k in ("targets", "platforms", "skills") else "") for k in whitelist}
 
 
-def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[dict, str | None]:
+def _validate_meta_fields(kind: str, current_fm: dict, fields: dict,
+                          reg: Registry | None = None) -> tuple[dict, str | None]:
     """Overlay whitelisted `fields` onto a copy of `current_fm`. Returns
     (new_frontmatter, error) — error is None on success. `fields` may be a strict subset
     (or empty — a body-only edit); anything not named in `fields` is left untouched."""
@@ -1247,7 +1248,8 @@ def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[di
         if key == "targets":
             if not isinstance(val, list) or not val:
                 return {}, "targets must be a non-empty list"
-            bad = set(val) - loader.KNOWN_TARGETS
+            known_targets = reg.target_names if reg is not None else loader.KNOWN_TARGETS
+            bad = set(val) - known_targets
             if bad:
                 return {}, f"unknown target(s) {sorted(bad)}"
             merged["targets"] = [str(t) for t in val]
@@ -1313,7 +1315,7 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         return {"ok": False, "error": "body is required"}
 
     fields = fields or {}
-    new_fm, err = _validate_meta_fields(kind, obj.frontmatter, fields)
+    new_fm, err = _validate_meta_fields(kind, obj.frontmatter, fields, reg=reg)
     if err:
         return {"ok": False, "error": err}
     if kind == "skill" and "targets" in fields:
@@ -1397,7 +1399,7 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         targets = fm.get("targets")
         if not isinstance(targets, list) or not targets:
             return f"{rp!r}: targets must be a non-empty list"
-        bad = set(targets) - loader.KNOWN_TARGETS
+        bad = set(targets) - reg.target_names
         if bad:
             return f"{rp!r}: unknown target(s) {sorted(bad)}"
         bind_err = _check_target_binding(reg, skill.name, [str(t) for t in targets])
@@ -1422,7 +1424,7 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
             targets = fm.get("targets", [])
             if targets and not isinstance(targets, list):
                 return f"{rp!r}: targets must be a list"
-            bad = set(targets or []) - loader.KNOWN_TARGETS
+            bad = set(targets or []) - reg.target_names
             if bad:
                 return f"{rp!r}: unknown target(s) {sorted(bad)}"
     return None
@@ -1457,7 +1459,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     targets = frontmatter_fields.get("targets") or []
     if not isinstance(targets, list) or not targets:
         return {"ok": False, "error": "targets is required and must be a non-empty list"}
-    bad = set(targets) - loader.KNOWN_TARGETS
+    bad = set(targets) - reg.target_names
     if bad:
         return {"ok": False, "error": f"unknown target(s) {sorted(bad)}"}
     if not str(body).strip():
@@ -1574,7 +1576,7 @@ def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
     targets = frontmatter_fields.get("targets") or []
     if not isinstance(targets, list):
         return {"ok": False, "error": "targets must be a list (may be empty for console-only)"}
-    bad = set(targets) - loader.KNOWN_TARGETS
+    bad = set(targets) - reg.target_names
     if bad:
         return {"ok": False, "error": f"unknown target(s) {sorted(bad)}"}
     meta_fm = {
@@ -2523,9 +2525,11 @@ def state(reg: Registry) -> dict:
         "graphs": graph_index(reg),
         # Available document stores (servers defined in connections/servers.yaml and overlay)
         "known_stores": sorted((reg.servers.get("servers") or {}).keys()),
-        # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
+        # the fixed target-adapter set (reg.target_names) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
-        "known_targets": sorted(loader.KNOWN_TARGETS),
+        "known_targets": sorted(reg.target_names),
+        # Registry load warnings (e.g. unknown targets on machines or scope leaks)
+        "warnings": list(reg.warnings),
         # The controlled deliverables vocabulary (graph.KNOWN_DELIVERABLES) — the effort
         # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
         # term to the registry constant surfaces in the UI with no client edit.

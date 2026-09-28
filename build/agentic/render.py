@@ -224,21 +224,25 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     if not paths:
         return None
     if key == "project_root":
+        if "project_root" in paths:
+            return str(paths["project_root"]).rstrip("/")
         for k in ("assistant_root", "agentic_context_root", "projects_root"):
             val = paths.get(k)
             if val:
                 return str(val).rstrip("/")
-        return None
     if key == "skills_root":
+        if paths.get("skills_root"):
+            return str(paths["skills_root"]).rstrip("/")
         home = paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
     if key == "returns_root":
-        home = paths.get("assistant_root")
-        if home:
-            # Must match mitos_agent.state.state_dir: <root>/.local-memory/, then returns/.
-            return f"{str(home).rstrip('/')}/.local-memory/returns"
+        if paths.get("returns_root"):
+            return str(paths["returns_root"]).rstrip("/")
         projects = paths.get("projects_root")
         return f"{str(projects).rstrip('/')}/.mitos-returns" if projects else None
+    if key in paths:
+        val = paths.get(key)
+        return str(val).rstrip("/") if val is not None else None
     return None
 
 
@@ -288,9 +292,9 @@ def machine_token_names() -> list[str]:
 def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None,
                         machine: dict | None = None) -> str:
     """Substitute the fixed personalization tokens with `reg.user` values, plus the
-    machine-scoped tokens (`_MACHINE_TOKENS`) resolved from the deploying machine's
-    paths (`_machine_value`). Without `machine_paths` (or on a machine that defines
-    no matching path) a machine token stays literal, like any other unconfigured one.
+    machine-scoped tokens resolved from the deploying machine's paths (`_machine_value`).
+    Without `machine_paths` (or on a machine that defines no matching path) a token stays
+    literal, like any other unconfigured one.
 
     `machine` is the whole machine profile, needed by `{{connection}}` alone — it resolves
     from `document_store:` and `connections/servers.yaml`, not from `paths:`. Omitting it
@@ -298,9 +302,13 @@ def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = N
     its exact behaviour."""
     def _sub(m: re.Match) -> str:
         key = m.group(1)
-        val = (_machine_value(machine_paths, key, machine, _servers(reg))
-               if key in _MACHINE_TOKENS else _user_value(reg.user, key))
-        return val if val is not None else m.group(0)
+        val = _user_value(reg.user, key)
+        if val is not None:
+            return val
+        val = _machine_value(machine_paths, key, machine, _servers(reg))
+        if val is not None:
+            return val
+        return m.group(0)
     return _PLACEHOLDER_RE.sub(_sub, text)
 
 
@@ -315,25 +323,27 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     "Example" (user_given_name) — otherwise replacing "Example" first would strand " User"
     instead of restoring the full-name token.
 
-    Machine-scoped tokens (`_MACHINE_TOKENS`) reverse against every machine's value
+    Machine-scoped tokens reverse against every machine's value
     (the adopt/review caller doesn't always know which machine the live text was
     expanded for), still scoped to partials that actually carry the token.
     """
     tokens = sorted(set(_PLACEHOLDER_RE.findall(original_text)))
     pairs = []
+    servers = _servers(reg)
+    machines = list(getattr(reg, "machines", {}).values())
     for tok in tokens:
-        if tok in _MACHINE_TOKENS:
-            servers = _servers(reg)
-            vals = {_machine_value((m or {}).get("paths"), tok, m, servers)
-                    for m in getattr(reg, "machines", {}).values()}
-            pairs += [(v, f"{{{{{tok}}}}}") for v in vals if v]
-            continue
         val = _user_value(reg.user, tok)
         if val:
             pairs.append((val, f"{{{{{tok}}}}}"))
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        for m in machines:
+            m_paths = (m or {}).get("paths")
+            m_val = _machine_value(m_paths, tok, m, servers)
+            if m_val:
+                pairs.append((m_val, f"{{{{{tok}}}}}"))
+    unique_pairs = list(dict.fromkeys(pairs))
+    unique_pairs.sort(key=lambda p: len(p[0]), reverse=True)
     out = live_text
-    for val, tok in pairs:
+    for val, tok in unique_pairs:
         out = out.replace(val, tok)
     return out
 
@@ -550,14 +560,23 @@ _SKILL_BANNER = (
 )
 
 
-def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
+def render_skill(skill: Skill, target: str = "", body: str | None = None,
+                 frontmatter: str | None = None) -> str:
     """Render a skill's SKILL.md in the frontmatter flavor a target expects.
 
     `body` overrides skill.body when given, for a caller that renders something other than
-    the registry's own text."""
+    the registry's own text. `frontmatter` optionally selects the style ('full', 'minimal',
+    'mitos-agent')."""
     fm = skill.frontmatter
     b = body if body is not None else skill.body
-    if target == "mitos-agent":
+    style = frontmatter
+    if style is None:
+        if target == "mitos-agent":
+            style = "mitos-agent"
+        elif target in ("claude-code", "claude-app", "antigravity"):
+            style = "minimal"
+
+    if style == "mitos-agent":
         meta = {
             "name": fm["name"],
             "description": fm.get("description", ""),
@@ -577,12 +596,19 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
         if fm.get("scripts"):
             meta["scripts"] = fm["scripts"]
         return _frontmatter_doc(meta, b)
-    if target in ("claude-code", "claude-app", "antigravity"):
+    elif style == "minimal":
         # Agent Skills standard frontmatter: name + description. Antigravity follows
         # the same open standard — one shared branch, deliberately not a fourth flavor.
         meta = {"name": fm.get("name", skill.name),
                 "description": fm.get("description", "")}
         return _frontmatter_doc(meta, b)
+    elif style == "full":
+        # Pass-through: unknown skill frontmatter (mitos_agent:, org_domain:, delivers:, etc.)
+        # survives a frontmatter: full copy byte-for-byte, excluding only internal compiler keys.
+        _EXCLUDE = {"targets"}
+        meta = {k: v for k, v in fm.items() if k not in _EXCLUDE}
+        return _frontmatter_doc(meta, b)
+
     raise ValueError(f"skill rendering not defined for target {target!r}")
 
 
@@ -637,8 +663,8 @@ def flat_tools(server: dict) -> list[str]:
     return tools
 
 
-def mitos_agent_mcp_config(servers: dict) -> dict:
-    """The whole mcp.json Mitos Agent reads: one entry per wired store (keyed by server
+def mcp_servers_json(servers: dict) -> dict:
+    """The whole mcp.json format: one entry per wired store (keyed by server
     name), each carrying its transport, the URL as seen from this machine, and the flat
     tool list. A one-store machine yields a single entry. See planner._agent_servers for
     the server map this consumes."""
@@ -647,6 +673,9 @@ def mitos_agent_mcp_config(servers: dict) -> dict:
         "transport": server.get("transport", "streamable-http"),
         "tools": flat_tools(server),
     } for alias, server in servers.items()}}
+
+
+mitos_agent_mcp_config = mcp_servers_json
 
 
 def antigravity_mcp_config(server: dict, alias: str) -> dict:

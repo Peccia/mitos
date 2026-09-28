@@ -5,6 +5,7 @@
 # content and wiring stay on separate lanes.
 
 target: claude-code
+project_surface: true
 
 # CLAUDE.md per project. For most projects this is identity + the project's repo/builder
 # context. For the mitos project specifically, CLAUDE.md is a thin stub that imports

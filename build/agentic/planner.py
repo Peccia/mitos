@@ -103,6 +103,10 @@ def _visible_projects(reg: Registry) -> Registry:
 
 
 def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
+    if machine_name in getattr(reg, "skipped_machines", {}):
+        bad_targets = reg.skipped_machines[machine_name]
+        t = bad_targets[0] if bad_targets else "unknown"
+        raise RegistryError(f"machine {machine_name}: target '{t}' is not defined — machine skipped")
     reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name)
     if machine is None:
@@ -121,6 +125,8 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
             outputs += _plan_antigravity(reg, machine_name, spec, paths)
         elif target == "claude-app":
             outputs += _plan_claude_app(reg, machine_name, spec, paths)
+        else:
+            outputs += _plan_generic(reg, machine_name, spec, paths)
     outputs += _plan_env(reg, machine_name, paths)
     outputs += _plan_graph_tree(reg, machine_name, paths)
     outputs += _plan_agentic_tree_mounts(reg, machine_name)
@@ -833,7 +839,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but is excluded by this machine's "
                     f"curation (skills.{tname} in machines/{machine_name}.yaml)")
-        if tname in SCOPE_IGNORING_SKILL_TARGETS:
+        if not tspec.get("project_surface") and not is_manual_skill_target(tspec):
             for skill in selected:
                 if skill.scope == "project":
                     warnings.append(
@@ -1307,6 +1313,103 @@ def _plan_agents_md(reg, machine_name, spec, paths) -> list[Output]:
                 drift_policy=policy, sources=srcs,
                 section_bodies=_multi(sections),
             ))
+    return outputs
+
+
+# ── generic target planner ──────────────────────────────────────────────────
+def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> list[Output]:
+    """Generic target planner covering context_file, skills (with subdir pattern
+    and frontmatter full|minimal), agents, and mcp (mcp_servers_json).
+    Used by overlay targets and any target without a dedicated planner function.
+    """
+    outputs: list[Output] = []
+    tname = spec.get("target", "generic")
+    machine = reg.machines.get(machine_name, {})
+
+    # 1. context_file
+    cf = spec.get("context_file")
+    if cf:
+        deploy_to_key = cf.get("deploy_to_key")
+        root_dir = paths.get(deploy_to_key) if deploy_to_key else None
+        if root_dir:
+            filename = cf.get("filename") or cf.get("name", "CONTEXT.md")
+            sources = cf.get("sources") or []
+            sections = _sections(reg, sources, tname) if sources else []
+            content = render.plain_document(sections) if sections else ""
+            deploy_path = f"{root_dir.rstrip('/')}/{filename}"
+            outputs.append(Output(
+                target=tname, kind="text", deploy_path=deploy_path,
+                dist_rel=f"{tname}/{safe_rel(deploy_path)}",
+                content=content,
+                drift_policy=cf.get("drift_policy", "protect"), sources=sources,
+                section_bodies=_multi(sections) if sections else {},
+            ))
+
+    # 2. skills
+    sk = spec.get("skills")
+    if sk:
+        deploy_to_key = sk.get("deploy_to_key")
+        root_dir = paths.get(deploy_to_key) if deploy_to_key else None
+        if root_dir:
+            sk_spec = dict(sk)
+            if "include_target" not in sk_spec:
+                sk_spec["include_target"] = tname
+            fm_style = sk.get("frontmatter", "full")
+            policy = sk.get("drift_policy", "harvest")
+            for skill in _selected_skills(reg, sk_spec, machine):
+                sub = sk["subdir"].format(category=skill.category, name=skill.name)
+                base_dir = f"{root_dir.rstrip('/')}/{sub}"
+                body = skill.body
+                resources = render.compose_skill_resources(reg, skill)
+                deploy_path = f"{base_dir}/SKILL.md"
+                outputs.append(Output(
+                    target=tname, kind="text", deploy_path=deploy_path,
+                    dist_rel=f"{tname}/{safe_rel(deploy_path)}",
+                    content=render.render_skill(skill, tname, body=body, frontmatter=fm_style),
+                    drift_policy=policy, sources=[skill.rel],
+                ))
+                outputs += _skill_resource_outputs(skill, resources, tname, base_dir, policy)
+
+    # 3. agents
+    ag = spec.get("agents")
+    if ag:
+        deploy_to_key = ag.get("deploy_to_key")
+        root_dir = paths.get(deploy_to_key) if deploy_to_key else None
+        if root_dir:
+            agent_dir = f"{root_dir.rstrip('/')}/{ag.get('subdir', 'agents')}"
+            policy = ag.get("drift_policy", "harvest")
+            for agent_name in selected_agents(reg, machine, target=tname):
+                agent = reg.agents[agent_name]
+                deploy_path = f"{agent_dir}/{agent.name}.md"
+                try:
+                    agent_rel = agent.source.relative_to(reg.root).as_posix()
+                except (ValueError, AttributeError):
+                    agent_rel = str(agent.source)
+                outputs.append(Output(
+                    target=tname, kind="text", deploy_path=deploy_path,
+                    dist_rel=f"{tname}/{safe_rel(deploy_path)}",
+                    content=render.render_agent(agent),
+                    drift_policy=policy, sources=[agent_rel],
+                ))
+
+    # 4. mcp
+    mcp = spec.get("mcp")
+    if mcp:
+        deploy_to_key = mcp.get("deploy_to_key")
+        root_dir = paths.get(deploy_to_key) if deploy_to_key else None
+        servers = _agent_servers(reg, machine_name)
+        if root_dir and servers:
+            deploy_path = f"{root_dir.rstrip('/')}/{mcp['filename']}"
+            render_fn_name = mcp.get("render", "mcp_servers_json")
+            render_fn = getattr(render, render_fn_name, render.mcp_servers_json)
+            outputs.append(Output(
+                target=tname, kind="json", deploy_path=deploy_path,
+                dist_rel=f"{tname}/{safe_rel(deploy_path)}",
+                content=_json(render_fn(servers)),
+                drift_policy=mcp.get("drift_policy", "protect"), lane="connections",
+                sources=["connections/servers.yaml"],
+            ))
+
     return outputs
 
 
