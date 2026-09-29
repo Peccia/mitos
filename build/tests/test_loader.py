@@ -1576,7 +1576,6 @@ def test_manifest_agents_key_still_rejected():
 
 # ── Milestone 2: unknown target skip & project_surface ─────────────────────────
 def test_machine_with_unknown_target_is_skipped_with_warning():
-    import pytest
     import yaml as _y
     from agentic import planner
     treg, tmp = _temp_registry()
@@ -1591,9 +1590,11 @@ def test_machine_with_unknown_target_is_skipped_with_warning():
     assert "unknown-mach" in loaded.skipped_machines
     assert any("machine unknown-mach: target 'nonexistent-target' is not defined — machine skipped." in w and "accept its seed in the inbox" in w for w in loaded.warnings)
     # plan_machine for the skipped machine is refused with RegistryError
-    with pytest.raises(loader.RegistryError) as exc_info:
+    try:
         planner.plan_machine(loaded, "unknown-mach")
-    assert "machine unknown-mach: target 'nonexistent-target' is not defined — machine skipped" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as exc:
+        assert "machine unknown-mach: target 'nonexistent-target' is not defined — machine skipped" in str(exc)
     # other machines plan without error
     rig_planned = planner.plan_machine(loaded, "rig")
     assert rig_planned
@@ -1601,7 +1602,6 @@ def test_machine_with_unknown_target_is_skipped_with_warning():
 
 def test_project_scope_follows_target_spec():
     import copy
-    import pytest
     from agentic.loader import RegistryError, Skill, _validate
     r = copy.deepcopy(reg)
     # custom target with project_surface: true
@@ -1619,7 +1619,9 @@ def test_project_scope_follows_target_spec():
         name="custom-skill2", rel="local/skills/custom-skill2/SKILL.md",
         frontmatter={"targets": ["custom-not-capable"]}, body="body")
     r2.projects["example-project"]["skills"] = ["custom-skill2"]
-    with pytest.raises(RegistryError) as exc_info:
+    try:
         _validate(r2)
-    assert "project-scoped skill surface" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except RegistryError as exc:
+        assert "project-scoped skill surface" in str(exc)
 

@@ -148,6 +148,30 @@ def noninteractive_stdin():
         sys.stdin = original
 
 
+class _ExceptionInfo:
+    """Carries the caught exception, matching pytest.raises exc_info.value ergonomics."""
+    def __init__(self) -> None:
+        self.value: Exception | None = None
+
+
+@contextlib.contextmanager
+def raises(expected_exception, match: str | None = None):
+    """Context manager to assert that an exception is raised, with no pytest dependency.
+
+    Provides `exc_info.value` matching pytest.raises ergonomics, runnable under both
+    the stdlib test runner (test_compiler.py) and pytest without importing pytest.
+    """
+    info = _ExceptionInfo()
+    try:
+        yield info
+    except expected_exception as e:
+        info.value = e
+        if match is not None:
+            assert match in str(e), f"expected {match!r} in exception message, got {str(e)!r}"
+    else:
+        raise AssertionError(f"expected {expected_exception.__name__} to be raised")
+
+
 def make_fixture(name: str):
     """Build the stdlib-runner stand-in for a pytest fixture, or raise if unsupported.
 

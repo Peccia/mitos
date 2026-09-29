@@ -191,16 +191,17 @@ placeholders" section and `build/tests/test_personalization.py`.
    pass with no unknown-partial or missing-field errors. It also rewrites this file's
    own artifact, the repo-root `AGENTS.md` (no machine's `local_path` points at a
    contributor's checkout, so `deploy` can't) — commit it when it changes.
-2. Run the compiler test suite: `pytest build/tests/` (per-area files: `test_graph.py`,
-   `test_connectors.py`, `test_commands.py`, `test_loader.py`, `test_targets.py`,
-   `test_review.py`, `test_compiler.py`, `test_staging.py` (the pure scope_key/merge/
-   overlap helpers in `build/agentic/staging.py` — no registry, no connector, unit tests
-   over plain dicts), `test_personalization.py` (user.yaml,
-   `{{user_*}}` expansion/reversal, the generated Connections/Skills sections); shared
-   helpers in `conftest.py`).
-   **CI runs the stdlib runner, not pytest** (`python build/tests/test_compiler.py`) — so a
-   green `pytest` locally is not proof. Run the runner too before pushing. Fixture
-   parameters (`monkeypatch`, `tmp_path`) work under both: the runner resolves each one
+2. Run the compiler test suite with the canonical runner: `python build/tests/test_compiler.py`
+   (per-area files: `test_graph.py`, `test_connectors.py`, `test_commands.py`,
+   `test_loader.py`, `test_targets.py`, `test_review.py`, `test_compiler.py`,
+   `test_staging.py`, `test_personalization.py`; shared helpers in `conftest.py`).
+   **CI installs only `build/requirements.txt` and runs `python build/tests/test_compiler.py` — NEVER `pytest`**.
+   **Never `import pytest` in any test or helper.** Even if running locally inside a virtualenv
+   where pytest happens to be installed, CI does NOT have pytest installed and will fail with
+   `ModuleNotFoundError: No module named 'pytest'`. Use `conftest.raises` or
+   `try ... except ... else: raise AssertionError` for exception assertions. Pinned by
+   `test_no_test_module_imports_pytest` in `test_runner.py`.
+   Fixture parameters (`monkeypatch`, `tmp_path`) work under both: the runner resolves each one
    through `conftest.make_fixture` by signature inspection (params WITH a default are not
    fixtures, matching pytest's own rule). A fixture the runner can't supply fails loudly
    rather than passing `None` — add it to `make_fixture` instead of hand-rolling a

@@ -114,3 +114,30 @@ def test_unsupported_fixture_fails_loudly():
         assert "capsys" in str(e) and "make_fixture" in str(e)
     else:
         raise AssertionError("expected LookupError for an unsupported fixture")
+
+
+def test_no_test_module_imports_pytest():
+    """CI installs only build/requirements.txt, which does NOT include pytest.
+
+    All tests in the suite must run under the stdlib runner (`test_compiler.py`)
+    without requiring pytest to be installed. No test module or test helper may
+    import pytest. Use `conftest.raises` or `try ... except ... else: raise AssertionError`
+    for exception assertions.
+    """
+    import ast
+    bad_files: list[str] = []
+    for path in sorted(HERE.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "pytest" or alias.name.startswith("pytest."):
+                        bad_files.append(f"{path.name}:{node.lineno}: import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "pytest" or (node.module and node.module.startswith("pytest.")):
+                    bad_files.append(f"{path.name}:{node.lineno}: from {node.module} import ...")
+    assert not bad_files, (
+        f"CI does not install pytest (only build/requirements.txt); tests must run under "
+        f"test_compiler.py without pytest. Found pytest imports in:\n" + "\n".join(bad_files)
+    )
+

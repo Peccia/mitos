@@ -2328,15 +2328,16 @@ def test_overlay_target_with_a_new_name_is_planned():
 
 
 def test_overlay_target_same_name_as_core_is_rejected():
-    import pytest
     import yaml as _y
     treg, tmp = _temp_registry()
     overlay_targets = tmp / "registry" / "local" / "targets"
     overlay_targets.mkdir(parents=True, exist_ok=True)
     (overlay_targets / "claude-code.yaml").write_text(_y.safe_dump({"target": "claude-code"}), encoding="utf-8")
-    with pytest.raises(loader.RegistryError) as exc_info:
+    try:
         loader.load(tmp)
-    assert "overlay target collisions not allowed: ['claude-code']" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as exc:
+        assert "overlay target collisions not allowed: ['claude-code']" in str(exc)
 
 
 def test_skill_render_full_preserves_unknown_frontmatter_keys():
@@ -2426,7 +2427,6 @@ def test_claude_code_agent_deployment_and_keys():
 
 
 def test_agent_refuses_unknown_scalar_key_and_warns_on_unknown_block():
-    import pytest
     treg, tmp = _temp_registry()
     adir = tmp / "registry" / "local" / "agents"
     adir.mkdir(parents=True, exist_ok=True)
@@ -2441,10 +2441,12 @@ def test_agent_refuses_unknown_scalar_key_and_warns_on_unknown_block():
         "body\n",
         encoding="utf-8"
     )
-    with pytest.raises(loader.RegistryError) as exc_info:
+    try:
         loader.load(tmp)
-    assert "unknown frontmatter key(s)" in str(exc_info.value)
-    assert "unknown_scalar" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as exc:
+        assert "unknown frontmatter key(s)" in str(exc)
+        assert "unknown_scalar" in str(exc)
 
     # An unknown block warns rather than errors
     bad_agent.write_text(
@@ -2485,7 +2487,6 @@ def test_agent_warns_on_block_for_harness_not_in_targets():
 
 
 def test_agent_missing_targets_is_error():
-    import pytest
     treg, tmp = _temp_registry()
     adir = tmp / "registry" / "local" / "agents"
     adir.mkdir(parents=True, exist_ok=True)
@@ -2498,13 +2499,14 @@ def test_agent_missing_targets_is_error():
         "body\n",
         encoding="utf-8"
     )
-    with pytest.raises(loader.RegistryError) as exc_info:
+    try:
         loader.load(tmp)
-    assert "no-targets.md: agent has no 'targets'" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as exc:
+        assert "no-targets.md: agent has no 'targets'" in str(exc)
 
 
 def test_agent_listed_skill_not_deploying_to_target_is_error():
-    import pytest
     treg, tmp = _temp_registry()
     adir = tmp / "registry" / "local" / "agents"
     adir.mkdir(parents=True, exist_ok=True)
@@ -2530,11 +2532,13 @@ def test_agent_listed_skill_not_deploying_to_target_is_error():
         "body\n",
         encoding="utf-8"
     )
-    with pytest.raises(loader.RegistryError) as exc_info:
+    try:
         loader.load(tmp)
-    assert "bad-skill" in str(exc_info.value)
-    assert "claude-only" in str(exc_info.value)
-    assert "mitos-agent" in str(exc_info.value)
+        raise AssertionError("expected RegistryError")
+    except loader.RegistryError as exc:
+        assert "bad-skill" in str(exc)
+        assert "claude-only" in str(exc)
+        assert "mitos-agent" in str(exc)
 
 
 def test_agent_target_supports_skills_false_warns():
