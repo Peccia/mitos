@@ -52,6 +52,7 @@ skills:
 agents:
   deploy_to_key: assistant_root
   subdir: agents
+  supports_skills: true
   drift_policy: harvest
 
 # MCP — a WHOLE mcp.json Mitos owns (invariant #7 does not apply: this is Mitos Agent's

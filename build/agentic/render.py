@@ -631,16 +631,66 @@ def _frontmatter_doc(meta: dict, body: str) -> str:
 
 
 # ── Agents ───────────────────────────────────────────────────────────────────
-def render_agent(agent: Agent) -> str:
-    """Render an agent Markdown file with YAML frontmatter in canonical order:
-    name, description, goal, skills."""
+def render_agent(agent: Agent, target: str = "", supports_skills: bool = True,
+                 has_goal: bool | None = None) -> str:
+    """Render an agent Markdown file with YAML frontmatter.
+    If target is omitted/empty (authoring / console save / registry candidate):
+        Writes canonical frontmatter: name, description, targets, goal, skills,
+        plus all harness_blocks preserved byte-for-byte. Body is agent.body.
+    If target is provided (deployment):
+        Writes target-specific frontmatter:
+        - name, description
+        - splices in harness_blocks[target] if present
+        - skills: list(agent.skills) if supports_skills and agent.skills
+        - goal: agent.goal if has_goal is True (default for targets other than claude-code)
+        If has_goal is False, folds goal into body: ## Goal\n\n{agent.goal}\n\n{agent.body}
+    """
+    if not target:
+        meta: dict[str, Any] = {
+            "name": agent.name,
+            "description": agent.description,
+            "targets": list(agent.targets),
+        }
+        if agent.goal:
+            meta["goal"] = agent.goal
+        if agent.skills:
+            meta["skills"] = list(agent.skills)
+        if agent.harness_blocks:
+            for k, v in agent.harness_blocks.items():
+                meta[k] = v
+        return _frontmatter_doc(meta, agent.body)
+
+    if has_goal is None:
+        has_goal = (target != "claude-code")
+
     meta = {
         "name": agent.name,
         "description": agent.description,
-        "goal": agent.goal,
-        "skills": agent.skills,
     }
-    return _frontmatter_doc(meta, agent.body)
+    if agent.harness_blocks and target in agent.harness_blocks:
+        block = agent.harness_blocks[target]
+        if isinstance(block, dict):
+            for k, v in block.items():
+                meta[k] = v
+
+    if has_goal:
+        if agent.goal:
+            meta["goal"] = agent.goal
+        body = agent.body
+    else:
+        # Fold goal into body for harnesses with no goal field
+        if agent.goal:
+            if agent.body.strip():
+                body = f"## Goal\n\n{agent.goal}\n\n{agent.body.lstrip()}"
+            else:
+                body = f"## Goal\n\n{agent.goal}\n"
+        else:
+            body = agent.body
+
+    if supports_skills and agent.skills:
+        meta["skills"] = list(agent.skills)
+
+    return _frontmatter_doc(meta, body)
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────

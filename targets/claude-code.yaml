@@ -50,3 +50,10 @@ skills:
 prompts:
   subdir: .claude/commands
   drift_policy: harvest
+
+# Agents — Markdown subagents authored in registry/agents/ (and registry/local/agents/)
+# opting into claude-code. Deployed to claude_code_agents (~/.claude/agents/<name>.md).
+agents:
+  deploy_to_key: claude_code_agents
+  supports_skills: true
+  drift_policy: harvest

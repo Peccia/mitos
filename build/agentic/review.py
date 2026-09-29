@@ -1217,7 +1217,7 @@ _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platfor
                          "targets", "category", "scope",
                          "delivers"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
-_AGENT_META_WHITELIST = {"description", "goal", "skills"}
+_AGENT_META_WHITELIST = {"description", "goal", "skills", "targets"}
 
 
 def _meta_whitelist(kind: str) -> set[str]:
@@ -1248,7 +1248,7 @@ def _validate_meta_fields(kind: str, current_fm: dict, fields: dict,
         if key == "targets":
             if not isinstance(val, list) or not val:
                 return {}, "targets must be a non-empty list"
-            known_targets = reg.target_names if reg is not None else loader.KNOWN_TARGETS
+            known_targets = reg.target_names if reg is not None else set()
             bad = set(val) - known_targets
             if bad:
                 return {}, f"unknown target(s) {sorted(bad)}"
@@ -1331,13 +1331,16 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         agent_obj = loader.Agent(
             name=ident,
             description=str(new_fm.get("description", "")).strip(),
+            targets=[str(t) for t in (new_fm.get("targets") or [])],
             goal=str(new_fm.get("goal", "")).strip(),
             skills=[str(s).strip() for s in (new_fm.get("skills") or [])],
             body=str(body).rstrip("\n"),
             source=obj.source,
+            harness_blocks=dict(obj.harness_blocks),
         )
         payload = render.render_agent(agent_obj)
-        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source)
+        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source,
+                                                      known_targets=reg.target_names, targets_spec=reg.targets)
         if v_err:
             return {"ok": False, "error": v_err}
     else:
@@ -1624,6 +1627,9 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
         return {"ok": False, "error": "body is required"}
 
     desc = str(frontmatter_fields.get("description", "")).strip()
+    targets = frontmatter_fields.get("targets")
+    if not isinstance(targets, list):
+        targets = []
     goal = str(frontmatter_fields.get("goal", "")).strip()
     skills = frontmatter_fields.get("skills")
     if not isinstance(skills, list):
@@ -1632,6 +1638,7 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
     temp_agent = loader.Agent(
         name=name,
         description=desc,
+        targets=[str(t) for t in targets],
         goal=goal,
         skills=[str(s).strip() for s in skills],
         body=str(body).rstrip("\n"),
@@ -1641,7 +1648,8 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
 
     # Reuse loader's validator on the candidate text
     _, err = loader.validate_agent_file_content(
-        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source)
+        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source,
+        known_targets=reg.target_names, targets_spec=reg.targets)
     if err:
         return {"ok": False, "error": err}
 
@@ -1666,19 +1674,14 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
 
 def agents_index(reg: Registry) -> dict:
     """Index of agents and machines deploying them for the console (GET /api/agents).
-    Returns {"agents": [{name, description, goal, skills, machines, source}],
-             "machines": [{name, selected, limit: 20}]}."""
-    real = commands.real_machines(reg)
-    mitos_machines = [
-        m for m in real
-        if "mitos-agent" in (reg.machines.get(m) or {}).get("targets", [])
-    ]
-    target_machines = mitos_machines if mitos_machines else real
+    Returns {"agents": [{name, description, targets, goal, skills, body, machines, source}],
+             "machines": [{name, selected}]}."""
+    target_machines = commands.real_machines(reg)
 
     machine_selected: dict[str, list[str]] = {}
     machines_out = []
     for mname in sorted(target_machines):
-        mcfg = reg.machines.get(mname) or {"name": mname, "targets": ["mitos-agent"]}
+        mcfg = reg.machines.get(mname) or {"name": mname, "targets": []}
         try:
             sel = loader.selected_agents(reg, mcfg)
         except Exception:
@@ -1687,7 +1690,6 @@ def agents_index(reg: Registry) -> dict:
         machines_out.append({
             "name": mname,
             "selected": len(sel),
-            "limit": loader.MAX_ACTIVE_AGENTS,
         })
 
     agents_out = []
@@ -1706,6 +1708,7 @@ def agents_index(reg: Registry) -> dict:
         agents_out.append({
             "name": agent.name,
             "description": agent.description,
+            "targets": list(agent.targets),
             "goal": agent.goal,
             "skills": list(agent.skills),
             "body": agent.body,

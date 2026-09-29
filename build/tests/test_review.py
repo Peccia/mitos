@@ -3054,8 +3054,8 @@ def test_add_document_type_dropdown_defaults_to_document():
 # ── Milestone 2: Agents in console ───────────────────────────────────────────
 def test_api_agents_shape():
     """GET /api/agents returns the expected payload shape: agents list with
-    name, description, goal, skills, machines, source; machines list with
-    name, selected, limit."""
+    name, description, targets, goal, skills, machines, source; machines list with
+    name, selected."""
     from agentic import review
 
     treg, tmp = _temp_registry()
@@ -3066,6 +3066,7 @@ def test_api_agents_shape():
         "---\n"
         "name: test-agent\n"
         "description: Test agent description.\n"
+        "targets: [mitos-agent]\n"
         "goal: Help test.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3081,16 +3082,16 @@ def test_api_agents_shape():
 
     agent_entry = next((a for a in res["agents"] if a["name"] == "test-agent"), None)
     assert agent_entry is not None
-    expected_agent_keys = {"name", "description", "goal", "skills", "machines", "source"}
+    expected_agent_keys = {"name", "description", "targets", "goal", "skills", "machines", "source"}
     assert expected_agent_keys <= set(agent_entry.keys())
     assert agent_entry["description"] == "Test agent description."
+    assert agent_entry["targets"] == ["mitos-agent"]
     assert agent_entry["goal"] == "Help test."
     assert agent_entry["skills"] == ["new-session"]
     assert "local/agents/test-agent.md" in agent_entry["source"]
 
     for m in res["machines"]:
-        assert {"name", "selected", "limit"} <= set(m.keys())
-        assert m["limit"] == 20
+        assert {"name", "selected"} <= set(m.keys())
         assert isinstance(m["selected"], int)
 
 
@@ -3102,7 +3103,7 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
     treg, tmp = _temp_registry()
     out = review.propose_new_agent(
         treg, "scout-agent",
-        {"description": "Scout things.", "goal": "Find stuff.", "skills": ["new-session"]},
+        {"description": "Scout things.", "targets": ["mitos-agent"], "goal": "Find stuff.", "skills": ["new-session"]},
         "# Instructions\n\nScout around.",
         reason="initial scaffold"
     )
@@ -3126,6 +3127,7 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
     content = reg_target.read_text(encoding="utf-8")
     assert "name: scout-agent" in content
     assert "description: Scout things." in content
+    assert "targets:" in content
     assert "goal: Find stuff." in content
     assert "skills:" in content
     assert "Scout around." in content
@@ -3136,31 +3138,29 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
 
 
 def test_propose_new_agent_validates():
-    """propose_new_agent enforces M1 agent validation rules on candidate text."""
+    """propose_new_agent enforces agent validation rules on candidate text."""
     from agentic import review
 
     treg, _tmp = _temp_registry()
 
     # Empty name
-    assert not review.propose_new_agent(treg, "", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Bad slug
-    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Empty description
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
-    # Empty goal
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "", "skills": ["new-session"]}, "body")["ok"]
-    # Empty skills
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": []}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Missing targets
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": [], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Unknown skill
-    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
+    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
     assert not res["ok"]
     assert "unknown skill" in res["error"]
     # Empty body
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "")["ok"]
 
 
 def test_propose_agent_meta_edit_lands_in_inbox():
-    """propose_meta_edit accepts kind='agent' for description, goal, skills,
+    """propose_meta_edit accepts kind='agent' for description, goal, skills, targets,
     writing a verbatim candidate that updates the agent file when accepted."""
     from agentic import review
     import yaml as _y
@@ -3172,6 +3172,7 @@ def test_propose_agent_meta_edit_lands_in_inbox():
         "---\n"
         "name: worker\n"
         "description: Original description.\n"
+        "targets: [mitos-agent]\n"
         "goal: Original goal.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3198,6 +3199,7 @@ def test_propose_agent_meta_edit_lands_in_inbox():
 
     text = (adir / "worker.md").read_text(encoding="utf-8")
     assert "description: Updated description." in text
+    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
     assert "goal: Updated goal." in text
     assert "Work hard." in text
 
@@ -3213,6 +3215,7 @@ def test_propose_agent_body_edit():
         "---\n"
         "name: coder\n"
         "description: Code agent.\n"
+        "targets: [mitos-agent]\n"
         "goal: Write code.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3234,29 +3237,21 @@ def test_propose_agent_body_edit():
     text = (adir / "coder.md").read_text(encoding="utf-8")
     assert "name: coder" in text
     assert "description: Code agent." in text
+    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
     assert "goal: Write code." in text
     assert "Updated instructions." in text
     assert "Initial instructions." not in text
 
 
 def test_agents_section_hidden_without_flag():
-    """The Agents chip and grid are gated behind hasMitosAgent() in app.js."""
+    """Agents is a core lane: no hasMitosAgent() gate on agents in app.js, no 'of 20'."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
 
-    # Flag gate predicate exists
-    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
-
-    # Agents chip is gated behind hasMitosAgent()
-    assert "if (hasMitosAgent()) {" in app
-    assert 'const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");' in app
-
-    # Agents grid rendering is gated behind hasMitosAgent()
-    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid(gridWrap);" in app
-
-    # + New agent button is gated behind hasMitosAgent()
-    assert 'if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn = el("button", "accept", "+ New agent");' in app
-
-    # Fetch is gated behind hasMitosAgent()
-    assert "if (!agentsData && hasMitosAgent()) {" in app
+    # No hasMitosAgent() gating agents
+    assert "if (hasMitosAgent()) {\n    const agentsChip = el" not in app
+    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid" not in app
+    assert "if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn" not in app
+    assert "if (!agentsData && hasMitosAgent())" not in app
+    assert "of 20" not in app
 

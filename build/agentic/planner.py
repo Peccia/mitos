@@ -1376,8 +1376,11 @@ def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> 
         deploy_to_key = ag.get("deploy_to_key")
         root_dir = paths.get(deploy_to_key) if deploy_to_key else None
         if root_dir:
-            agent_dir = f"{root_dir.rstrip('/')}/{ag.get('subdir', 'agents')}"
+            subdir = ag.get("subdir")
+            agent_dir = f"{root_dir.rstrip('/')}/{subdir}" if subdir else root_dir.rstrip('/')
             policy = ag.get("drift_policy", "harvest")
+            supports_skills = ag.get("supports_skills", True)
+            has_goal = ag.get("has_goal", False if tname == "claude-code" else True)
             for agent_name in selected_agents(reg, machine, target=tname):
                 agent = reg.agents[agent_name]
                 deploy_path = f"{agent_dir}/{agent.name}.md"
@@ -1388,7 +1391,8 @@ def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> 
                 outputs.append(Output(
                     target=tname, kind="text", deploy_path=deploy_path,
                     dist_rel=f"{tname}/{safe_rel(deploy_path)}",
-                    content=render.render_agent(agent),
+                    content=render.render_agent(agent, target=tname,
+                                                supports_skills=supports_skills, has_goal=has_goal),
                     drift_policy=policy, sources=[agent_rel],
                 ))
 
@@ -1451,7 +1455,8 @@ def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
     if home and ag:
         agent_dir = f"{home.rstrip('/')}/{ag.get('subdir', 'agents')}"
         policy = ag.get("drift_policy", "harvest")
-        for agent_name in selected_agents(reg, reg.machines[machine_name]):
+        supports_skills = ag.get("supports_skills", True)
+        for agent_name in selected_agents(reg, reg.machines[machine_name], target="mitos-agent"):
             agent = reg.agents[agent_name]
             deploy_path = f"{agent_dir}/{agent.name}.md"
             try:
@@ -1461,7 +1466,8 @@ def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
             outputs.append(Output(
                 target="mitos-agent", kind="text", deploy_path=deploy_path,
                 dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
-                content=render.render_agent(agent),
+                content=render.render_agent(agent, target="mitos-agent",
+                                            supports_skills=supports_skills, has_goal=True),
                 drift_policy=policy, sources=[agent_rel],
             ))
     # mcp.json — a WHOLE file Mitos owns (invariant #7 does not apply to this lane), carrying
@@ -1643,6 +1649,26 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
                 dist_rel=f"claude-code/{safe_rel(deploy_path)}",
                 content=render.render_prompt(prompt, "claude-code"),
                 drift_policy=pr.get("drift_policy", "harvest"), sources=[prompt.rel],
+            ))
+    # agents — global scope only: ~/.claude/agents/<name>.md
+    ag = spec.get("agents")
+    global_agents_dir = paths.get(ag.get("deploy_to_key", "claude_code_agents")) if ag else None
+    if global_agents_dir and ag:
+        policy = ag.get("drift_policy", "harvest")
+        supports_skills = ag.get("supports_skills", True)
+        for agent_name in selected_agents(reg, machine, target="claude-code"):
+            agent = reg.agents[agent_name]
+            deploy_path = f"{global_agents_dir.rstrip('/')}/{agent.name}.md"
+            try:
+                agent_rel = agent.source.relative_to(reg.root).as_posix()
+            except (ValueError, AttributeError):
+                agent_rel = str(agent.source)
+            outputs.append(Output(
+                target="claude-code", kind="text", deploy_path=deploy_path,
+                dist_rel=f"claude-code/{safe_rel(deploy_path)}",
+                content=render.render_agent(agent, target="claude-code",
+                                            supports_skills=supports_skills, has_goal=False),
+                drift_policy=policy, sources=[agent_rel],
             ))
     return outputs
 

@@ -2380,6 +2380,7 @@ def test_plan_mitos_agent_emits_agents():
     rig.agents["crm"] = Agent(
         name="crm",
         description="Personal CRM agent",
+        targets=["mitos-agent"],
         goal="Manage personal relationships and notes",
         skills=["gws"],
         body="# Instructions\nManage contacts.\n",
@@ -2424,6 +2425,7 @@ def test_deselected_agent_then_prune():
     reg2.agents["crm"] = Agent(
         name="crm",
         description="Personal CRM agent",
+        targets=["mitos-agent"],
         goal="Manage personal relationships and notes",
         skills=["gws"],
         body="# Instructions\nManage contacts.\n",
@@ -2533,4 +2535,257 @@ def test_skill_render_full_preserves_unknown_frontmatter_keys():
     assert parsed["delivers"] == "custom-artifact"
     assert "targets" not in parsed
     assert rendered.endswith("Instructions body\n")
+
+
+# ── TEST-11: Core lane agent deployment and validation ────────────────────────
+def test_claude_code_agent_deployment_and_keys():
+    """Agent deployed to claude-code folds goal into body, splices claude-code harness
+    block into frontmatter, and deploys to claude_code_agents path under sandbox."""
+    import tempfile
+    import yaml as _y
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    from agentic import planner
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "coder.md"
+    agent_file.write_text(
+        "---\n"
+        "name: coder\n"
+        "description: Code specialist agent\n"
+        "targets: [claude-code]\n"
+        "goal: Write pristine code\n"
+        "skills: [gws]\n"
+        "claude-code:\n"
+        "  model: sonnet\n"
+        "---\n"
+        "# Instructions\n"
+        "Write clean Python.\n",
+        encoding="utf-8"
+    )
+    # Ensure rig machine has claude_code_agents path and claude-code target
+    rig_file = tmp / "machines" / "rig.yaml"
+    rig_cfg = _y.safe_load(rig_file.read_text(encoding="utf-8"))
+    rig_cfg["targets"] = ["claude-code"]
+    rig_cfg["paths"]["projects_root"] = f"{tmp.as_posix()}/projects"
+    rig_cfg["paths"]["claude_code_skills"] = f"{tmp.as_posix()}/claude/skills"
+    rig_cfg["paths"]["claude_code_agents"] = f"{tmp.as_posix()}/claude/agents"
+    rig_file.write_text(_y.safe_dump(rig_cfg), encoding="utf-8")
+
+    fresh = loader.load(tmp)
+    assert "coder" in fresh.agents
+    planned = planner.plan_machine(fresh, "rig")
+    coder_out = next((p for p in planned if p.deploy_path.endswith("claude/agents/coder.md")), None)
+    assert coder_out is not None
+    assert coder_out.target == "claude-code"
+
+    # Check rendered content: model spliced in, goal folded into body, no top-level goal in frontmatter
+    fm_part, body_part = coder_out.content.split("---\n\n", 1)
+    fm = _y.safe_load(fm_part.replace("---\n", ""))
+    assert fm["name"] == "coder"
+    assert fm["description"] == "Code specialist agent"
+    assert fm["model"] == "sonnet"
+    assert "goal" not in fm
+    assert "claude-code" not in fm
+    assert fm["skills"] == ["gws"]
+    assert "## Goal\n\nWrite pristine code\n\n# Instructions\nWrite clean Python." in body_part
+
+    # Deploy under sandbox
+    root = Path(tempfile.mkdtemp(prefix="ae-sandbox-agent-"))
+    rc = cmd_deploy(fresh, "rig", dry_run=False, force=False, root=root)
+    assert rc == 0
+    deployed_file = root / safe_rel(coder_out.deploy_path)
+    assert deployed_file.is_file()
+    assert deployed_file.read_text(encoding="utf-8") == coder_out.content
+
+
+def test_agent_refuses_unknown_scalar_key_and_warns_on_unknown_block():
+    import pytest
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    bad_agent = adir / "bad-scalar.md"
+    bad_agent.write_text(
+        "---\n"
+        "name: bad-scalar\n"
+        "description: Bad\n"
+        "targets: [claude-code]\n"
+        "unknown_scalar: val\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    with pytest.raises(loader.RegistryError) as exc_info:
+        loader.load(tmp)
+    assert "unknown frontmatter key(s)" in str(exc_info.value)
+    assert "unknown_scalar" in str(exc_info.value)
+
+    # An unknown block warns rather than errors
+    bad_agent.write_text(
+        "---\n"
+        "name: bad-scalar\n"
+        "description: Bad\n"
+        "targets: [claude-code]\n"
+        "some_unknown_harness:\n"
+        "  custom: true\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    assert "bad-scalar" in loaded.agents
+    assert any("unknown block 'some_unknown_harness' ignored" in w for w in loaded.warnings)
+
+
+def test_agent_warns_on_block_for_harness_not_in_targets():
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "agent-block.md"
+    agent_file.write_text(
+        "---\n"
+        "name: agent-block\n"
+        "description: Agent with mismatched block\n"
+        "targets: [claude-code]\n"
+        "mitos-agent:\n"
+        "  prompt: special\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    assert "agent-block" in loaded.agents
+    assert any("block ignored: 'mitos-agent' not in targets" in w for w in loaded.warnings)
+
+
+def test_agent_missing_targets_is_error():
+    import pytest
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "no-targets.md"
+    agent_file.write_text(
+        "---\n"
+        "name: no-targets\n"
+        "description: Missing targets\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    with pytest.raises(loader.RegistryError) as exc_info:
+        loader.load(tmp)
+    assert "no-targets.md: agent has no 'targets'" in str(exc_info.value)
+
+
+def test_agent_listed_skill_not_deploying_to_target_is_error():
+    import pytest
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "bad-skill.md"
+    sdir = tmp / "registry" / "skills" / "claude-only"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "SKILL.md").write_text(
+        "---\n"
+        "name: claude-only\n"
+        "description: Claude only skill\n"
+        "targets: [claude-code]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    agent_file.write_text(
+        "---\n"
+        "name: bad-skill\n"
+        "description: Bad skill targets\n"
+        "targets: [claude-code, mitos-agent]\n"
+        "skills: [claude-only]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    with pytest.raises(loader.RegistryError) as exc_info:
+        loader.load(tmp)
+    assert "bad-skill" in str(exc_info.value)
+    assert "claude-only" in str(exc_info.value)
+    assert "mitos-agent" in str(exc_info.value)
+
+
+def test_agent_target_supports_skills_false_warns():
+    import yaml as _y
+    treg, tmp = _temp_registry()
+    overlay_targets = tmp / "registry" / "local" / "targets"
+    overlay_targets.mkdir(parents=True, exist_ok=True)
+    custom_target = {
+        "target": "noskills-target",
+        "agents": {
+            "deploy_to_key": "noskills_agents",
+            "supports_skills": False,
+        }
+    }
+    (overlay_targets / "noskills-target.yaml").write_text(_y.safe_dump(custom_target), encoding="utf-8")
+
+    sdir = tmp / "registry" / "skills" / "shared-skill"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "SKILL.md").write_text(
+        "---\n"
+        "name: shared-skill\n"
+        "description: Shared skill\n"
+        "targets: [noskills-target]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "warn-agent.md"
+    agent_file.write_text(
+        "---\n"
+        "name: warn-agent\n"
+        "description: Agent targeting noskills\n"
+        "targets: [noskills-target]\n"
+        "skills: [shared-skill]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    loaded = loader.load(tmp)
+    assert "warn-agent" in loaded.agents
+    assert any("target 'noskills-target' has supports_skills: false" in w for w in loaded.warnings)
+
+
+def test_agent_with_mitos_agent_target_does_not_reach_claude_code_on_dual_machine():
+    import yaml as _y
+    from agentic import planner
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    agent_file = adir / "mitos-only.md"
+    agent_file.write_text(
+        "---\n"
+        "name: mitos-only\n"
+        "description: Mitos agent only\n"
+        "targets: [mitos-agent]\n"
+        "skills: [gws]\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8"
+    )
+    # Configure rig machine with dual coding harnesses (claude-code and antigravity)
+    rig_file = tmp / "machines" / "rig.yaml"
+    rig_cfg = _y.safe_load(rig_file.read_text(encoding="utf-8"))
+    rig_cfg["targets"] = ["claude-code", "antigravity"]
+    rig_cfg["paths"]["projects_root"] = f"{tmp.as_posix()}/projects"
+    rig_cfg["paths"]["claude_code_skills"] = f"{tmp.as_posix()}/claude/skills"
+    rig_cfg["paths"]["claude_code_agents"] = f"{tmp.as_posix()}/claude/agents"
+    rig_cfg["paths"]["antigravity_skills"] = f"{tmp.as_posix()}/antigravity/skills"
+    rig_cfg["paths"]["antigravity_config"] = f"{tmp.as_posix()}/antigravity/config"
+    rig_file.write_text(_y.safe_dump(rig_cfg), encoding="utf-8")
+
+    fresh = loader.load(tmp)
+    planned = planner.plan_machine(fresh, "rig")
+    # Agent with targets: [mitos-agent] does not reach claude-code or antigravity on this machine
+    agent_outs = [p for p in planned if "mitos-only.md" in p.deploy_path]
+    assert len(agent_outs) == 0
 

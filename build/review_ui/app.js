@@ -240,7 +240,7 @@ async function refresh(pre) {
     try { orgData = await (await fetch("/api/org")).json(); }
     catch (e) { orgData = {}; }
   }
-  if (!agentsData && hasMitosAgent()) {
+  if (!agentsData) {
     try { agentsData = await (await fetch("/api/agents")).json(); }
     catch (e) { agentsData = { agents: [], machines: [] }; }
   }
@@ -4105,13 +4105,13 @@ let skillShowingAgents = false;
 let agentsData = null;
 let newAgentOpen = false;
 let editingAgentName = null;
-let newAgentFieldDraft = { name: "", description: "", goal: "", skills: [] };
+let newAgentFieldDraft = { name: "", description: "", targets: [], goal: "", skills: [] };
 let newAgentDraftBody = "# Instructions\n\n";
 let agentEditDraft = {};
 
 function resetNewAgentDraft() {
   newAgentDraftBody = "# Instructions\n\n";
-  newAgentFieldDraft = { name: "", description: "", goal: "", skills: [] };
+  newAgentFieldDraft = { name: "", description: "", targets: [], goal: "", skills: [] };
 }
 
 
@@ -4174,7 +4174,7 @@ function renderSkills() {
   // Only the grid re-renders on a keystroke — this input survives, so focus is never lost.
   searchInp.oninput = () => {
     skillFilterText = searchInp.value;
-    if (skillShowingAgents && hasMitosAgent()) {
+    if (skillShowingAgents) {
       renderAgentsGrid(gridWrap);
     } else {
       renderSkillsGrid(gridWrap, orgDomainBySkill);
@@ -4182,7 +4182,7 @@ function renderSkills() {
   };
 
   btnGroup.replaceChildren();
-  if (skillShowingAgents && hasMitosAgent()) {
+  if (skillShowingAgents) {
     const newAgentBtn = el("button", "accept", "+ New agent");
     newAgentBtn.onclick = () => { newAgentOpen = true; renderSkills(); };
     btnGroup.append(newAgentBtn);
@@ -4301,20 +4301,16 @@ function renderSkills() {
     skillFilterOrg = false;
   }
 
-  if (hasMitosAgent()) {
-    const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");
-    agentsChip.title = "View and manage agents";
-    agentsChip.setAttribute("aria-pressed", String(skillShowingAgents));
-    agentsChip.onclick = () => {
-      skillShowingAgents = !skillShowingAgents;
-      renderSkills();
-    };
-    chipRow.append(agentsChip);
-  } else if (skillShowingAgents) {
-    skillShowingAgents = false;
-  }
+  const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");
+  agentsChip.title = "View and manage agents";
+  agentsChip.setAttribute("aria-pressed", String(skillShowingAgents));
+  agentsChip.onclick = () => {
+    skillShowingAgents = !skillShowingAgents;
+    renderSkills();
+  };
+  chipRow.append(agentsChip);
 
-  if (skillShowingAgents && hasMitosAgent()) {
+  if (skillShowingAgents) {
     renderAgentsGrid(gridWrap);
   } else {
     renderSkillsGrid(gridWrap, orgDomainBySkill);
@@ -4946,13 +4942,10 @@ function renderAgentsGrid(container) {
     }
     card.append(skillsRow);
 
-    // Machines section - each with "N of 20"
+    // Machines section
     const machRow = el("div", "skill-card-targets muted small");
     for (const mname of (agent.machines || [])) {
-      const mach = machinesInfo.find((m) => m.name === mname);
-      const count = mach ? mach.selected : 1;
-      const limit = mach ? mach.limit : 20;
-      const chip = el("span", "tag-chip machine-chip", `${mname} (${count} of ${limit})`);
+      const chip = el("span", "tag-chip machine-chip", mname);
       machRow.append(chip);
     }
     card.append(machRow);
@@ -5000,30 +4993,80 @@ function newAgentForm() {
   nameInput.addEventListener("keydown", focusNext(descInput));
   descInput.addEventListener("keydown", focusNext(goalInput));
 
-  // Skills picker limited to skills targeting mitos-agent
-  const skillsWrap = el("div", "graph-field");
-  skillsWrap.append(el("label", "", "Skills (mitos-agent target)"));
-  const skillsRow = el("div", "target-checks");
-  const availableSkills = (STATE?.prompts?.skills || [])
-    .filter((s) => (s.targets || []).includes("mitos-agent"));
-
-  const skillBoxes = {};
-  for (const s of availableSkills) {
+  const targetsWrap = el("div", "graph-field");
+  targetsWrap.append(el("label", "", "Targets"));
+  const targetsRow = el("div", "target-checks");
+  const targetBoxes = {};
+  const visibleTargets = (STATE.known_targets || []).filter(isTargetVisible);
+  for (const t of visibleTargets) {
     const label = el("label", "target-check");
     const cb = el("input");
     cb.type = "checkbox";
-    cb.value = s.name;
-    if (newAgentFieldDraft.skills && newAgentFieldDraft.skills.includes(s.name)) {
+    cb.value = t;
+    if (newAgentFieldDraft.targets && newAgentFieldDraft.targets.includes(t)) {
       cb.checked = true;
     }
     cb.onchange = () => {
-      newAgentFieldDraft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+      newAgentFieldDraft.targets = Object.keys(targetBoxes).filter((tt) => targetBoxes[tt].checked);
+      updateSkillPicker();
     };
-    label.append(cb, document.createTextNode(" " + s.name));
-    skillsRow.append(label);
-    skillBoxes[s.name] = cb;
+    label.append(cb, document.createTextNode(" " + t));
+    targetsRow.append(label);
+    targetBoxes[t] = cb;
   }
-  skillsWrap.append(skillsRow);
+  targetsWrap.append(targetsRow);
+  wrap.append(targetsWrap);
+
+  // Skills picker filtered by chosen targets with inline missing-skill warning
+  const skillsWrap = el("div", "graph-field");
+  skillsWrap.append(el("label", "", "Skills"));
+  const skillsRow = el("div", "target-checks");
+  const skillWarning = el("div", "missing-skill-warning muted small");
+  skillsWrap.append(skillsRow, skillWarning);
+
+  const skillBoxes = {};
+  const updateSkillPicker = () => {
+    const chosenTargets = Object.keys(targetBoxes).filter((tt) => targetBoxes[tt].checked);
+    skillsRow.replaceChildren();
+    skillWarning.replaceChildren();
+
+    const allSkills = STATE?.prompts?.skills || [];
+    const compatibleSkills = chosenTargets.length === 0
+      ? allSkills
+      : allSkills.filter((s) => chosenTargets.every((t) => (s.targets || []).includes(t)));
+
+    for (const s of compatibleSkills) {
+      const label = el("label", "target-check");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.value = s.name;
+      if (newAgentFieldDraft.skills && newAgentFieldDraft.skills.includes(s.name)) {
+        cb.checked = true;
+      }
+      cb.onchange = () => {
+        newAgentFieldDraft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k]?.checked);
+      };
+      label.append(cb, document.createTextNode(" " + s.name));
+      skillsRow.append(label);
+      skillBoxes[s.name] = cb;
+    }
+
+    if (newAgentFieldDraft.skills && chosenTargets.length > 0) {
+      const incompatible = [];
+      for (const sk of newAgentFieldDraft.skills) {
+        const skObj = allSkills.find((s) => s.name === sk);
+        const missing = chosenTargets.filter((t) => !(skObj?.targets || []).includes(t));
+        if (missing.length > 0) {
+          incompatible.push(`${sk} (missing for: ${missing.join(", ")})`);
+        }
+      }
+      if (incompatible.length > 0) {
+        skillWarning.textContent = `Warning: selected skill(s) do not deploy to all chosen targets: ${incompatible.join("; ")}`;
+        skillWarning.style.color = "var(--warn-text, #e2903b)";
+      }
+    }
+  };
+  updateSkillPicker();
   wrap.append(skillsWrap);
 
   const editor = buildContextualEditor({
@@ -5040,9 +5083,11 @@ function newAgentForm() {
 
   const create = el("button", "accept", "Create agent");
   create.onclick = async () => {
-    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    const targets = Object.keys(targetBoxes).filter((k) => targetBoxes[k].checked);
+    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k]?.checked);
     const fm = {
       description: descInput.value.trim(),
+      targets,
       goal: goalInput.value.trim(),
       skills,
     };
@@ -5092,6 +5137,7 @@ function editAgentForm(agentName) {
   if (!agentEditDraft[agentName]) {
     agentEditDraft[agentName] = {
       description: agent.description || "",
+      targets: [...(agent.targets || [])],
       goal: agent.goal || "",
       skills: [...(agent.skills || [])],
       body: agent.body || "",
@@ -5120,30 +5166,80 @@ function editAgentForm(agentName) {
   const goalInput = field("Goal", "Intended outcome", draft.goal,
     (v) => { draft.goal = v; });
 
-  // Skills picker limited to skills targeting mitos-agent
-  const skillsWrap = el("div", "graph-field");
-  skillsWrap.append(el("label", "", "Skills (mitos-agent target)"));
-  const skillsRow = el("div", "target-checks");
-  const availableSkills = (STATE?.prompts?.skills || [])
-    .filter((s) => (s.targets || []).includes("mitos-agent"));
-
-  const skillBoxes = {};
-  for (const s of availableSkills) {
+  const targetsWrap = el("div", "graph-field");
+  targetsWrap.append(el("label", "", "Targets"));
+  const targetsRow = el("div", "target-checks");
+  const targetBoxes = {};
+  const visibleTargets = (STATE.known_targets || []).filter(isTargetVisible);
+  for (const t of visibleTargets) {
     const label = el("label", "target-check");
     const cb = el("input");
     cb.type = "checkbox";
-    cb.value = s.name;
-    if (draft.skills && draft.skills.includes(s.name)) {
+    cb.value = t;
+    if (draft.targets && draft.targets.includes(t)) {
       cb.checked = true;
     }
     cb.onchange = () => {
-      draft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+      draft.targets = Object.keys(targetBoxes).filter((tt) => targetBoxes[tt].checked);
+      updateSkillPicker();
     };
-    label.append(cb, document.createTextNode(" " + s.name));
-    skillsRow.append(label);
-    skillBoxes[s.name] = cb;
+    label.append(cb, document.createTextNode(" " + t));
+    targetsRow.append(label);
+    targetBoxes[t] = cb;
   }
-  skillsWrap.append(skillsRow);
+  targetsWrap.append(targetsRow);
+  wrap.append(targetsWrap);
+
+  // Skills picker filtered by chosen targets with inline missing-skill warning
+  const skillsWrap = el("div", "graph-field");
+  skillsWrap.append(el("label", "", "Skills"));
+  const skillsRow = el("div", "target-checks");
+  const skillWarning = el("div", "missing-skill-warning muted small");
+  skillsWrap.append(skillsRow, skillWarning);
+
+  const skillBoxes = {};
+  const updateSkillPicker = () => {
+    const chosenTargets = Object.keys(targetBoxes).filter((tt) => targetBoxes[tt].checked);
+    skillsRow.replaceChildren();
+    skillWarning.replaceChildren();
+
+    const allSkills = STATE?.prompts?.skills || [];
+    const compatibleSkills = chosenTargets.length === 0
+      ? allSkills
+      : allSkills.filter((s) => chosenTargets.every((t) => (s.targets || []).includes(t)));
+
+    for (const s of compatibleSkills) {
+      const label = el("label", "target-check");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.value = s.name;
+      if (draft.skills && draft.skills.includes(s.name)) {
+        cb.checked = true;
+      }
+      cb.onchange = () => {
+        draft.skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k]?.checked);
+      };
+      label.append(cb, document.createTextNode(" " + s.name));
+      skillsRow.append(label);
+      skillBoxes[s.name] = cb;
+    }
+
+    if (draft.skills && chosenTargets.length > 0) {
+      const incompatible = [];
+      for (const sk of draft.skills) {
+        const skObj = allSkills.find((s) => s.name === sk);
+        const missing = chosenTargets.filter((t) => !(skObj?.targets || []).includes(t));
+        if (missing.length > 0) {
+          incompatible.push(`${sk} (missing for: ${missing.join(", ")})`);
+        }
+      }
+      if (incompatible.length > 0) {
+        skillWarning.textContent = `Warning: selected skill(s) do not deploy to all chosen targets: ${incompatible.join("; ")}`;
+        skillWarning.style.color = "var(--warn-text, #e2903b)";
+      }
+    }
+  };
+  updateSkillPicker();
   wrap.append(skillsWrap);
 
   const editor = buildContextualEditor({
@@ -5160,9 +5256,11 @@ function editAgentForm(agentName) {
 
   const save = el("button", "accept", "Save agent");
   save.onclick = async () => {
-    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k].checked);
+    const targets = Object.keys(targetBoxes).filter((k) => targetBoxes[k].checked);
+    const skills = Object.keys(skillBoxes).filter((k) => skillBoxes[k]?.checked);
     const fields = {
       description: descInput.value.trim(),
+      targets,
       goal: goalInput.value.trim(),
       skills,
     };

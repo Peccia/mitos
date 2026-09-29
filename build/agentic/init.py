@@ -51,7 +51,7 @@ CODING_TARGETS: dict[str, str] = {
 _TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "antigravity": ("projects_root", "antigravity_config", "antigravity_skills"),
     "claude-app": ("claude_skills_staging",),
-    "claude-code": ("projects_root", "claude_code_skills"),
+    "claude-code": ("projects_root", "claude_code_skills", "claude_code_agents"),
     # ONE install root — SOUL/skills/mcp.json AND the agents-md tree share `assistant_root`.
     "mitos-agent": ("assistant_root",),
     "agents-md": (),          # a context FORMAT, not a harness — owns no path of its own
@@ -59,12 +59,13 @@ _TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
 
 # Stable emit order, so two profiles with overlapping targets read the same way.
 _PATH_ORDER = ("projects_root", "antigravity_config", "antigravity_skills",
-               "claude_code_skills", "claude_skills_staging", "assistant_root")
+               "claude_code_skills", "claude_code_agents", "claude_skills_staging", "assistant_root")
 
 _PATH_VALUES: dict[str, str] = {
     "antigravity_config": "~/.gemini/config",
     "antigravity_skills": "~/.gemini/config/skills",
     "claude_code_skills": "~/.claude/skills",
+    "claude_code_agents": "~/.claude/agents",
     "claude_skills_staging": "~/ClaudeSkills",
     "assistant_root": "~/MitosAgent",
 }

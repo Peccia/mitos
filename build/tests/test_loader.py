@@ -1691,6 +1691,7 @@ def test_agent_loads_and_validates():
         "---\n"
         "name: personal-crm\n"
         "description: Manage personal contacts and CRM\n"
+        "targets: [mitos-agent]\n"
         "goal: Keep relationships organized and up to date\n"
         "skills: [new-session]\n"
         "---\n"
@@ -1703,6 +1704,7 @@ def test_agent_loads_and_validates():
     ag = reg2.agents["personal-crm"]
     assert ag.name == "personal-crm"
     assert ag.description == "Manage personal contacts and CRM"
+    assert ag.targets == ["mitos-agent"]
     assert ag.goal == "Keep relationships organized and up to date"
     assert ag.skills == ["new-session"]
     assert "Help the owner manage personal contacts." in ag.body
@@ -1718,6 +1720,7 @@ def test_agent_refuses_unknown_skill():
         "---\n"
         "name: bad-skill-agent\n"
         "description: desc\n"
+        "targets: [mitos-agent]\n"
         "goal: goal\n"
         "skills: [unknown-skill]\n"
         "---\n"
@@ -1753,6 +1756,7 @@ def test_agent_refuses_non_mitos_agent_skill():
         "---\n"
         "name: bad-target-agent\n"
         "description: desc\n"
+        "targets: [mitos-agent]\n"
         "goal: goal\n"
         "skills: [claude-only]\n"
         "---\n"
@@ -1776,6 +1780,7 @@ def test_agent_refuses_name_mismatch():
         "---\n"
         "name: agent-different\n"
         "description: desc\n"
+        "targets: [mitos-agent]\n"
         "goal: goal\n"
         "skills: [gws]\n"
         "---\n"
@@ -1799,6 +1804,7 @@ def test_agent_refuses_unknown_key():
         "---\n"
         "name: agent-bad-key\n"
         "description: desc\n"
+        "targets: [mitos-agent]\n"
         "goal: goal\n"
         "skills: [gws]\n"
         "extra_key: foo\n"
@@ -1822,7 +1828,7 @@ def test_curation_accepts_twenty_agents():
     for i in range(20):
         name = f"agent-{i:02d}"
         rig.agents[name] = Agent(
-            name=name, description=f"Agent {i}", goal=f"Goal {i}",
+            name=name, description=f"Agent {i}", targets=["mitos-agent"], goal=f"Goal {i}",
             skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
         )
     _validate(rig)
@@ -1830,23 +1836,19 @@ def test_curation_accepts_twenty_agents():
     assert len(selected) == 20
 
 
-def test_curation_refuses_more_than_twenty_agents():
+def test_loader_accepts_twenty_one_agents():
     import copy
-    from agentic.loader import Agent, _validate, RegistryError
+    from agentic.loader import Agent, _validate
     rig = copy.deepcopy(reg)
     for i in range(21):
         name = f"agent-{i:02d}"
         rig.agents[name] = Agent(
-            name=name, description=f"Agent {i}", goal=f"Goal {i}",
+            name=name, description=f"Agent {i}", targets=["mitos-agent"], goal=f"Goal {i}",
             skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
         )
-    try:
-        _validate(rig)
-        raise AssertionError("expected RegistryError for >20 active agents")
-    except RegistryError as e:
-        msg = str(e)
-        assert "20" in msg
-        assert "example-linux" in msg
+    _validate(rig)
+    selected = loader.selected_agents(rig, rig.machines["example-linux"])
+    assert len(selected) == 21
 
 
 def test_machine_agent_missing_curated_skill():
@@ -1854,7 +1856,7 @@ def test_machine_agent_missing_curated_skill():
     from agentic.loader import Agent, _validate, RegistryError
     rig = copy.deepcopy(reg)
     rig.agents["crm-agent"] = Agent(
-        name="crm-agent", description="CRM", goal="Goal",
+        name="crm-agent", description="CRM", targets=["mitos-agent"], goal="Goal",
         skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
     )
     # Exclude new-session skill from mitos-agent target on a real (non-template) machine
@@ -1874,7 +1876,7 @@ def test_example_machine_skips_agent_skill_check():
     from agentic.loader import Agent, _validate
     rig = copy.deepcopy(reg)
     rig.agents["crm-agent"] = Agent(
-        name="crm-agent", description="CRM", goal="Goal",
+        name="crm-agent", description="CRM", targets=["mitos-agent"], goal="Goal",
         skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
     )
     assert rig.machines["example-linux"].get("example") is True
