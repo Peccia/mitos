@@ -148,11 +148,11 @@ def test_returns_root_is_the_state_dir_a_harness_actually_reads():
     from agentic import render
     # explicit returns_root expands
     out = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
-                                     {"returns_root": "~/MitosAgent/.local-memory/returns"})
-    assert out == "write to ~/MitosAgent/.local-memory/returns/x.md"
+                                     {"returns_root": "~/ContextTree/.local-memory/returns"})
+    assert out == "write to ~/ContextTree/.local-memory/returns/x.md"
     # assistant_root alone does not expand returns_root
     out_fallback = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
-                                              {"assistant_root": "~/MitosAgent"})
+                                              {"assistant_root": "~/ContextTree"})
     assert out_fallback == "write to {{returns_root}}/x.md"
 
 
@@ -203,7 +203,7 @@ def test_connection_reads_document_store_not_paths():
         _ConnReg({}), "{{connection}}", None, {"document_store": "gws"}) \
         == "Google Workspace suite (`gws`)"
     assert render.expand_placeholders(
-        _ConnReg({}), "{{connection}}", {"assistant_root": "~/MitosAgent"}, {}) == "{{connection}}"
+        _ConnReg({}), "{{connection}}", {"assistant_root": "~/ContextTree"}, {}) == "{{connection}}"
 
 
 def test_connection_stays_literal_for_an_unwired_or_unknown_store():
@@ -238,10 +238,10 @@ def test_connection_survives_a_registry_stand_in_with_no_servers():
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    paths = {"context_root": "~/MitosAgent/", "agentic_context_root": "C:/MitosAgent",
+    paths = {"context_root": "~/ContextTree/", "agentic_context_root": "C:/ContextTree",
              "projects_root": "C:/Projects"}
     out = render.expand_placeholders(_FakeReg(user), "cd {{project_root}}", paths)
-    assert out == "cd ~/MitosAgent"   # trailing slash normalized, context_root wins
+    assert out == "cd ~/ContextTree"   # trailing slash normalized, context_root wins
 
 def test_expand_project_root_fallback_chain():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
@@ -249,7 +249,7 @@ def test_expand_project_root_fallback_chain():
     assert render.expand_placeholders(
         r, "{{project_root}}", {"assistant_root": "~/LegacyAgent"}) == "~/LegacyAgent"
     assert render.expand_placeholders(
-        r, "{{project_root}}", {"agentic_context_root": "C:/MitosAgent"}) == "C:/MitosAgent"
+        r, "{{project_root}}", {"agentic_context_root": "C:/ContextTree"}) == "C:/ContextTree"
     assert render.expand_placeholders(
         r, "{{project_root}}", {"projects_root": "D:/Projects"}) == "D:/Projects"
 
@@ -263,9 +263,9 @@ def test_expand_skills_root_from_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
     assert render.expand_placeholders(
-        r, "ls {{skills_root}}", {"context_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
+        r, "ls {{skills_root}}", {"context_root": "~/ContextTree/"}) == "ls ~/ContextTree/skills"
     assert render.expand_placeholders(
-        r, "ls {{skills_root}}", {"assistant_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
+        r, "ls {{skills_root}}", {"assistant_root": "~/ContextTree/"}) == "ls ~/ContextTree/skills"
     # explicit skills_root also expands
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"skills_root": "~/CustomAgent/skills"}) == "ls ~/CustomAgent/skills"
@@ -275,27 +275,27 @@ def test_expand_skills_root_from_assistant_root():
 
 def test_reverse_expand_skills_root_matches_any_machines_value():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    r = _FakeReg(user, {"linux-box": {"paths": {"assistant_root": "~/MitosAgent"}}})
+    r = _FakeReg(user, {"linux-box": {"paths": {"assistant_root": "~/ContextTree"}}})
     original = "Skills live at {{skills_root}}."
     assert render.reverse_expand_placeholders(
-        r, original, "Skills live at ~/MitosAgent/skills.") == original
+        r, original, "Skills live at ~/ContextTree/skills.") == original
 
 def test_reverse_expand_project_root_matches_any_machines_root():
     # adopt/review don't always know which machine expanded the live text — every
     # machine's root value must fold back, still scoped to token-bearing partials.
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    machines = {"linux-box": {"paths": {"assistant_root": "~/MitosAgent"}},
-                "win": {"paths": {"agentic_context_root": "C:/MitosAgent"}}}
+    machines = {"linux-box": {"paths": {"assistant_root": "~/ContextTree"}},
+                "win": {"paths": {"agentic_context_root": "C:/ContextTree"}}}
     r = _FakeReg(user, machines)
     original = "Navigate to {{project_root}} first."
     assert render.reverse_expand_placeholders(
-        r, original, "Navigate to ~/MitosAgent first. EXTRA.") == \
+        r, original, "Navigate to ~/ContextTree first. EXTRA.") == \
         "Navigate to {{project_root}} first. EXTRA."
     assert render.reverse_expand_placeholders(
-        r, original, "Navigate to C:/MitosAgent first.") == original
+        r, original, "Navigate to C:/ContextTree first.") == original
     # scoping: a partial without the token is never touched
     assert render.reverse_expand_placeholders(
-        r, "No token here.", "Path ~/MitosAgent stays.") == "Path ~/MitosAgent stays."
+        r, "No token here.", "Path ~/ContextTree stays.") == "Path ~/ContextTree stays."
 
 def test_soul_and_new_session_skill_expand_project_root():
     # acceptance: on the rig machine (mitos-agent + agents-md, assistant_root set) SOUL.md
@@ -307,7 +307,7 @@ def test_soul_and_new_session_skill_expand_project_root():
     skill = next(o for p, o in by_path.items()
                  if p.endswith("new-session/SKILL.md"))
     for out in (soul, skill):
-        assert "MitosAgent" in out.content
+        assert "ContextTree" in out.content
         assert "{{project_root}}" not in out.content
     # the session protocol is inlined in SOUL (no skill-file hop) and the skill's own
     # copy stays in lock-step wording; neither leaves a literal token behind
@@ -427,7 +427,7 @@ def test_root_agents_md_gets_one_combined_generated_section():
     treg, tmp = _temp_registry()
     treg.machines["rig"]["document_store"] = "gws"
     outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("MitosAgent/AGENTS.md"))
+    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
     assert "(`gws`)" in root.content   # the connection section, headed by the store key
     assert "## Skills" in root.content
     gen = [s for s, _ in root.section_bodies if render.is_generated_source(s)]
@@ -449,7 +449,7 @@ def test_projects_agents_md_gets_generated_roster():
 def test_root_agents_md_omits_connections_without_document_store():
     treg, tmp = _temp_registry()   # rig has no document_store set
     outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("MitosAgent/AGENTS.md"))
+    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
     assert "## Connections" not in root.content
 
 def test_assistant_agents_md_gets_connections_block():
@@ -465,7 +465,7 @@ def test_adopt_reverses_expanded_placeholder_in_who_i_am():
     from agentic.commands import cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     text = soul.read_text(encoding="utf-8")
     expanded_line = ("You are User's personal assistant, focusing on truth, clarity, and "
                      "usefulness rather than on mere politeness.")
@@ -493,7 +493,7 @@ def test_review_console_candidate_not_stale_from_expansion_alone():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     live = soul.read_text(encoding="utf-8")
     anchor = treg.partials["identity/who-i-am.md"].body.splitlines()[0]
     soul.write_text(live.replace(anchor, anchor + " EDITED-VIA-CONSOLE", 1),
@@ -555,7 +555,7 @@ def test_returns_container_expands_to_the_folder_the_connection_names():
 def test_returns_container_is_read_off_the_connection_not_the_machine():
     """The folder belongs to the STORE. Every machine wired to it publishes into the same one,
     and duplicating the id per machine is how two of them drift."""
-    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/MitosAgent"}):
+    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/ContextTree"}):
         assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
                                           "{{returns_container}}", paths,
                                           {"document_store": "gws"}) == "FOLDER-1"
@@ -583,7 +583,7 @@ def test_the_container_token_and_the_root_token_are_different_places():
     """One is where the harness WRITES the record locally, the other is where the copy GOES.
     Collapsing them is how the store lane read an empty folder while records piled up on disk."""
     reg = _ConnReg({}, servers=_RET_SERVERS)
-    paths, machine = {"assistant_root": "~/MitosAgent"}, {"document_store": "gws"}
+    paths, machine = {"assistant_root": "~/ContextTree"}, {"document_store": "gws"}
     assert render.expand_placeholders(reg, "{{returns_root}}", paths, machine) \
         != render.expand_placeholders(reg, "{{returns_container}}", paths, machine)
 

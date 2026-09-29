@@ -26,7 +26,7 @@ def test_idea_revision_targeting():
 def test_classify_create_for_absent_path():
     o = planner.plan_machine(reg, "example-linux")[0]
     st = classify_output(reg, "example-linux", o, {"machines": {}})
-    # ~/MitosAgent/... does not exist on this box → create
+    # ~/ContextTree/... does not exist on this box → create
     assert st.state in ("create", "merge")
 
 def test_plain_document_is_clean_concatenation():
@@ -265,7 +265,7 @@ def test_adopt_round_trips_a_skill_edit():
     from agentic.commands import cmd_adopt, cmd_deploy, cmd_harvest
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    deployed = tmp / "home/MitosAgent/skills/productivity/gws/SKILL.md"
+    deployed = tmp / "home/ContextTree/skills/productivity/gws/SKILL.md"
     deployed.write_text(deployed.read_text(encoding="utf-8")
                         + "\n## Learned in the field\nnew guidance\n",
                         encoding="utf-8", newline="\n")
@@ -281,7 +281,7 @@ def test_adopt_routes_multipartial_section_edit():
     from agentic.commands import cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"                     # 4 identity partials
+    soul = tmp / "home/ContextTree/SOUL.md"                     # 4 identity partials
     text = soul.read_text(encoding="utf-8")
     assert "DO NOT EDIT" not in text and "begin:" not in text   # clean artifact
     # derive the edit anchor from the registry itself — identity prose is rewritten
@@ -308,7 +308,7 @@ def test_mixed_agents_md_protects_prose_regenerates_doc_block():
     from agentic.commands import classify_output, cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    f = tmp / "home/MitosAgent/Projects/Example Project/AGENTS.md"
+    f = tmp / "home/ContextTree/Projects/Example Project/AGENTS.md"
     text = f.read_text(encoding="utf-8")
     assert "## Example Project — Documents" in text         # generated titles block present (H2)
     assert "<!-- " not in text                              # marker-free (invariant #5)
@@ -351,7 +351,7 @@ def test_protect_drift_blocks_then_force_captures():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"                     # drift_policy: protect
+    soul = tmp / "home/ContextTree/SOUL.md"                     # drift_policy: protect
     soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue edit\n",
                     encoding="utf-8", newline="\n")
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 1   # refused
@@ -432,7 +432,7 @@ def test_review_candidate_listing_and_staleness():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    deployed = tmp / "home/MitosAgent/skills/productivity/gws/SKILL.md"
+    deployed = tmp / "home/ContextTree/skills/productivity/gws/SKILL.md"
     deployed.write_text(deployed.read_text(encoding="utf-8")
                         + "\n## Field note\nrefined by the curator\n",
                         encoding="utf-8", newline="\n")
@@ -533,7 +533,7 @@ def test_review_multisource_capture_and_accept():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     live = soul.read_text(encoding="utf-8")
     anchor = treg.partials["identity/who-i-am.md"].body.splitlines()[0]
     soul.write_text(live.replace(anchor, anchor + " EDITED-VIA-CONSOLE", 1),
@@ -910,7 +910,7 @@ def test_run_deploy_outcome_reports_written_blocked_and_captured():
     assert first.rc == 0 and first.error is None and not first.blocked
     assert any(p.endswith("SOUL.md") for p in first.written)
     assert sum(first.counts.values()) == len(first.written)
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue\n", encoding="utf-8")
     preview = run_deploy(treg, "rig", dry_run=True, force=False)
     assert preview.rc == 0 and preview.written == []

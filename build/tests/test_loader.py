@@ -223,7 +223,7 @@ def test_context_tree_valid():
     import copy
     from agentic.loader import _validate
     rig = copy.deepcopy(reg)
-    rig.projects["example-project"]["context_tree"] = "MitosAgent"
+    rig.projects["example-project"]["context_tree"] = "ContextTree"
     _validate(rig)  # must not raise
 
 def test_context_tree_rejects_path_separators():
@@ -252,8 +252,8 @@ def test_context_tree_collides_with_repo_checkout_dir():
     import copy
     from agentic.loader import _validate, RegistryError
     rig = copy.deepcopy(reg)
-    rig.projects["example-project"]["repo"] = "git@github.com:example/MitosAgent.git"
-    rig.projects["example-project"]["context_tree"] = "MitosAgent"
+    rig.projects["example-project"]["repo"] = "git@github.com:example/ContextTree.git"
+    rig.projects["example-project"]["context_tree"] = "ContextTree"
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError for context_tree/repo checkout collision")
@@ -267,7 +267,7 @@ def test_renamed_keys_fail_naming_the_new_key():
 
     # 1. assistant_root in machine paths -> 'context_root'
     rig1 = copy.deepcopy(reg)
-    rig1.machines["example-linux"]["paths"]["assistant_root"] = "~/MitosAgent"
+    rig1.machines["example-linux"]["paths"]["assistant_root"] = "~/ContextTree"
     try:
         _validate(rig1)
         raise AssertionError("expected RegistryError for assistant_root")
@@ -276,7 +276,7 @@ def test_renamed_keys_fail_naming_the_new_key():
 
     # 2. agentic_tree in project -> 'context_tree'
     rig2 = copy.deepcopy(reg)
-    rig2.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    rig2.projects["example-project"]["agentic_tree"] = "ContextTree"
     try:
         _validate(rig2)
         raise AssertionError("expected RegistryError for agentic_tree")
@@ -730,7 +730,7 @@ def test_overlay_machines_and_connections_precedence():
         'paths:\n  projects_root: "D:/Private"\n', encoding="utf-8")
     (local / "machines" / "home-server.yaml").write_text(
         "name: home-server\nos: linux\ntargets: [mitos-agent, context-tree]\n"
-        'paths:\n  context_root: "~/MitosAgent"\n',
+        'paths:\n  context_root: "~/ContextTree"\n',
         encoding="utf-8")
     # override the gws server URL with a private LAN address (synthetic, not real)
     (local / "connections").mkdir(parents=True, exist_ok=True)

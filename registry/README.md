@@ -108,7 +108,7 @@ deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolve
 
 - `{{project_root}}` — the context tree root: `context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
   session routing, the `new-session` skill) name the concrete directory to navigate to
-  (e.g. `~/MitosAgent`) instead of an abstract key name.
+  (e.g. `~/ContextTree`) instead of an abstract key name.
 - `{{skills_root}}` — where deployed skills live: `<context_root>/skills`. Lets `SOUL.md`
   explain the skill mechanism with a real path (a skill is an instruction file to read,
   not a callable tool — models otherwise look for a tool named after the skill and

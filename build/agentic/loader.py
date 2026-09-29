@@ -49,7 +49,7 @@ def is_manual_skill_target(tspec: dict) -> bool:
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
 KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
-RETIRED_USER_KEYS = {"default_deliverables", "mitos" + "_" + "agent"}
+RETIRED_USER_KEYS = {"default_deliverables", "mitos_agent"}
 KNOWN_AGENT_KEYS = {"name", "description", "targets", "goal", "skills"}
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
                  "email": "user@example.com", "location": "Your City, State"}
@@ -1028,7 +1028,7 @@ def _validate(reg: Registry) -> None:
             if not isinstance(ct, str) or not ct.strip():
                 raise RegistryError(
                     f"project {slug}: 'context_tree' must be a non-empty string "
-                    f"(a subdirectory name under local_path, e.g. 'MitosAgent')")
+                    f"(a subdirectory name under local_path, e.g. 'ContextTree')")
             ct = ct.strip()
             if ct in (".", "..") or "/" in ct or "\\" in ct:
                 raise RegistryError(

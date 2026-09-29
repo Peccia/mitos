@@ -46,7 +46,7 @@ def test_lint_node_markdown_flags_reserved_out_of_order():
 
 def test_lint_node_markdown_skips_non_node_files():
     # SOUL.md (all-H2 system prompt) and CLAUDE.md stubs are not node files → not linted
-    assert _lint("x/MitosAgent/SOUL.md", "## About Me\n\n## How to work\n") == []
+    assert _lint("x/ContextTree/SOUL.md", "## About Me\n\n## How to work\n") == []
     assert _lint("x/Projects/P/CLAUDE.md", "@AGENTS.md\n") == []
     assert _lint("x/SKILL.md", "# Instructions\n\n## Description\n") == []
 
@@ -263,7 +263,7 @@ def test_builder_lane_renders_repo_roster_on_assistant_host():
     """On a machine that hosts the assistant tree, plan_clones puts the project's checkouts
     beside the builder-context node, so the node lists them as the generated `## Navigation`
     roster. Without it the agent host grounded on a node that named no checkout."""
-    out = _builder_rig(["claude-code", "context-tree"], context_root="C:/MitosAgent")
+    out = _builder_rig(["claude-code", "context-tree"], context_root="C:/ContextTree")
     assert "## Navigation" in out.content
     assert "- `mitos/` — the compiler" in out.content
     assert "- `mitos-agent/`" in out.content
@@ -280,7 +280,7 @@ def test_builder_lane_no_roster_without_assistant_tree():
 
 
 def test_builder_lane_no_roster_without_repos():
-    out = _builder_rig(["claude-code", "context-tree"], repos=False, context_root="C:/MitosAgent")
+    out = _builder_rig(["claude-code", "context-tree"], repos=False, context_root="C:/ContextTree")
     assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
 
 
@@ -388,11 +388,11 @@ def test_context_tree_project_mount_emits_full_tree():
     rig.machines["example-windows"]["paths"].pop("context_root", None)
     proj = rig.projects["example-project"]
     proj.pop("example", None)  # don't let the shipped-sample guard suppress it
-    proj["context_tree"] = "MitosAgent"
+    proj["context_tree"] = "ContextTree"
     proj["local_path"]["example-windows"] = "example-project"
 
     outs = planner.plan_machine(rig, "example-windows")
-    mount_root = "C:/Projects/example-project/MitosAgent"
+    mount_root = "C:/Projects/example-project/ContextTree"
     by_path = {o.deploy_path: o for o in outs}
 
     root_agents = by_path.get(f"{mount_root}/AGENTS.md")
@@ -418,7 +418,7 @@ def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     proj = rig.projects["example-project"]
     proj.pop("example", None)
-    proj["context_tree"] = "MitosAgent"
+    proj["context_tree"] = "ContextTree"
     proj["local_path"]["example-windows"] = "example-project"
     rig.graphs["example-project"] = graphmod.ProjectGraph(
         slug="example-project", name="Example Project", description="",
@@ -430,7 +430,7 @@ def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
     out = by_path.get("C:/Projects/example-project/AGENTS.md")
     assert out is not None
     assert "Operating Tree" in out.content
-    assert "MitosAgent/AGENTS.md" in out.content
+    assert "ContextTree/AGENTS.md" in out.content
 
 def test_context_tree_cross_reference_note_on_project_agents_lane():
     """The Mitos Agent-style project_agents lane (context.builder projects) gets the same
@@ -442,7 +442,7 @@ def test_context_tree_cross_reference_note_on_project_agents_lane():
     rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
     rig.projects["mitos"]["document_store"] = "gws"
-    rig.projects["mitos"]["context_tree"] = "MitosAgent"
+    rig.projects["mitos"]["context_tree"] = "ContextTree"
     rig.graphs["mitos"] = graphmod.ProjectGraph(
         slug="mitos", name="Mitos", description="test description",
         documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
@@ -452,7 +452,7 @@ def test_context_tree_cross_reference_note_on_project_agents_lane():
     by_path = {o.deploy_path: o for o in outs}
     out = by_path["C:/Projects/Mitos/AGENTS.md"]
     assert "Operating Tree" in out.content
-    assert "MitosAgent/AGENTS.md" in out.content
+    assert "ContextTree/AGENTS.md" in out.content
 
 
 def test_workstation_produces_no_clones_and_context_root_produces_clones():
@@ -475,12 +475,12 @@ def test_workstation_produces_no_clones_and_context_root_produces_clones():
     if "apoc" not in rig2.projects:
         rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
-    rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
+    rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/ContextTree"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     rig2.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
     clones2 = planner.plan_clones(rig2, "example-windows")
     dests = {c.dest for c in clones2 if c.slug == "apoc"}
-    assert any("MitosAgent" in d for d in dests), "agentic_context_root lane must fire"
+    assert any("ContextTree" in d for d in dests), "agentic_context_root lane must fire"
     assert not any("apocalyptic_adventure" in d for d in dests), "local_path lane must not fire"
 
 def test_hidden_project_disappears_from_every_planned_output():
@@ -490,7 +490,7 @@ def test_hidden_project_disappears_from_every_planned_output():
     restores byte-identical outputs, proving the filter adds no side effect of its own."""
     import copy
     rig = _full_windows_rig()
-    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
+    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/ContextTree"
     proj = rig.projects["example-project"]
     proj.pop("example", None)                    # don't let the shipped-sample guard hide it
     proj["local_path"]["example-windows"] = "example-project"
@@ -965,7 +965,7 @@ def test_plan_clones_lands_in_the_right_tree_per_machine():
     # claude-code + agents-md machine: clones land in the reference tree, keyed by the SLUG.
     win = plan_clones(reg, "example-windows")
     wc = next(c for c in win if c.slug == "mitos")
-    assert wc.dest.endswith("MitosAgent/Projects/mitos/mitos")   # project SLUG "mitos"
+    assert wc.dest.endswith("ContextTree/Projects/mitos/mitos")   # project SLUG "mitos"
     # workstation machine (claude-code only / no agents-md): workstation checkouts are
     # never auto-cloned or pulled.
     workstation = plan_clones(reg, "example-workstation")

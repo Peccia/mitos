@@ -778,7 +778,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert proj.content.count("\n# ") <= 1 and not proj.content.startswith("# Google")
     assert "Sample Predictions — Documents" not in proj.content
     # the roster stays wholly generated (no prose, non-adoptable)
-    roster = next(o for p, o in win.items() if p.endswith("MitosAgent/AGENTS.md"))
+    roster = next(o for p, o in win.items() if p.endswith("ContextTree/AGENTS.md"))
     assert roster.drift_policy == "generated" and roster.sources == []
 
 def test_graph_candidate_propose_accept_upserts_registry():
@@ -1009,10 +1009,10 @@ def test_graph_tree_deploys_only_on_claude_code_env():
     # example-windows (claude-code + agentic_context_root) → roster + per-project index
     win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
            if o.target == "agentic-graph"}
-    assert any(p.endswith("MitosAgent/AGENTS.md") for p in win)
+    assert any(p.endswith("ContextTree/AGENTS.md") for p in win)
     # local graphs present → local project entries, not core example-project
-    assert any(p.endswith("MitosAgent/Projects/sampledict/AGENTS.md") for p in win)
-    assert not any(p.endswith("MitosAgent/Projects/example-project/AGENTS.md") for p in win)
+    assert any(p.endswith("ContextTree/Projects/sampledict/AGENTS.md") for p in win)
+    assert not any(p.endswith("ContextTree/Projects/example-project/AGENTS.md") for p in win)
     for o in win.values():
         # roster is generated; per-project files are prose(protect) + generated block
         assert o.kind == "text" and o.drift_policy in ("generated", "protect")
@@ -1039,9 +1039,9 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
         reg2.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-graph-"))
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    idx = root / safe_rel("C:/MitosAgent/Projects/sampledict/AGENTS.md")
+    idx = root / safe_rel("C:/ContextTree/Projects/sampledict/AGENTS.md")
     assert "Forecast UI Spec" in idx.read_text(encoding="utf-8")
-    roster = root / safe_rel("C:/MitosAgent/AGENTS.md")
+    roster = root / safe_rel("C:/ContextTree/AGENTS.md")
     assert "Sample Predictions" in roster.read_text(encoding="utf-8")
 
     # edit the generated roster in place, then redeploy: it is silently regenerated

@@ -77,7 +77,7 @@ def test_hub_advance_is_pulled_and_the_new_skill_deployed(tmp_path):
     assert result["overlay"]["pulled"] is True
     assert result["overlay"]["before"] != result["overlay"]["after"]
     assert any(p.endswith("update-probe/SKILL.md") for p in result["deploy"]["written"])
-    assert (root / "home/MitosAgent/skills/productivity/update-probe/SKILL.md").exists()
+    assert (root / "home/ContextTree/skills/productivity/update-probe/SKILL.md").exists()
 
 
 def test_dirty_overlay_skips_the_pull_and_still_deploys(tmp_path):
@@ -92,7 +92,7 @@ def test_dirty_overlay_skips_the_pull_and_still_deploys(tmp_path):
     assert result["overlay"]["skipped_reason"] == "dirty"
     assert result["overlay"]["pulled"] is False
     assert result["deploy"] is not None and result["deploy"]["rc"] == 0
-    assert not (root / "home/MitosAgent/skills/productivity/later-skill").exists()
+    assert not (root / "home/ContextTree/skills/productivity/later-skill").exists()
 
 
 def test_leftover_rebase_stops_before_deploy(tmp_path):
@@ -103,7 +103,7 @@ def test_leftover_rebase_stops_before_deploy(tmp_path):
     result = _update(root)
     assert result["ok"] is False and "rebase" in result["error"]
     assert result["deploy"] is None
-    assert not (root / "home/MitosAgent/SOUL.md").exists()
+    assert not (root / "home/ContextTree/SOUL.md").exists()
 
 
 def test_pull_conflict_reports_and_leaves_the_rebase_for_the_owner(tmp_path):
@@ -131,10 +131,10 @@ def test_dirty_core_manual_deploys_scheduled_does_nothing(tmp_path):
                        encoding="utf-8")
     scheduled = _update(root, scheduled=True)
     assert scheduled["ok"] is True and scheduled["skipped"] == "core dirty (scheduled)"
-    assert scheduled["deploy"] is None and not (root / "home/MitosAgent/SOUL.md").exists()
+    assert scheduled["deploy"] is None and not (root / "home/ContextTree/SOUL.md").exists()
     manual = _update(root)
     assert manual["core"]["skipped_reason"] == "dirty"
-    assert manual["deploy"]["rc"] == 0 and (root / "home/MitosAgent/SOUL.md").exists()
+    assert manual["deploy"]["rc"] == 0 and (root / "home/ContextTree/SOUL.md").exists()
 
 
 def test_blocked_protected_drift_is_reported_not_forced(tmp_path):
@@ -142,7 +142,7 @@ def test_blocked_protected_drift_is_reported_not_forced(tmp_path):
         return
     root, _overlay, _hub, _peer = _rig(tmp_path)
     assert _update(root)["ok"] is True
-    soul = root / "home/MitosAgent/SOUL.md"
+    soul = root / "home/ContextTree/SOUL.md"
     soul.write_text(soul.read_text(encoding="utf-8") + "\nrogue\n", encoding="utf-8")
     result = _update(root)
     assert result["ok"] is False and result["error"] is None

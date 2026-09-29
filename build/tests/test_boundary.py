@@ -43,7 +43,7 @@ def test_core_never_names_mitos_agent():
     """
     import re
 
-    pattern = re.compile(r"mitos[-_]agent", re.IGNORECASE)
+    pattern = re.compile(r"mitos[-_ ]?agent", re.IGNORECASE)
     scanned_dirs = [
         REPO_ROOT / "build" / "agentic",
         REPO_ROOT / "targets",
@@ -52,6 +52,8 @@ def test_core_never_names_mitos_agent():
     ]
     allowlist = {
         REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent",
+        # names the retired user.yaml key so the loader can warn about it (OQ-1)
+        REPO_ROOT / "build" / "agentic" / "loader.py",
     }
 
     offenders = []

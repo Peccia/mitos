@@ -54,7 +54,7 @@ _PATH_VALUES: dict[str, str] = {
     "claude_code_skills": "~/.claude/skills",
     "claude_code_agents": "~/.claude/agents",
     "claude_skills_staging": "~/ClaudeSkills",
-    "context_root": "~/MitosAgent",
+    "context_root": "~/ContextTree",
 }
 
 

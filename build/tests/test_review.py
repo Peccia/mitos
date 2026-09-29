@@ -2877,15 +2877,15 @@ def test_propose_agent_body_edit():
 
 
 def test_agents_section_hidden_without_flag():
-    """Agents is a core lane: no hasMitosAgent() gate on agents in app.js, no 'of 20'."""
+    """Agents is a core lane: no hasContextTree() gate on agents in app.js, no 'of 20'."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
 
-    # No hasMitosAgent() gating agents
-    assert "if (hasMitosAgent()) {\n    const agentsChip = el" not in app
-    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid" not in app
-    assert "if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn" not in app
-    assert "if (!agentsData && hasMitosAgent())" not in app
+    # No hasContextTree() gating agents
+    assert "if (hasContextTree()) {\n    const agentsChip = el" not in app
+    assert "if (skillShowingAgents && hasContextTree()) {\n    renderAgentsGrid" not in app
+    assert "if (skillShowingAgents && hasContextTree()) {\n    const newAgentBtn" not in app
+    assert "if (!agentsData && hasContextTree())" not in app
     assert "of 20" not in app
 
 

@@ -1,7 +1,7 @@
 """`mitos update` — core pull → overlay pull → deploy, reported as one `schema: 1` object.
 
 The unattended counterpart of `mitos sync pull`, built for a caller that reads data rather
-than prose (MitosAgent's updater). Invariants:
+than prose (a harness's updater). Invariants:
   - never force, prune, adopt, or push — `force`/`prune` are literals at the deploy call;
   - the first terminal condition wins, and every outcome carries every schema key;
   - a dirty checkout skips its pull, never stashes or resets it. A *scheduled* run with a

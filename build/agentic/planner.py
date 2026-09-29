@@ -29,15 +29,9 @@ def hosts_context_tree(machine) -> bool:
     return "context-tree" in machine.get("targets", [])
 
 
-def hosts_assistant_tree(machine) -> bool:
-    """Does this machine host the personal assistant tree?"""
-    return "context-tree" in machine.get("targets", []) and bool(
-        (machine.get("paths") or {}).get("context_root") or (machine.get("paths") or {}).get("assistant_root")
-    )
-
-
-deploys_assistant_skills = lambda reg, machine: hosts_context_tree(machine)
-is_assistant_tree_machine = hosts_context_tree
+def hosts_root_tree(machine) -> bool:
+    """Does this machine deploy the context tree at its own `context_root`?"""
+    return hosts_context_tree(machine) and bool((machine.get("paths") or {}).get("context_root"))
 
 
 @dataclass
@@ -820,7 +814,7 @@ def _gws(reg: Registry, machine_name: str) -> dict | None:
 
 def _agent_servers(reg: Registry, machine_name: str) -> dict:
     """Every MCP server this machine's assistant is wired to, keyed by server name — the
-    whole `mcp.json` Mitos Agent reads (design §3.1). Generalizes _gws from one hard-coded
+    whole `mcp.json` a harness target reads (design §3.1). Generalizes _gws from one hard-coded
     server to the machine's full `document_store:` list, resolving each server's per-machine
     URL the same way. `none`/unset yields {} (no mcp.json). A one-store machine yields
     {"gws": <server>} — identical in effect to what the single-server _gws did."""
@@ -1167,7 +1161,7 @@ def _plan_context_tree(reg, machine_name, spec, paths) -> list[Output]:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.context_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
                     (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
-                if (hosts_assistant_tree(machine) and _project_repo_entries(proj)
+                if (hosts_root_tree(machine) and _project_repo_entries(proj)
                         and sections):
                     b_src, b_body = sections[-1]
                     regions = list(sections[:-1]) + _project_node_regions(
@@ -1319,11 +1313,11 @@ def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> 
 def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
-    is_assistant_tree_machine = hosts_context_tree(machine)
+    is_context_tree_machine = hosts_context_tree(machine)
     cf = spec["context_file"]
     stub_map = cf.get("stub_import") or {}
     reg_root = _reg_root_norm(reg)
-    suppressed = _suppressed_examples(reg) if not is_assistant_tree_machine else set()
+    suppressed = _suppressed_examples(reg) if not is_context_tree_machine else set()
 
     for slug, proj in reg.projects.items():
         local = _local(reg, machine_name, proj)
@@ -1332,7 +1326,7 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
         local = local.rstrip("/")
         local_norm = local.replace("\\", "/").rstrip("/")
 
-        pg = reg.graphs.get(slug) if not is_assistant_tree_machine and slug not in suppressed else None
+        pg = reg.graphs.get(slug) if not is_context_tree_machine and slug not in suppressed else None
 
         if pg and local_norm != reg_root:
             # Non-context-tree workstation + project has a knowledge graph: emit a self-contained
@@ -1379,7 +1373,7 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             deploy_path = f"{local}/{cf['filename']}"
             section_bodies: list = []
             ctx = proj.get("context") or {}
-            if slug in stub_map and is_assistant_tree_machine:
+            if slug in stub_map and is_context_tree_machine:
                 # the stub @AGENTS.md is valid only because the agents-md target deploys
                 # that AGENTS.md at this same root on this machine.
                 content, sources = render.stub_document(stub_map[slug]), []
@@ -1514,7 +1508,7 @@ def _plan_antigravity(reg, machine_name, spec, paths) -> list[Output]:
             sources=["connections/servers.yaml"],
         ))
         # config.json is the TOOL's file — surgical merge (invariant #7): a third party's
-        # config file, unlike Mitos Agent's own whole-file mcp.json.
+        # config file, unlike a target's own whole-file mcp.json.
         # The compiler owns only its alias's mcp(...) entries inside the allow list;
         perm = spec["permissions"]
         deploy_path = f"{cfg_dir.rstrip('/')}/{perm['filename']}"

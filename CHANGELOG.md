@@ -26,7 +26,7 @@ Mitos Agent now lives in its own standalone repository outside Mitos and consume
 - Run `python build/mitos.py graph strip-retired --all` to propose clean graph candidates stripping these triples, then review and accept them in the Inbox.
 
 #### Unknown Target Handling
-- Machine profiles targeting an unknown or unavailable target adapter now issue a plan-time warning and safely skip deploying that target for that machine, rather than aborting.
+- Machine profiles targeting an unknown or unavailable target adapter now load with a warning and the **whole machine is skipped** until the target is defined (for example by accepting a harness's target seed in the inbox). `compile` skips it, `deploy --machine` exits non-zero and writes and deletes nothing, and `mitos update --json` carries the warning in `deploy.error`. Other machines are unaffected.
 
 ## [0.1.8] - 2026-09-27
 

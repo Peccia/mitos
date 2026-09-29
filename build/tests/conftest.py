@@ -229,7 +229,7 @@ def _temp_registry():
         # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
         "document_store": "gws",
-        "paths": {"context_root": f"{home}/MitosAgent",   # single install root
+        "paths": {"context_root": f"{home}/ContextTree",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
     _plant_overlay_target(tmp, "mitos-agent")

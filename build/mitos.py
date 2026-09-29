@@ -126,7 +126,7 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     targets = _ask_coding_targets(initmod)
     print("\nA personal context tree provides a unified directory of projects,")
     print("documentation, and identity context readable by any harness. See docs/context-tree.md.")
-    context_root_val = initmod._PATH_VALUES.get("context_root", "~/MitosAgent")
+    context_root_val = initmod._PATH_VALUES.get("context_root", "~/ContextTree")
     print(f"Deploy location (context_root): {context_root_val}")
     ans = _ask("Deploy a personal context tree? [y/N]: ").strip().lower()
     if ans in ("y", "yes"):
