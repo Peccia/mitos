@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- Removed the `new-session` skill. Its steps were a copy of the Session Protocol that a planning harness supplies itself. The context-tree operating rules no longer tell the agent to run a skill at a topic shift. A coding-harness machine with no `document_store:` now deploys no core skills.
+- Removed the retired-key warning for `mitos_agent` in `user.yaml`. A leftover `mitos_agent:` line now stops the load with an "unknown key" error; delete the line.
+- Removed the `mitos_agent_mcp_config` renderer alias. A target naming it falls back to `mcp_servers_json`, so output is unchanged.
+
 ## [0.1.9] - 2026-09-29
 
 ### Migration Guide: Mitos & Mitos Agent Separation

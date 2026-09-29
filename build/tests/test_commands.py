@@ -19,7 +19,7 @@ def test_idea_revision_targeting():
     rig = copy.deepcopy(reg)
     rig.skills["idea-revision"] = Skill(name="idea-revision", rel="skills/idea-revision/SKILL.md", frontmatter={"targets": ["antigravity"]}, body="")
     linux = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")]
-    assert not any("idea-revision" in p for p in linux)        # antigravity-only, not mitos-agent
+    assert not any("idea-revision" in p for p in linux)        # antigravity-only, not overlay-harness
     win = [o.deploy_path.replace("\\", "/") for o in planner.plan_machine(rig, "example-windows")]
     assert any("idea-revision/SKILL.md" in p for p in win)     # antigravity skill folder
 
@@ -83,14 +83,14 @@ def test_split_live_sections_attributes_an_edit_after_a_generated_region():
 
 def test_strip_frontmatter():
     skill = next(iter(reg.skills.values()))
-    rendered = render.render_skill(skill, "mitos-agent")
+    rendered = render.render_skill(skill, "overlay-harness")
     assert rendered.startswith("---")
     body = render.strip_frontmatter(rendered)
     assert not body.lstrip().startswith("---")
     assert skill.body.split("\n", 1)[0] in body
 
-def test_mitos_agent_skill_keeps_declared_scripts():
-    """A skill's `scripts:` (agent abilities) reaches the deployed mitos-agent SKILL.md
+def test_overlay_harness_skill_keeps_declared_scripts():
+    """A skill's `scripts:` (agent abilities) reaches the deployed overlay-harness SKILL.md
     as authored; the other targets' standard frontmatter never carries it."""
     from dataclasses import replace as _replace
     skill = next(iter(reg.skills.values()))
@@ -98,10 +98,10 @@ def test_mitos_agent_skill_keeps_declared_scripts():
              "argv": ["status"], "env": ["API_CONTROLLER_URL"],
              "args": {"since": {"type": "string", "pattern": "^[0-9]{1,4}[mhd]$"}}}]
     s = _replace(skill, frontmatter={**skill.frontmatter, "scripts": decl})
-    fm = yaml.safe_load(render.render_skill(s, "mitos-agent").split("---")[1])
+    fm = yaml.safe_load(render.render_skill(s, "overlay-harness").split("---")[1])
     assert fm["scripts"] == decl
     assert "scripts" not in render.render_skill(s, "claude-code").split("---")[1]
-    assert "scripts" not in yaml.safe_load(render.render_skill(skill, "mitos-agent").split("---")[1])
+    assert "scripts" not in yaml.safe_load(render.render_skill(skill, "overlay-harness").split("---")[1])
 
 def test_rewrite_registry_body_preserves_frontmatter(tmp_path=None):
     import tempfile
@@ -112,12 +112,12 @@ def test_rewrite_registry_body_preserves_frontmatter(tmp_path=None):
     tmp = Path(tempfile.mkdtemp())
     f = tmp / "registry" / "identity" / "x.md"
     f.parent.mkdir(parents=True)
-    f.write_text("---\naudience: [mitos-agent]\n---\nold body line\n", encoding="utf-8")
+    f.write_text("---\naudience: [overlay-harness]\n---\nold body line\n", encoding="utf-8")
     stub = loader.Registry(root=tmp, partials={}, skills={}, servers={},
                            projects={}, targets={}, machines={})
     _rewrite_registry_body(stub, "identity/x.md", "new body line")
     out = f.read_text(encoding="utf-8")
-    assert "audience: [mitos-agent]" in out          # frontmatter preserved
+    assert "audience: [overlay-harness]" in out          # frontmatter preserved
     assert "new body line" in out and "old body line" not in out
 
 def test_machine_guard_refuses_cross_os():
@@ -646,7 +646,7 @@ def test_review_reload_endpoint_rereads_disk_and_survives_a_broken_registry():
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text(
             "---\nname: late-skill\ndescription: added after startup\n"
-            "version: 0.1.0\ncategory: general\ntargets: [mitos-agent]\n---\n\nBody.\n",
+            "version: 0.1.0\ncategory: general\ntargets: [overlay-harness]\n---\n\nBody.\n",
             encoding="utf-8")
         conn.request("GET", "/api/state")
         cached = _json.loads(conn.getresponse().read())
@@ -681,13 +681,13 @@ def test_deploy_refuses_example_template_but_allows_sandbox():
     # sandboxing it (--root) is allowed — the quick-start rehearsal path
     assert cmd_deploy(reg, "example-windows", dry_run=False, force=False, root=root) == 0
 
-# (removed) test_yaml_merge_preserves_user_entries — the mcp yaml_merge into Mitos Agent's
+# (removed) test_yaml_merge_preserves_user_entries — the mcp yaml_merge into overlay harness's
 # config.yaml became a whole-file mcp.json (kind='json'); merge-preservation is still
 # covered for the json_merge lane by test_json_merge_preserves_user_entries.
 
 # (removed) test_yaml_merge_leaf_path_preserves_siblings and
-# test_yaml_merge_whole_key_settings_preserve_unrelated_top_level — the Mitos Agent
-# config.yaml settings/mcp yaml_merge lane retired with Mitos Agent. Mitos Agent writes a
+# test_yaml_merge_whole_key_settings_preserve_unrelated_top_level — the overlay harness
+# config.yaml settings/mcp yaml_merge lane retired with overlay harness. overlay harness writes a
 # whole-file mcp.json (kind='json'); no target emits kind='yaml_merge' anymore.
 
 def test_cmd_diff_smoke():
@@ -827,9 +827,9 @@ def test_cli_compile_and_mitos_entrypoints():
     orig_compile = compile_mod.commands.cmd_compile
     compile_mod.commands.cmd_compile = lambda reg, dist, target: (captured.update(t=target) or 0)
     try:
-        rc = compile_mod.main(["compile", "--target", "mitos-agent"])
+        rc = compile_mod.main(["compile", "--target", "overlay-harness"])
         assert rc == 0
-        assert captured.get("t") == "mitos-agent"
+        assert captured.get("t") == "overlay-harness"
     finally:
         compile_mod.commands.cmd_compile = orig_compile
 
@@ -863,7 +863,7 @@ def test_compile_status_stale_then_fresh_then_stale_again():
 
     # mutate a partial the "rig" machine's SOUL.md renders from, then reload the registry
     # (compile_status takes a Registry, not a filesystem path — it must see the new content)
-    # NOTE: must be one of targets/mitos-agent.yaml's context_file.sources — registry/identity/
+    # NOTE: must be one of targets/overlay-harness.yaml's context_file.sources — registry/identity/
     # also holds who-i-am-coding.md, which SOUL.md never reads, and glob("*.md") order is
     # filesystem-dependent (this previously picked that file on the Linux CI runner and never
     # on Windows, producing an intermittent false failure here).

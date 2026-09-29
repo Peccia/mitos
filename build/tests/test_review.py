@@ -33,7 +33,7 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     assert "gws" not in unwired and "graph-bootstrap" not in unwired, f"an unwired connection must hide its skill: {unwired}"
     assert "gws" in connected and "graph-bootstrap" in connected, f"wiring the store reveals gws: {connected}"
     assert connected - {"gws", "graph-bootstrap"} == unwired
-    assert unwired, "skills needing no connection still deploy to a bare coding box"
+    assert not unwired, f"no core skill deploys to a bare coding box: {unwired}"
 
     # nothing is dropped from the payload — the console's "All" chip still reveals them
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
@@ -360,7 +360,7 @@ def test_propose_new_skill_creates_kind_new_candidate_and_accepts_cleanly():
     treg, tmp = _temp_registry()
     out = propose_new_skill(
         treg, "widget-helper",
-        {"description": "Helps with widgets.", "targets": ["mitos-agent"], "category": "devops"},
+        {"description": "Helps with widgets.", "targets": ["overlay-harness"], "category": "devops"},
         "# Instructions\n\nDo the widget thing.", "")
     assert out["ok"], out
     assert out["registry_path"] == "local/skills/widget-helper/SKILL.md"
@@ -391,7 +391,7 @@ def test_propose_new_prompt_creates_kind_new_candidate_and_accepts_cleanly():
     treg, tmp = _temp_registry()
     out = propose_new_prompt(
         treg, "my-prompt",
-        {"description": "A test prompt.", "targets": ["mitos-agent"], "category": "devops"},
+        {"description": "A test prompt.", "targets": ["overlay-harness"], "category": "devops"},
         "Prompt body text.", "")
     assert out["ok"], out
     assert out["registry_path"] == "local/prompts/my-prompt.md"
@@ -798,8 +798,8 @@ def test_refresh_staging_with_multiple_listings_requires_scope_key(monkeypatch):
 
 
 def _identity_fragment(effort_id: str, extra: str = "") -> str:
-    """A Mitos-Agent-shaped Implemented Document body carrying the identity fragment
-    (docs/implemented-document-identity.md) — mirrors mitos-agent's
+    """A planning-harness-shaped Implemented Document body carrying the identity fragment
+    (docs/implemented-document-identity.md) — mirrors overlay-harness's
     `evaluation.identity_fragment` output exactly, so these tests exercise the real contract
     rather than a stand-in shape."""
     return (
@@ -853,7 +853,7 @@ def _return_record_fragment(effort_id: str, delivers: str = "tests") -> str:
 
 
 def test_a_return_record_is_not_offered_as_a_project_document():
-    """The regression this exists for. A run's return records are Mitos-Agent's raw input — the
+    """The regression this exists for. A run's return records are overlay harness's raw input — the
     several per-deliverable documents it reads to produce ONE Implemented Document — and they are
     not project context. Recognizing them here mapped four of them to an effort, which rendered
     them into that project's generated AGENTS.md, which made a finished run's claims ("npm audit
@@ -1191,11 +1191,11 @@ def test_propose_new_skill_rejects_name_collision_and_bad_shape():
     existing = next(iter(treg.skills))
 
     # name collision
-    out = propose_new_skill(treg, existing, {"targets": ["mitos-agent"]}, "body")
+    out = propose_new_skill(treg, existing, {"targets": ["overlay-harness"]}, "body")
     assert not out["ok"]
 
     # bad slug shape (uppercase / underscore)
-    out = propose_new_skill(treg, "Bad_Name", {"targets": ["mitos-agent"]}, "body")
+    out = propose_new_skill(treg, "Bad_Name", {"targets": ["overlay-harness"]}, "body")
     assert not out["ok"]
 
     # empty targets
@@ -1322,7 +1322,7 @@ def test_propose_graph_change_updates_effort_visibility_and_surfaces_in_graph_in
 def test_prompt_index_frontmatter_whitelist_shape():
     """Skills/prompts carry a `frontmatter` dict scoped to the per-kind editable
     whitelist — never the full raw frontmatter (which may carry e.g. a skill's
-    `mitos-agent:` block that has no place in the console's metadata panel)."""
+    `overlay-harness:` block that has no place in the console's metadata panel)."""
     from agentic.review import _PROMPT_META_WHITELIST, _SKILL_META_WHITELIST, prompt_index
 
     result = prompt_index(reg)
@@ -1490,7 +1490,7 @@ def test_propose_meta_edit_rejects_invalid_scope_value():
 
 def test_propose_meta_edit_allows_scope_project_regardless_of_targets():
     """Unlike the target-binding check, scope: project has no per-target
-    incompatibility — mitos-agent/claude-app targets simply ignore it (see loader.
+    incompatibility — overlay-harness/claude-app targets simply ignore it (see loader.
     validate_skill_scope, PROJECT_SCOPE_CAPABLE_TARGETS)."""
     from agentic.review import propose_meta_edit
 
@@ -1520,7 +1520,7 @@ def test_propose_new_skill_with_resources_writes_files_and_accepts():
 
     treg, tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-skill", {"targets": ["mitos-agent"], "description": "d"},
+        treg, "res-skill", {"targets": ["overlay-harness"], "description": "d"},
         "# Instructions\n\nBody.", "",
         resources={"examples/sample.md": "expected output\n",
                   "scripts/validate.sh": "#!/bin/sh\necho ok\n"})
@@ -1542,7 +1542,7 @@ def test_propose_new_skill_rejects_invalid_resource_path():
 
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-skill-bad", {"targets": ["mitos-agent"], "description": "d"}, "body",
+        treg, "res-skill-bad", {"targets": ["overlay-harness"], "description": "d"}, "body",
         resources={"not-allowed/x.md": "text"})
     assert not out["ok"]
     assert "invalid resource path" in out["error"]
@@ -1551,7 +1551,7 @@ def test_propose_new_skill_rejects_invalid_resource_path():
 def _make_res_skill(treg, tmp):
     from agentic.review import decide, propose_new_skill
     out = propose_new_skill(
-        treg, "res-abs-skill", {"targets": ["mitos-agent"], "description": "d"}, "body",
+        treg, "res-abs-skill", {"targets": ["overlay-harness"], "description": "d"}, "body",
         resources={"examples/a.md": "a\n"})
     assert out["ok"], out
     acc = decide(loader.load(tmp), out["id"], "accept", "")
@@ -1612,7 +1612,7 @@ def test_load_candidates_surfaces_resources_and_provided_flag():
 
     treg, _tmp = _temp_registry()
     out = propose_new_skill(
-        treg, "res-visible-skill", {"targets": ["mitos-agent"], "description": "d"}, "body",
+        treg, "res-visible-skill", {"targets": ["overlay-harness"], "description": "d"}, "body",
         resources={"examples/x.md": "x\n"})
     assert out["ok"], out
     cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
@@ -1620,7 +1620,7 @@ def test_load_candidates_surfaces_resources_and_provided_flag():
     assert cand["resources"] == {"examples/x.md": "x\n"}
 
     out2 = propose_new_skill(
-        treg, "res-invisible-skill", {"targets": ["mitos-agent"], "description": "d"}, "body")
+        treg, "res-invisible-skill", {"targets": ["overlay-harness"], "description": "d"}, "body")
     cand2 = next(c for c in load_candidates(treg) if c["id"] == out2["id"])
     assert cand2["resources_provided"] is False
 
@@ -2220,7 +2220,7 @@ def test_skills_tab_filters_exclude_context_tree_and_support_hiding_targets():
     css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
 
     # context-tree must be excluded from targetOpts in Skills & Org. The rule now lives in
-    # the shared isTargetVisible predicate (which also carries the mitos_agent gate), so
+    # the shared isTargetVisible predicate (which also carries the overlay_harness gate), so
     # the chips read it rather than spelling the exclusion out a second time.
     assert 'const isTargetVisible = (t) => t !== "context-tree"' in app
     assert ".filter(isTargetVisible)" in app
@@ -2699,9 +2699,9 @@ def test_api_agents_shape():
         "---\n"
         "name: test-agent\n"
         "description: Test agent description.\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: Help test.\n"
-        "skills: [new-session]\n"
+        "skills: [graph-bootstrap]\n"
         "---\n\n"
         "# Instructions\n\nDo test things.\n",
         encoding="utf-8"
@@ -2718,9 +2718,9 @@ def test_api_agents_shape():
     expected_agent_keys = {"name", "description", "targets", "goal", "skills", "machines", "source"}
     assert expected_agent_keys <= set(agent_entry.keys())
     assert agent_entry["description"] == "Test agent description."
-    assert agent_entry["targets"] == ["mitos-agent"]
+    assert agent_entry["targets"] == ["overlay-harness"]
     assert agent_entry["goal"] == "Help test."
-    assert agent_entry["skills"] == ["new-session"]
+    assert agent_entry["skills"] == ["graph-bootstrap"]
     assert "local/agents/test-agent.md" in agent_entry["source"]
 
     for m in res["machines"]:
@@ -2736,7 +2736,7 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
     treg, tmp = _temp_registry()
     out = review.propose_new_agent(
         treg, "scout-agent",
-        {"description": "Scout things.", "targets": ["mitos-agent"], "goal": "Find stuff.", "skills": ["new-session"]},
+        {"description": "Scout things.", "targets": ["overlay-harness"], "goal": "Find stuff.", "skills": ["graph-bootstrap"]},
         "# Instructions\n\nScout around.",
         reason="initial scaffold"
     )
@@ -2777,19 +2777,19 @@ def test_propose_new_agent_validates():
     treg, _tmp = _temp_registry()
 
     # Empty name
-    assert not review.propose_new_agent(treg, "", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "", {"description": "d", "targets": ["overlay-harness"], "goal": "g", "skills": ["graph-bootstrap"]}, "body")["ok"]
     # Bad slug
-    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "targets": ["overlay-harness"], "goal": "g", "skills": ["graph-bootstrap"]}, "body")["ok"]
     # Empty description
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "targets": ["overlay-harness"], "goal": "g", "skills": ["graph-bootstrap"]}, "body")["ok"]
     # Missing targets
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": [], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": [], "goal": "g", "skills": ["graph-bootstrap"]}, "body")["ok"]
     # Unknown skill
-    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
+    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["overlay-harness"], "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
     assert not res["ok"]
     assert "unknown skill" in res["error"]
     # Empty body
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["overlay-harness"], "goal": "g", "skills": ["graph-bootstrap"]}, "")["ok"]
 
 
 def test_propose_agent_meta_edit_lands_in_inbox():
@@ -2805,9 +2805,9 @@ def test_propose_agent_meta_edit_lands_in_inbox():
         "---\n"
         "name: worker\n"
         "description: Original description.\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: Original goal.\n"
-        "skills: [new-session]\n"
+        "skills: [graph-bootstrap]\n"
         "---\n\n"
         "# Instructions\n\nWork hard.\n",
         encoding="utf-8"
@@ -2832,7 +2832,7 @@ def test_propose_agent_meta_edit_lands_in_inbox():
 
     text = (adir / "worker.md").read_text(encoding="utf-8")
     assert "description: Updated description." in text
-    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
+    assert "targets: [overlay-harness]" in text or "targets:\n- overlay-harness" in text
     assert "goal: Updated goal." in text
     assert "Work hard." in text
 
@@ -2848,9 +2848,9 @@ def test_propose_agent_body_edit():
         "---\n"
         "name: coder\n"
         "description: Code agent.\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: Write code.\n"
-        "skills: [new-session]\n"
+        "skills: [graph-bootstrap]\n"
         "---\n\n"
         "# Instructions\n\nInitial instructions.\n",
         encoding="utf-8"
@@ -2870,7 +2870,7 @@ def test_propose_agent_body_edit():
     text = (adir / "coder.md").read_text(encoding="utf-8")
     assert "name: coder" in text
     assert "description: Code agent." in text
-    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
+    assert "targets: [overlay-harness]" in text or "targets:\n- overlay-harness" in text
     assert "goal: Write code." in text
     assert "Updated instructions." in text
     assert "Initial instructions." not in text
@@ -2907,7 +2907,7 @@ def test_accept_new_target_candidate():
     meta = {
         "registry_path": "local/targets/scratch-target.yaml",
         "kind": "new",
-        "source": {"machine": "test", "tool": "mitos-agent"},
+        "source": {"machine": "test", "tool": "overlay-harness"},
         "base_hash": "",
         "deploy_path": "",
         "captured_at": "2026-09-28T00:00:00Z",
@@ -2968,7 +2968,7 @@ def test_accept_new_target_candidate():
     id_meta = {
         "registry_path": "local/identity/custom-rules.md",
         "kind": "new",
-        "source": {"machine": "test", "tool": "mitos-agent"},
+        "source": {"machine": "test", "tool": "overlay-harness"},
         "base_hash": "",
         "deploy_path": "",
         "captured_at": "2026-09-28T00:00:00Z",
@@ -3020,36 +3020,36 @@ def test_upgrade_path_unknown_target_then_accept_seed():
 
     treg, tmp = _temp_registry()
 
-    target_file = tmp / "registry" / "local" / "targets" / "mitos-agent.yaml"
+    target_file = tmp / "registry" / "local" / "targets" / "overlay-harness.yaml"
     if not target_file.is_file():
-        target_file = tmp / "targets" / "mitos-agent.yaml"
+        target_file = tmp / "targets" / "overlay-harness.yaml"
     seed_content = target_file.read_text(encoding="utf-8")
     target_file.unlink()
 
-    # In post-M6 core, partials/skills no longer name mitos-agent; only machines do
+    # In post-M6 core, partials/skills no longer name overlay-harness; only machines do
     for p in (tmp / "registry").rglob("*.md"):
         text = p.read_text(encoding="utf-8")
-        if "mitos-agent" in text:
-            p.write_text(text.replace("mitos-agent, ", "").replace(", mitos-agent", "").replace("mitos-agent", "context-tree"), encoding="utf-8")
+        if "overlay-harness" in text:
+            p.write_text(text.replace("overlay-harness, ", "").replace(", overlay-harness", "").replace("overlay-harness", "context-tree"), encoding="utf-8")
 
-    # Machine targets mitos-agent (which is now unknown)
+    # Machine targets overlay-harness (which is now unknown)
     loaded_warn = loader.load(tmp)
     assert "rig" in loaded_warn.skipped_machines
 
     # Seed is pending in inbox
     meta = {
-        "registry_path": "local/targets/mitos-agent.yaml",
+        "registry_path": "local/targets/overlay-harness.yaml",
         "kind": "new",
-        "source": {"machine": "rig", "tool": "mitos-agent"},
+        "source": {"machine": "rig", "tool": "overlay-harness"},
         "base_hash": "",
         "deploy_path": "",
         "captured_at": "2026-09-28T00:00:00Z",
         "note": "seed target",
     }
-    _plant_candidate(tmp, "seed-mitos-agent", meta, "mitos-agent.yaml", seed_content)
+    _plant_candidate(tmp, "seed-overlay-harness", meta, "overlay-harness.yaml", seed_content)
 
     # Accept the seed
-    res = review.decide(loaded_warn, "seed-mitos-agent", "accept", "")
+    res = review.decide(loaded_warn, "seed-overlay-harness", "accept", "")
     assert res["ok"], res
 
     # Registry now loads cleanly, machine is not skipped, outputs are non-empty

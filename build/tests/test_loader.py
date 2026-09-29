@@ -165,22 +165,21 @@ def test_per_machine_server_url():
     win = planner.plan_machine(treg, "example-windows")
     mcp_cfg = next(o for o in win if o.deploy_path.endswith("mcp_config.json"))
     assert "http://localhost:8000/mcp" in mcp_cfg.content
-    # rig has document_store="gws" and targets ["mitos-agent", "context-tree"]
+    # rig has document_store="gws" and targets ["overlay-harness", "context-tree"]
     rig_plan = planner.plan_machine(treg, "rig")
     mcp_json = next(o for o in rig_plan if o.deploy_path.endswith("mcp.json"))
     assert "http://localhost:8000/mcp" in mcp_json.content
 
 def test_retired_user_keys_warn_naming_the_line():
-    """user.yaml keys 'mitos_agent' and 'default_deliverables' were retired in M6.
+    """user.yaml key 'default_deliverables' was retired in M6.
     If present, loader emits a warning naming the file and the line number to delete.
     Unknown keys still raise RegistryError."""
     from agentic.loader import RegistryError
     _treg, tmp = _temp_registry()
     user_file = tmp / "registry" / "user.yaml"
-    user_file.write_text("given_name: User\nmitos_agent: true\ndefault_deliverables:\n  - tests\n", encoding="utf-8")
+    user_file.write_text("given_name: User\ndefault_deliverables:\n  - tests\n", encoding="utf-8")
     loaded = loader.load(tmp)
-    assert any("mitos_agent" in w and "line 2" in w for w in loaded.warnings)
-    assert any("default_deliverables" in w and "line 3" in w for w in loaded.warnings)
+    assert any("default_deliverables" in w and "line 2" in w for w in loaded.warnings)
 
     # An unknown non-retired key raises RegistryError
     user_file.write_text("given_name: User\nbogus_key: val\n", encoding="utf-8")
@@ -285,7 +284,7 @@ def test_renamed_keys_fail_naming_the_new_key():
 
     # 3. agents-md in machine targets -> 'context-tree'
     rig3 = copy.deepcopy(reg)
-    rig3.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md"]
+    rig3.machines["example-linux"]["targets"] = ["overlay-harness", "agents-md"]
     try:
         _validate(rig3)
         raise AssertionError("expected RegistryError for agents-md machine target")
@@ -555,10 +554,10 @@ def test_overlay_precedence_last_layer_wins():
     local = tmp / "registry" / "local"
     (local / "identity").mkdir(parents=True)
     (local / "identity" / "comms-style.md").write_text(           # override same-key core
-        "---\naudience: [mitos-agent]\n---\nOVERLAY comms rules\n", encoding="utf-8")
+        "---\naudience: [overlay-harness]\n---\nOVERLAY comms rules\n", encoding="utf-8")
     (local / "skills" / "extra").mkdir(parents=True)              # add a new local skill
     (local / "skills" / "extra" / "SKILL.md").write_text(
-        "---\nname: extra\ndescription: d\ntargets: [mitos-agent]\ncategory: productivity\n---\n"
+        "---\nname: extra\ndescription: d\ntargets: [overlay-harness]\ncategory: productivity\n---\n"
         "body\n", encoding="utf-8")
     (local / "projects").mkdir(parents=True)                     # add a new local project
     (local / "projects" / "zeta.yaml").write_text(
@@ -729,7 +728,7 @@ def test_overlay_machines_and_connections_precedence():
         "name: example-windows\nos: windows\ntargets: [claude-code]\n"
         'paths:\n  projects_root: "D:/Private"\n', encoding="utf-8")
     (local / "machines" / "home-server.yaml").write_text(
-        "name: home-server\nos: linux\ntargets: [mitos-agent, context-tree]\n"
+        "name: home-server\nos: linux\ntargets: [overlay-harness, context-tree]\n"
         'paths:\n  context_root: "~/ContextTree"\n',
         encoding="utf-8")
     # override the gws server URL with a private LAN address (synthetic, not real)
@@ -754,12 +753,12 @@ def test_accept_routes_overlay_content_into_local_not_core():
     overlay = tmp / "registry" / "local" / "identity"
     overlay.mkdir(parents=True, exist_ok=True)
     (overlay / "comms-style.md").write_text(
-        "---\naudience: [mitos-agent]\n---\nOVERLAY body line\n", encoding="utf-8")
+        "---\naudience: [overlay-harness]\n---\nOVERLAY body line\n", encoding="utf-8")
     treg = loader.load(tmp)
     assert treg.partials["identity/comms-style.md"].rel == "local/identity/comms-style.md"
 
     meta = {"registry_path": "identity/comms-style.md", "kind": "drift",
-            "source": {"machine": "rig", "tool": "mitos-agent"}, "base_hash": "",
+            "source": {"machine": "rig", "tool": "overlay-harness"}, "base_hash": "",
             "deploy_path": "", "sources": ["identity/comms-style.md"],
             "captured_at": "t", "note": "n"}
     _plant_candidate(tmp, "t1--rig--comms", meta, "comms-style.md",
@@ -1211,7 +1210,7 @@ def test_skill_resources_loaded_from_examples_and_scripts():
     (skill_dir / "examples").mkdir(parents=True)
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: res-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
+        "---\nname: res-skill\ndescription: d\ntargets: [overlay-harness]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "examples" / "sample.md").write_text("expected output\n", encoding="utf-8")
     (skill_dir / "scripts" / "validate.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
@@ -1224,14 +1223,14 @@ def test_skill_resources_loaded_from_examples_and_scripts():
 
 def test_skill_resources_loaded_from_all_harness_convention_dirs():
     """_SKILL_RESOURCE_DIRS is the union of the harnesses' documented conventions:
-    examples/scripts (Claude Code, Antigravity), references/templates (Mitos Agent),
+    examples/scripts (Claude Code, Antigravity), references/templates (overlay harness),
     resources (Antigravity). A file under any of them loads; anything else is ignored."""
     treg, tmp = _temp_registry()
     skill_dir = tmp / "registry" / "skills" / "conv-skill"
     for sub in ("references", "templates", "resources", "unrelated"):
         (skill_dir / sub).mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: conv-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
+        "---\nname: conv-skill\ndescription: d\ntargets: [overlay-harness]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "references" / "api.md").write_text("api\n", encoding="utf-8")
     (skill_dir / "templates" / "config.yaml").write_text("k: v\n", encoding="utf-8")
@@ -1247,7 +1246,7 @@ def test_skill_resource_binary_file_rejected():
     skill_dir = tmp / "registry" / "skills" / "bin-skill"
     (skill_dir / "examples").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: bin-skill\ndescription: d\ntargets: [mitos-agent]\ncategory: general\n---\n"
+        "---\nname: bin-skill\ndescription: d\ntargets: [overlay-harness]\ncategory: general\n---\n"
         "body\n", encoding="utf-8")
     (skill_dir / "examples" / "asset.bin").write_bytes(b"\xff\xfe\x00\x01binary")
     try:
@@ -1365,9 +1364,9 @@ def test_agent_loads_and_validates():
         "---\n"
         "name: personal-crm\n"
         "description: Manage personal contacts and CRM\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: Keep relationships organized and up to date\n"
-        "skills: [new-session]\n"
+        "skills: [graph-bootstrap]\n"
         "---\n"
         "# Instructions\n"
         "Help the owner manage personal contacts.\n",
@@ -1378,9 +1377,9 @@ def test_agent_loads_and_validates():
     ag = reg2.agents["personal-crm"]
     assert ag.name == "personal-crm"
     assert ag.description == "Manage personal contacts and CRM"
-    assert ag.targets == ["mitos-agent"]
+    assert ag.targets == ["overlay-harness"]
     assert ag.goal == "Keep relationships organized and up to date"
-    assert ag.skills == ["new-session"]
+    assert ag.skills == ["graph-bootstrap"]
     assert "Help the owner manage personal contacts." in ag.body
     assert ag.source == agent_file
 
@@ -1394,7 +1393,7 @@ def test_agent_refuses_unknown_skill():
         "---\n"
         "name: bad-skill-agent\n"
         "description: desc\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: goal\n"
         "skills: [unknown-skill]\n"
         "---\n"
@@ -1409,8 +1408,8 @@ def test_agent_refuses_unknown_skill():
         assert "unknown-skill" in str(e)
 
 
-def test_agent_refuses_non_mitos_agent_skill():
-    # Skill exists, but doesn't target mitos-agent
+def test_agent_refuses_non_overlay_harness_skill():
+    # Skill exists, but doesn't target overlay-harness
     treg, tmp = _temp_registry()
     sdir = tmp / "registry" / "skills" / "claude-only"
     sdir.mkdir(parents=True)
@@ -1430,7 +1429,7 @@ def test_agent_refuses_non_mitos_agent_skill():
         "---\n"
         "name: bad-target-agent\n"
         "description: desc\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: goal\n"
         "skills: [claude-only]\n"
         "---\n"
@@ -1439,7 +1438,7 @@ def test_agent_refuses_non_mitos_agent_skill():
     )
     try:
         loader.load(tmp)
-        raise AssertionError("expected RegistryError for agent skill not targeting mitos-agent")
+        raise AssertionError("expected RegistryError for agent skill not targeting overlay-harness")
     except loader.RegistryError as e:
         assert "bad-target-agent" in str(e)
         assert "claude-only" in str(e)
@@ -1454,7 +1453,7 @@ def test_agent_refuses_name_mismatch():
         "---\n"
         "name: agent-different\n"
         "description: desc\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: goal\n"
         "skills: [gws]\n"
         "---\n"
@@ -1478,7 +1477,7 @@ def test_agent_refuses_unknown_key():
         "---\n"
         "name: agent-bad-key\n"
         "description: desc\n"
-        "targets: [mitos-agent]\n"
+        "targets: [overlay-harness]\n"
         "goal: goal\n"
         "skills: [gws]\n"
         "extra_key: foo\n"
@@ -1504,7 +1503,7 @@ def test_curation_accepts_twenty_agents():
         name = f"agent-{i:02d}"
         rig.agents[name] = Agent(
             name=name, description=f"Agent {i}", targets=["claude-code"], goal=f"Goal {i}",
-            skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
+            skills=["graph-bootstrap"], body="body", source=Path(f"/fake/{name}.md")
         )
     _validate(rig)
     selected = loader.selected_agents(rig, rig.machines["example-linux"])
@@ -1520,7 +1519,7 @@ def test_loader_accepts_twenty_one_agents():
         name = f"agent-{i:02d}"
         rig.agents[name] = Agent(
             name=name, description=f"Agent {i}", targets=["claude-code"], goal=f"Goal {i}",
-            skills=["new-session"], body="body", source=Path(f"/fake/{name}.md")
+            skills=["graph-bootstrap"], body="body", source=Path(f"/fake/{name}.md")
         )
     _validate(rig)
     selected = loader.selected_agents(rig, rig.machines["example-linux"])
@@ -1534,18 +1533,18 @@ def test_machine_agent_missing_curated_skill():
     rig.machines["example-linux"]["targets"] = ["claude-code"]
     rig.agents["crm-agent"] = Agent(
         name="crm-agent", description="CRM", targets=["claude-code"], goal="Goal",
-        skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
+        skills=["graph-bootstrap"], body="body", source=Path("/fake/crm-agent.md")
     )
-    # Exclude new-session skill from claude-code target on a real (non-template) machine
+    # Exclude graph-bootstrap skill from claude-code target on a real (non-template) machine
     rig.machines["example-linux"]["example"] = False
-    rig.machines["example-linux"]["skills"] = {"claude-code": {"exclude": ["new-session"]}}
+    rig.machines["example-linux"]["skills"] = {"claude-code": {"exclude": ["graph-bootstrap"]}}
     try:
         _validate(rig)
         raise AssertionError("expected RegistryError for missing curated skill")
     except RegistryError as e:
         msg = str(e)
         assert "crm-agent" in msg
-        assert "new-session" in msg
+        assert "graph-bootstrap" in msg
 
 
 def test_example_machine_skips_agent_skill_check():
@@ -1555,10 +1554,10 @@ def test_example_machine_skips_agent_skill_check():
     rig.machines["example-linux"]["targets"] = ["claude-code"]
     rig.agents["crm-agent"] = Agent(
         name="crm-agent", description="CRM", targets=["claude-code"], goal="Goal",
-        skills=["new-session"], body="body", source=Path("/fake/crm-agent.md")
+        skills=["graph-bootstrap"], body="body", source=Path("/fake/crm-agent.md")
     )
     assert rig.machines["example-linux"].get("example") is True
-    rig.machines["example-linux"]["skills"] = {"claude-code": {"exclude": ["new-session"]}}
+    rig.machines["example-linux"]["skills"] = {"claude-code": {"exclude": ["graph-bootstrap"]}}
     _validate(rig)          # a template is never deployed, so it cannot strand the agent
 
 

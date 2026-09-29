@@ -1,4 +1,4 @@
-"""Claude-code, Antigravity, Mitos Agent, skill, prompt, and git-sync tests."""
+"""Claude-code, Antigravity, overlay harness, skill, prompt, and git-sync tests."""
 from __future__ import annotations
 
 import sys
@@ -64,25 +64,25 @@ def test_antigravity_grants_normalized():
     assert not any("draft_gmail_message" in a for a in allow)
     assert len(allow) == 31
 
-def test_mitos_agent_mcp_config_shape():
+def test_mcp_servers_json_shape():
     # Whole-file mcp.json (not a merge block): one mcpServers entry per wired store, keyed
     # by server name, carrying url/transport/flat-tools. Keep the flat-tool-count assertion.
     tools = render.flat_tools(reg.servers["servers"]["gws"])
     assert len(tools) == 31
     assert tools[0] == "list_calendars"
     gws = dict(reg.servers["servers"]["gws"])
-    cfg = render.mitos_agent_mcp_config({"gws": gws})
+    cfg = render.mcp_servers_json({"gws": gws})
     assert set(cfg["mcpServers"]) == {"gws"}
     assert cfg["mcpServers"]["gws"]["tools"] == tools
     assert cfg["mcpServers"]["gws"]["url"] == gws["url"]
     # multi-store: one entry per store (the §5.4 resolve regression)
-    cfg2 = render.mitos_agent_mcp_config({"gws": gws, "notion": {"url": "http://x", "tools": {}}})
+    cfg2 = render.mcp_servers_json({"gws": gws, "notion": {"url": "http://x", "tools": {}}})
     assert set(cfg2["mcpServers"]) == {"gws", "notion"}
 
 def test_non_assistant_machine_coproduces_agents_md():
     """Claude-code machines without context-tree emit a co-located AGENTS.md (full graph
     context + prose) and a stub CLAUDE.md at each graph project's local_path.
-    Mitos Agent machines (with context-tree) are unaffected — the existing path applies."""
+    overlay harness machines (with context-tree) are unaffected — the existing path applies."""
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
@@ -90,7 +90,7 @@ def test_non_assistant_machine_coproduces_agents_md():
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
     # configure example-windows as a pure workstation: remove context-tree and the
-    # agentic_context_root (that's the separate Mitos Agent tree, not needed here)
+    # agentic_context_root (that's the separate overlay harness tree, not needed here)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     # give apoc a local_path on example-windows so _local() resolves it
@@ -114,7 +114,7 @@ def test_non_assistant_machine_coproduces_agents_md():
     assert claude_out.content.strip() == "@AGENTS.md"
     assert not claude_out.section_bodies
 
-    # Mitos Agent machine: co-located AGENTS.md must NOT be emitted via claude-code target
+    # overlay harness machine: co-located AGENTS.md must NOT be emitted via claude-code target
     rig_agent = copy.deepcopy(reg)
     if "apoc" not in rig_agent.projects:
         rig_agent.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
@@ -125,7 +125,7 @@ def test_non_assistant_machine_coproduces_agents_md():
     agent_paths = [o.deploy_path for o in planner.plan_machine(rig_agent, "example-windows")
                     if o.target == "claude-code"]
     assert not any("apocalyptic_adventure/AGENTS.md" in p for p in agent_paths), \
-        "Mitos Agent machine must not emit co-located AGENTS.md via claude-code target"
+        "overlay harness machine must not emit co-located AGENTS.md via claude-code target"
 
 def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     """A stub_import project (mitos) on a claude-code-only machine must never emit a
@@ -193,7 +193,7 @@ def test_project_node_does_not_repeat_repo_builder_context():
 def test_builder_context_project_agents_md_includes_graph_docs():
     """A `context.builder` project (e.g. Mitos self-hosting) with a knowledge graph must
     get the same lightweight titles-index + companion AGENTS_DETAILS.md that every other
-    project in the Mitos Agent tree gets (the context.assistant / ctx_key branch) — the
+    project in the overlay harness tree gets (the context.assistant / ctx_key branch) — the
     connection/document-store heading and document titles in AGENTS.md, full per-document
     detail (raw IDs) in AGENTS_DETAILS.md — not just persona/prose."""
     import copy
@@ -246,7 +246,7 @@ def _builder_rig(targets, repos=True, context_root=None):
     rig.projects["mitos"]["document_store"] = "gws"
     if repos:
         rig.projects["mitos"]["repo"] = [
-            "https://github.com/you/mitos.git", "https://github.com/you/mitos-agent.git"]
+            "https://github.com/you/mitos.git", "https://github.com/you/overlay-harness.git"]
         rig.projects["mitos"]["repo_notes"] = {"mitos": "the compiler"}
     else:
         rig.projects["mitos"].pop("repo", None)
@@ -266,7 +266,7 @@ def test_builder_lane_renders_repo_roster_on_assistant_host():
     out = _builder_rig(["claude-code", "context-tree"], context_root="C:/ContextTree")
     assert "## Navigation" in out.content
     assert "- `mitos/` — the compiler" in out.content
-    assert "- `mitos-agent/`" in out.content
+    assert "- `overlay-harness/`" in out.content
     assert "github.com/you/mitos.git" not in out.content
     assert render.GENERATED_NAV in [s for s, _ in out.section_bodies]
     assert "Design Review" in out.content          # the document index still follows
@@ -380,7 +380,7 @@ def test_two_context_files_in_one_root_drops_identity():
 
 def test_context_tree_project_mount_emits_full_tree():
     """A workstation project with context_tree: gets the full operating tree (the same
-    Navigation/Workflows/Skills/roster shape a Mitos Agent machine gets at its context_root)
+    Navigation/Workflows/Skills/roster shape an overlay harness machine gets at its context_root)
     at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
     import copy
     rig = copy.deepcopy(reg)
@@ -433,7 +433,7 @@ def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
     assert "ContextTree/AGENTS.md" in out.content
 
 def test_context_tree_cross_reference_note_on_project_agents_lane():
-    """The Mitos Agent-style project_agents lane (context.builder projects) gets the same
+    """The overlay-harness-style project_agents lane (context.builder projects) gets the same
     cross-reference note when context_tree: is set — consistent with the claude-code
     graph lane above."""
     import copy
@@ -582,8 +582,8 @@ def test_skill_selection_layers():
     wired = {"document_store": "gws"}
     all_claude = {s.name for s in _selected_skills(reg, base, wired)}
     assert "gws" in all_claude and "idea-revision" not in all_claude  # push layer
-    only = _selected_skills(reg, base, {**wired, "skills": {"claude-code": {"include": ["new-session", "gws"]}}})
-    assert {s.name for s in only} == {"new-session", "gws"}                  # pull: include
+    only = _selected_skills(reg, base, {**wired, "skills": {"claude-code": {"include": ["graph-bootstrap", "gws"]}}})
+    assert {s.name for s in only} == {"graph-bootstrap", "gws"}                  # pull: include
     rest = _selected_skills(reg, base, {**wired, "skills": {"claude-code": {"exclude": ["gws"]}}})
     assert {s.name for s in rest} == all_claude - {"gws"}             # pull: exclude
     # include cannot smuggle a skill the frontmatter doesn't target
@@ -628,14 +628,12 @@ def test_fresh_coding_machine_deploys_no_workspace_content():
             f"{use_case}: workspace skill deployed without a declared connection"
         assert not [o for o in outs if o.lane == "connections"], \
             f"{use_case}: MCP wiring planned without a declared connection"
-        # the identity header must not carry the agentic tree's operating rules — they
-        # name `new-session` (a agent-only skill) and an AGENTS.md tree that a
-        # coding-harness box does not have. A builder-context MENTION of the skill name
-        # is fine; the imperative bullet is what must be gone.
+        # the context-tree operating rules never reach a coding-harness identity header —
+        # they route through an AGENTS.md tree that a coding-harness box does not have.
         for o in outs:
             if o.deploy_path.endswith("CLAUDE.md"):
-                assert "execution of the skill: `new-session`" not in o.content, \
-                    f"{use_case}: CLAUDE.md instructs a skill only mitos-agent deploys"
+                assert "The *project root* is `" not in o.content, \
+                    f"{use_case}: CLAUDE.md carries the context-tree operating rules"
                 assert "Always read `AGENTS.md` within" not in o.content, \
                     f"{use_case}: CLAUDE.md routes through an agentic tree that isn't here"
 
@@ -643,7 +641,7 @@ def test_coding_harness_context_carries_no_assistant_persona():
     """A project's CLAUDE.md on a coding-harness box must not cast the agent as the
     owner's *personal assistant*, must not inline the owner's email/location (that file is
     normally committed to the repo), and must not claim a document store the machine never
-    declared. `identity/who-i-am.md` is [mitos-agent, agents-md]; `who-i-am-coding.md` is the
+    declared. `identity/who-i-am.md` is [overlay-harness, agents-md]; `who-i-am-coding.md` is the
     [claude-code] counterpart, and audience picks exactly one."""
     import copy
 
@@ -679,8 +677,8 @@ def test_coding_harness_context_carries_no_assistant_persona():
 
 def test_deployed_workspace_skill_names_no_assistant_machinery():
     """The `gws` skill is the one core skill a coding-harness box can receive. Its BODY
-    must not reference machinery only the agentic harness has — `SOUL.md`, Mitos Agent, or
-    Mitos Agent's `config.yaml` — since those name files that box does not have. (The gate in
+    must not reference machinery only the agentic harness has — `SOUL.md`, overlay harness, or
+    overlay harness's `config.yaml` — since those name files that box does not have. (The gate in
     test_requires_server_gates_skill stops it deploying UNWIRED; this covers the wired
     case.)"""
     import copy
@@ -688,11 +686,11 @@ def test_deployed_workspace_skill_names_no_assistant_machinery():
     rig = _connected_rig("example-windows")           # document_store: gws → skill deploys
     rig = copy.deepcopy(rig)
     outs = [o for o in planner.plan_machine(rig, "example-windows")
-            if "gws" in o.deploy_path and o.target != "mitos-agent"]
+            if "gws" in o.deploy_path and o.target != "overlay-harness"]
     assert outs, "expected the gws skill on a wired coding-harness machine"
     for o in outs:
         body = "\n".join(o.zip_members.values()) if o.zip_members else o.content
-        for term in ("SOUL", "Mitos Agent", "config.yaml"):
+        for term in ("SOUL", "overlay harness", "config.yaml"):
             assert term not in body, \
                 f"{o.deploy_path}: names agent-only machinery '{term}'"
 
@@ -822,8 +820,8 @@ def test_per_project_binding_deploys_skills():
     paths = [o.deploy_path for o in outs]
     # bound skill deployed to this project
     assert any(p.endswith("example-project/.claude/skills/proj-skill/SKILL.md") for p in paths)
-    # new-session skill not bound → not deployed
-    assert not any(p.endswith("example-project/.claude/skills/new-session/SKILL.md") for p in paths)
+    # graph-bootstrap skill not bound → not deployed
+    assert not any(p.endswith("example-project/.claude/skills/graph-bootstrap/SKILL.md") for p in paths)
 
 def test_binding_validation_rejects_unknown_and_incompatible():
     import copy
@@ -953,7 +951,7 @@ def test_project_node_without_repos_has_no_navigation_roster():
 
 def test_plan_clones_lands_in_the_right_tree_per_machine():
     from agentic.planner import plan_clones
-    # mitos-agent machine: clones land beside the OPERATING tree's project node, keyed by the
+    # overlay-harness machine: clones land beside the OPERATING tree's project node, keyed by the
     # project NAME (_emit_tree uses the name), so the harness resolves a checkout structurally.
     linux = plan_clones(reg, "example-linux")
     lslugs = [c.slug for c in linux]
@@ -1068,7 +1066,7 @@ def test_assistant_replaces_collaboration_in_agents_md():
     assert "org-software" not in soul.content, "org detail must not bloat the lean SOUL"
 
 def test_assistant_root_agents_md_is_the_routing_entry_point():
-    """assistant_root/AGENTS.md is Mitos Agent's entry point (new-session Step 4 reads it). It must
+    """assistant_root/AGENTS.md is the routing entry point of the context tree. It must
     be a root-level file (not under Assistant/ or Projects/), carry routing not org detail."""
     treg, tmp = _temp_registry()
     outputs = planner.plan_machine(treg, "rig")
@@ -1188,7 +1186,7 @@ def test_machine_sync_git_needs_hub():
                                             "git": {"hub": "ssh://h/overlay.git"}}
     _validate(ok)   # well-formed → no raise
 
-# (removed) the third-party settings-merge validation lane retired with Mitos Agent, which
+# (removed) the third-party settings-merge validation lane retired with overlay harness, which
 # owns its config file whole (no settings-leaf merge). A leftover settings block in a profile
 # is now silently ignored, not an error (see loader._validate note 5).
 
@@ -1911,17 +1909,17 @@ def test_antigravity_project_scoped_skill_not_deployed_to_other_projects():
     assert "example-project" in matches[0].deploy_path.replace("\\", "/")
     assert "Mitos" not in matches[0].deploy_path
 
-def test_mitos_agent_ignores_scope_and_still_deploys_project_scoped_skill_globally():
-    """Mitos Agent deliberately does not participate in scoping — a scope: project skill
-    that also targets mitos-agent still ships to the global mitos-agent skills dir."""
+def test_overlay_harness_ignores_scope_and_still_deploys_project_scoped_skill_globally():
+    """overlay harness deliberately does not participate in scoping — a scope: project skill
+    that also targets overlay-harness still ships to the global overlay-harness skills dir."""
     treg, tmp = _temp_registry()
-    treg.skills["proj-and-mitos-agent"] = loader.Skill(
-        name="proj-and-mitos-agent", rel="local/skills/proj-and-mitos-agent/SKILL.md",
-        frontmatter={"name": "proj-and-mitos-agent", "targets": ["mitos-agent", "antigravity"],
+    treg.skills["proj-and-overlay-harness"] = loader.Skill(
+        name="proj-and-overlay-harness", rel="local/skills/proj-and-overlay-harness/SKILL.md",
+        frontmatter={"name": "proj-and-overlay-harness", "targets": ["overlay-harness", "antigravity"],
                     "scope": "project"}, body="body")
     outputs = planner.plan_machine(treg, "rig")
-    matches = [o for o in outputs if o.target == "mitos-agent" and "proj-and-mitos-agent" in o.deploy_path]
-    assert len(matches) == 1, "mitos-agent must still deploy a scope:project skill globally"
+    matches = [o for o in outputs if o.target == "overlay-harness" and "proj-and-overlay-harness" in o.deploy_path]
+    assert len(matches) == 1, "overlay-harness must still deploy a scope:project skill globally"
 
 def test_claude_code_deploys_global_scope_skill_to_personal_skills_dir():
     """Default scope (global): a claude-code-targeted skill deploys once to the personal
@@ -2049,7 +2047,7 @@ def test_skill_deploy_warnings_silent_when_nothing_filtered_or_leaked():
 
 
 # ── skill supporting files (examples/, scripts/) — R5/R6 ───────────────────────
-def test_plan_mitos_agent_emits_skill_resource_outputs():
+def test_plan_overlay_harness_emits_skill_resource_outputs():
     from agentic.loader import SkillResource
     treg, tmp = _temp_registry()
     skill = treg.skills["gws"]
@@ -2059,7 +2057,7 @@ def test_plan_mitos_agent_emits_skill_resource_outputs():
                                           rel="skills/gws/scripts/check.sh"),
     }
     outs = planner.plan_machine(treg, "rig")
-    skill_md = next(o for o in outs if o.target == "mitos-agent"
+    skill_md = next(o for o in outs if o.target == "overlay-harness"
                     and o.deploy_path.endswith("gws/SKILL.md"))
     base_dir = skill_md.deploy_path.rsplit("/", 1)[0]
     example_out = next(o for o in outs if o.deploy_path == f"{base_dir}/examples/sample.md")
@@ -2143,7 +2141,7 @@ def test_project_roster_block_aliases():
     assert "- `Projects/Mitos/` (mitos) — Human-agentic harness" in roster
 
 def test_agent_only_skills_have_no_harness_shell_steps():
-    """A skill deployed only to mitos-agent is read by a harness that runs no shell. A step telling
+    """A skill deployed only to overlay-harness is read by a harness that runs no shell. A step telling
     it to run git, python, or a Mitos verb is inert at best and a false promise at worst — unless the
     line hands the command to the owner. Checks fenced-block lines and inline code spans."""
     import re
@@ -2155,7 +2153,7 @@ def test_agent_only_skills_have_no_harness_shell_steps():
     for path in sorted((REPO_ROOT / "registry" / "skills").glob("*/SKILL.md")):
         text = path.read_text(encoding="utf-8")
         _, head, body = text.split("---", 2)
-        if (_y.safe_load(head) or {}).get("targets") != ["mitos-agent"]:
+        if (_y.safe_load(head) or {}).get("targets") != ["overlay-harness"]:
             continue
         in_fence = False
         for n, line in enumerate(body.splitlines(), 1):
@@ -2211,7 +2209,7 @@ def test_only_non_document_kinds_are_labeled():
         assert "`U1` (2026-01-04) —" in out
 
 
-def test_plan_mitos_agent_emits_agents():
+def test_plan_overlay_harness_emits_agents():
     import copy
     from agentic import planner
     from agentic.loader import Agent
@@ -2219,7 +2217,7 @@ def test_plan_mitos_agent_emits_agents():
     treg.agents["crm"] = Agent(
         name="crm",
         description="Personal CRM agent",
-        targets=["mitos-agent"],
+        targets=["overlay-harness"],
         goal="Manage personal relationships and notes",
         skills=["gws"],
         body="# Instructions\nManage contacts.\n",
@@ -2229,7 +2227,7 @@ def test_plan_mitos_agent_emits_agents():
     agent_outs = [o for o in outs if o.deploy_path.endswith("agents/crm.md")]
     assert len(agent_outs) == 1
     out = agent_outs[0]
-    assert out.target == "mitos-agent"
+    assert out.target == "overlay-harness"
     assert out.drift_policy == "harvest"
     assert out.deploy_path.endswith("/agents/crm.md")
     expected = (
@@ -2262,7 +2260,7 @@ def test_deselected_agent_then_prune():
     treg.agents["crm"] = Agent(
         name="crm",
         description="Personal CRM agent",
-        targets=["mitos-agent"],
+        targets=["overlay-harness"],
         goal="Manage personal relationships and notes",
         skills=["gws"],
         body="# Instructions\nManage contacts.\n",
@@ -2347,7 +2345,7 @@ def test_skill_render_full_preserves_unknown_frontmatter_keys():
         "name": "custom-skill",
         "description": "desc",
         "targets": ["claude-code", "custom-target"],
-        "mitos_agent": {"special": "config"},
+        "overlay_harness": {"special": "config"},
         "org_domain": "engineering",
         "delivers": "custom-artifact",
     }
@@ -2356,7 +2354,7 @@ def test_skill_render_full_preserves_unknown_frontmatter_keys():
     assert rendered.startswith("---\n")
     raw_fm = rendered.split("---")[1]
     parsed = _y.safe_load(raw_fm)
-    assert parsed["mitos_agent"] == {"special": "config"}
+    assert parsed["overlay_harness"] == {"special": "config"}
     assert parsed["org_domain"] == "engineering"
     assert parsed["delivers"] == "custom-artifact"
     assert "targets" not in parsed
@@ -2475,7 +2473,7 @@ def test_agent_warns_on_block_for_harness_not_in_targets():
         "name: agent-block\n"
         "description: Agent with mismatched block\n"
         "targets: [claude-code]\n"
-        "mitos-agent:\n"
+        "overlay-harness:\n"
         "  prompt: special\n"
         "---\n"
         "body\n",
@@ -2483,7 +2481,7 @@ def test_agent_warns_on_block_for_harness_not_in_targets():
     )
     loaded = loader.load(tmp)
     assert "agent-block" in loaded.agents
-    assert any("block ignored: 'mitos-agent' not in targets" in w for w in loaded.warnings)
+    assert any("block ignored: 'overlay-harness' not in targets" in w for w in loaded.warnings)
 
 
 def test_agent_missing_targets_is_error():
@@ -2526,7 +2524,7 @@ def test_agent_listed_skill_not_deploying_to_target_is_error():
         "---\n"
         "name: bad-skill\n"
         "description: Bad skill targets\n"
-        "targets: [claude-code, mitos-agent]\n"
+        "targets: [claude-code, overlay-harness]\n"
         "skills: [claude-only]\n"
         "---\n"
         "body\n",
@@ -2538,7 +2536,7 @@ def test_agent_listed_skill_not_deploying_to_target_is_error():
     except loader.RegistryError as exc:
         assert "bad-skill" in str(exc)
         assert "claude-only" in str(exc)
-        assert "mitos-agent" in str(exc)
+        assert "overlay-harness" in str(exc)
 
 
 def test_agent_target_supports_skills_false_warns():
@@ -2584,7 +2582,7 @@ def test_agent_target_supports_skills_false_warns():
     assert any("target 'noskills-target' has supports_skills: false" in w for w in loaded.warnings)
 
 
-def test_agent_with_mitos_agent_target_does_not_reach_claude_code_on_dual_machine():
+def test_agent_with_overlay_harness_target_does_not_reach_claude_code_on_dual_machine():
     import yaml as _y
     from agentic import planner
     treg, tmp = _temp_registry()
@@ -2594,8 +2592,8 @@ def test_agent_with_mitos_agent_target_does_not_reach_claude_code_on_dual_machin
     agent_file.write_text(
         "---\n"
         "name: mitos-only\n"
-        "description: Mitos agent only\n"
-        "targets: [mitos-agent]\n"
+        "description: overlay harness only\n"
+        "targets: [overlay-harness]\n"
         "skills: [gws]\n"
         "---\n"
         "body\n",
@@ -2614,7 +2612,7 @@ def test_agent_with_mitos_agent_target_does_not_reach_claude_code_on_dual_machin
 
     fresh = loader.load(tmp)
     planned = planner.plan_machine(fresh, "rig")
-    # Agent with targets: [mitos-agent] does not reach claude-code or antigravity on this machine
+    # Agent with targets: [overlay-harness] does not reach claude-code or antigravity on this machine
     agent_outs = [p for p in planned if "mitos-only.md" in p.deploy_path]
     assert len(agent_outs) == 0
 
@@ -2628,7 +2626,7 @@ def test_overlay_agent_target_golden():
     """
     import yaml as _y
     fixture_dir = Path(__file__).parent / "fixtures" / "overlay-agent"
-    target_yaml = (fixture_dir / "mitos-agent.yaml").read_text(encoding="utf-8")
+    target_yaml = (fixture_dir / "overlay-harness.yaml").read_text(encoding="utf-8")
     agent_md = (fixture_dir / "agents" / "sample-agent.md").read_text(encoding="utf-8")
 
     treg, tmp = _temp_registry()
@@ -2636,7 +2634,7 @@ def test_overlay_agent_target_golden():
     # Configure rig machine with deterministic context_root matching golden outputs
     rig_file = tmp / "machines" / "rig.yaml"
     rig_cfg = _y.safe_load(rig_file.read_text(encoding="utf-8"))
-    rig_cfg["paths"]["context_root"] = "/opt/mitos-agent"
+    rig_cfg["paths"]["context_root"] = "/opt/overlay-harness"
     rig_file.write_text(_y.safe_dump(rig_cfg), encoding="utf-8")
 
     # Install sample agent into registry/local/agents/
@@ -2653,10 +2651,10 @@ def test_overlay_agent_target_golden():
     expected_agent = (golden_dir / "agents" / "sample-agent.md").read_text(encoding="utf-8")
     expected_skill = (golden_dir / "skills" / "productivity" / "gws" / "SKILL.md").read_text(encoding="utf-8")
 
-    actual_soul = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/SOUL.md")
-    actual_mcp = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/mcp.json")
-    actual_agent = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/agents/sample-agent.md")
-    actual_skill = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/skills/productivity/gws/SKILL.md")
+    actual_soul = next(o for o in outs if o.deploy_path == "/opt/overlay-harness/SOUL.md")
+    actual_mcp = next(o for o in outs if o.deploy_path == "/opt/overlay-harness/mcp.json")
+    actual_agent = next(o for o in outs if o.deploy_path == "/opt/overlay-harness/agents/sample-agent.md")
+    actual_skill = next(o for o in outs if o.deploy_path == "/opt/overlay-harness/skills/productivity/gws/SKILL.md")
 
     assert actual_soul.content.replace("\r\n", "\n") == expected_soul.replace("\r\n", "\n")
     assert actual_mcp.content.replace("\r\n", "\n") == expected_mcp.replace("\r\n", "\n")

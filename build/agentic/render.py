@@ -674,10 +674,6 @@ def mcp_servers_json(servers: dict) -> dict:
     } for alias, server in servers.items()}}
 
 
-# Dynamic alias for compatibility with target seeds naming the legacy renderer
-globals()["mitos" + "_agent_mcp_config"] = mcp_servers_json
-
-
 def antigravity_mcp_config(server: dict, alias: str) -> dict:
     url = server["url"]
     return {"mcpServers": {alias: {"url": url, "serverUrl": url}}}

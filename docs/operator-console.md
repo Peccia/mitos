@@ -55,7 +55,7 @@ Reload.
 
 If the registry loader encounters non-fatal configuration anomalies, a prominent **Registry Warning(s)**
 callout banner appears across the top of the console:
-- **Retired `user.yaml` keys**: Warnings if retired keys such as `mitos_agent` or `default_deliverables` are found, naming the exact line to remove.
+- **Retired `user.yaml` keys**: Warnings if retired keys such as `default_deliverables` are found, naming the exact line to remove.
 - **Retired graph predicates**: Alerts if any project graph contains retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, `peccia:orgDomain`), prompting you to run `python build/mitos.py graph strip-retired --all`.
 - **Unknown targets**: Alerts if a machine profile lists an unknown or missing target adapter, which safely skips deployment for that target on that machine.
 

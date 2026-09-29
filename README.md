@@ -178,7 +178,7 @@ profile; both the wiring and the skill appear on the next deploy. See
 [connection-bound skills](docs/authoring-capabilities.md#connection-bound-skills-requires_server).
 
 **Skills are authored once and deployed to the harnesses you choose.** Core skills ship with
-neutral utilities (like `new-session` and `graph-bootstrap`); `gws` stays off until you declare its
+neutral utilities (like `graph-bootstrap`); `gws` stays off until you declare its
 connection. Beyond those, the skills lane is for *your* content: author one at
 `registry/local/skills/<name>/SKILL.md` in your gitignored overlay, or from the console's
 **Skills** tab (`python build/compile.py review` → **+ New skill**), which lands it
@@ -456,8 +456,8 @@ guide: [docs/operator-console.md](docs/operator-console.md).
 showing only what a machine in your registry would actually deploy — asked of the same
 logic `deploy` uses, so a skill's `targets:` *and* its `requires_server:` connection gate
 both count. On a coding-harness box with no `document_store:` that means you see your own
-skills and nothing else: the shipped `new-session` and `graph-bootstrap`
-target coding harnesses, and `gws` stays out until you wire its server. Nothing is deleted —
+skills and nothing else: the shipped `graph-bootstrap`
+targets coding harnesses, and `gws` stays out until you wire its server. Nothing is deleted —
 the **All** chip shows the full registry. A fresh clone with no machine profile yet shows
 everything, so the quick-start browse still works.
 

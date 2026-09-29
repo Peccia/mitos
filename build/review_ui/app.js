@@ -231,8 +231,8 @@ async function refresh(pre) {
   // orgData feeds both the Graph tab's effort editor and the Skills tab's org expansion.
   // Load eagerly on every refresh if not yet cached so the Skills tab doesn't need a
   // separate trigger; fall back to empty object so joins against it are always safe.
-  // Skipped entirely when the Mitos Agent flag is off: every surface that would read it
-  // is hidden, so the fetch is loopback I/O nobody looks at. Note what does NOT depend on
+  // Skipped entirely when nothing that would read it is shown, so the fetch is loopback
+  // I/O nobody looks at. Note what does NOT depend on
   // this: which skills the card grid shows is decided by static predicates
   // (isSkillVisible), never by a join against orgData — so a skipped or failed fetch can
   // never leak an org skill into view.
@@ -3053,7 +3053,7 @@ function renderChips() {
 
   // Scope toggle, mirroring the Skills tab (skillShowAll): the Library defaults to what
   // this registry's machines actually deploy, so a coding-harness box is not handed the
-  // mitos-agent-only skill bodies and agentic-tree partials it can never use. Rendered only when
+  // skill bodies and context-tree partials it can never use. Rendered only when
   // something is actually being withheld — otherwise it is a control with no effect.
   const scoped = PROMPTS.filter(inScope);
   if (PROMPTS.some((p) => !p.deploysHere)) {

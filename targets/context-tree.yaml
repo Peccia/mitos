@@ -26,7 +26,7 @@ trees:
     project_mountable: true
     drift_policy: protect
     files:
-      # Root entry point: the first file new-session reads. Lean routing + personal-context
+      # Root entry point: the first file a session reads. Lean routing + personal-context
       # bridge only — no org/domain detail (wasted context on Assistant requests).
       "AGENTS.md": [context/agentic-root.md]
       # Projects branch root: the roster + org/domain structure (where org context belongs,

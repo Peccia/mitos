@@ -5,11 +5,11 @@ version: 2.2.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [mitos-agent, claude-code, claude-app, antigravity]
+targets: [overlay-harness, claude-code, claude-app, antigravity]
 requires_server: gws       # nothing but instructions for this server's tools — not
                            # deployed to a machine whose document_store: omits it
 category: productivity
-mitos_agent:
+overlay_harness:
   tags: [gws, google-workspace, mcp, drive, docs, sheets, gmail, calendar, tasks, contacts]
 ---
 

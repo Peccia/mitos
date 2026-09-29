@@ -1,10 +1,10 @@
 ---
 name: sample-agent
 description: Sample agent for overlay target contract verification
-targets: [mitos-agent]
+targets: [overlay-harness]
 goal: Assist with software lineage and planning
 skills: [gws]
-mitos-agent:
+overlay-harness:
   mode: plan
 ---
 

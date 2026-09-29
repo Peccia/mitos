@@ -11,8 +11,8 @@ knowledge graph validates (`build/agentic/graph.py`). Mitos never imports the pl
 and the planning harness never imports Mitos — this document is the contract both sides conform
 to instead of sharing code.
 
-**This file is the source of truth for the fragment's shape.** Mitos-Agent's renderer
-(`mitos-agent/src/mitos_agent/artifact/evaluation.py::identity_fragment`) implements it; Mitos's
+**This file is the source of truth for the fragment's shape.** The planning harness's renderer
+implements it; Mitos's
 console (`build/agentic/review.py`) reads it. If the two ever disagree, this document decides —
 update it first, then bring both implementations into line.
 
@@ -35,10 +35,10 @@ There are **two** `additionalType` values, and they have **different readers**:
 
 | `additionalType` | The document | Written by | Read by |
 |---|---|---|---|
-| `implemented-requirements` | the Implemented Document, one per graduation | Mitos-Agent (`evaluation.py::identity_fragment`) | **Mitos** — Discovery maps it to its effort |
-| `return-record` | one deliverable's return record, published to the evaluation folder | the coding harness, following a `delivers:` skill | **Mitos-Agent** — its store reader, never Mitos |
+| `implemented-requirements` | the Implemented Document, one per graduation | the planning harness | **Mitos** — Discovery maps it to its effort |
+| `return-record` | one deliverable's return record, published to the evaluation folder | the coding harness, following a `delivers:` skill | **the planning harness** — its store reader, never Mitos |
 
-**Only the Implemented Document enters Mitos's graph.** A run's return records are Mitos-Agent's
+**Only the Implemented Document enters Mitos's graph.** A run's return records are the planning harness's
 raw input — the several per-deliverable documents it reads to produce that one document — and
 Mitos deliberately does not recognize them (`review.IDENTITY_TYPES` holds one value). Mapping them
 was tried and reverted: a document mapped to an effort is rendered into that project's generated
@@ -51,8 +51,8 @@ manual flow rather than guessing what a type it has never heard of means.
 - `isPartOf` — the Work item's IRI, in Mitos's own `CREATIVE_WORK_NS` form
   (`http://peccia.net/creativework/` + the effort id — no hyphen in "creativework"). `<effort-id>`
   is the SAME id Mitos renders into the effort's tree heading (`### Auth rework (auth-rework)`,
-  the last parenthesised group — see graph.py's `effort_heading`) and the same id Mitos-Agent's
-  requirements dossier keys itself on (`memory/requirements.py::dossier_key`). It always matches
+  the last parenthesised group — see graph.py's `effort_heading`) and the same id the planning harness's
+  requirements dossier keys itself on. It always matches
   `graph.py`'s `_EFFORT_ID_RE` (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`), because Mitos only ever mints
   ids in that shape.
 - `additionalType` — always the literal string `"implemented-requirements"`, so a reader (or a
@@ -94,11 +94,11 @@ record's whole header:
 one that survives. A store is not a text file: a harness that creates its document by importing
 markdown loses the `---` header to a horizontal rule — an element, not characters — and no reader
 can recover it. The block is content rather than markup, so it comes back out of any store intact,
-and `mitos-agent`'s `artifact/returns_store.py` rebuilds the header from it when the fence is
+and a consumer that reads return records can rebuild the header from it when the fence is
 gone. That is only possible if every required header field is here, which is why the four
 namespaced keys are not optional.
 
-`isPartOf` is the one part Mitos-Agent does not need: it is kept because it costs nothing and
+`isPartOf` is the one part a consumer does not need: it is kept because it costs nothing and
 records which effort the run belonged to. When the work item key has no `__` there is no effort to
 name, and that ONE line is omitted — never the whole block, which would throw away the work key
 and the run along with it.
@@ -119,7 +119,7 @@ store document for it to identify.
 
 **And the folder matters as much as the fragment.** The copy goes to the connection's
 `returns_container` — expanded into every `delivers:` skill as `{{returns_container}}`, and the
-same id `mitos-agent config get returns_container` returns. It is not a project folder. A record
+same id the consumer's `returns_container` setting names. It is not a project folder. A record
 published into one of those is not evaluated; it is ingested as project context, which is the
 failure this whole page exists to prevent.
 
@@ -130,8 +130,8 @@ removes; there is no reason the other six deliverables should pay it.
 
 ## How each side uses it
 
-**Mitos-Agent** renders the fragment purely from the dossier and the run — same inputs, same
-bytes, forever (pinned by a snapshot test, `tests/test_evaluation.py`). It has no opinion about
+**The planning harness** renders the fragment purely from the dossier and the run — same inputs, same
+bytes, forever (pinned by a snapshot test in its own repo). It has no opinion about
 whether the effort id names anything real; that is Mitos's graph to know, not this repo's.
 
 **Mitos** treats the fragment strictly as a hint, never an authority. When an operator opens the
@@ -143,7 +143,7 @@ the project's graph doesn't have, degrades silently to today's manual flow: noth
 candidate is created, no invisible write happens. The accepted candidate goes through the exact
 same `propose_graph_change` → `kind: graph` inbox path every mapped document already uses, so it
 passes `graph.py`'s own `isPartOf` validation unchanged — this fragment never bypasses that gate,
-it only saves the operator from retyping what Mitos-Agent already knew.
+it only saves the operator from retyping what the planning harness already knew.
 
 The same peek also shows a **Mark effort as Done with this Implemented Document** checkbox, which
 starts unticked. If the operator ticks it, the effort edit (`status: done`,
@@ -161,9 +161,8 @@ _Status: Done._
 ```
 
 The second form is used when no Implemented Document was recorded, and active efforts get no
-line. Mitos Agent reads the line with an anchored regex (`tree/parse.py::_STATUS_RE`, exposed as
-`Node.effort_statuses`). Golden tests in both repos pin the exact strings:
-`build/tests/test_graph.py::test_effort_status_line_is_the_contract_grammar` in this repo and
-`tests/test_parse.py::test_effort_statuses_reads_the_generated_line` in Mitos Agent. If you
-change one, change the other. Mitos Agent treats the line as information only; whether a
+line. A consumer reads the line with an anchored regex. The golden test
+`build/tests/test_graph.py::test_effort_status_line_is_the_contract_grammar` pins the exact
+strings; a consumer that parses this line pins it with its own test against the golden line.
+A consumer should treat the line as information only; whether a
 session can write is still decided by `Dossier.graduated`.

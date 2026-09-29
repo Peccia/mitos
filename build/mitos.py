@@ -590,7 +590,7 @@ def _cmd_peek(args) -> int:
     """Print one document's raw content to stdout — console-only, behind the Knowledge Graph
     tab's map-to-effort flow (docs/implemented-document-identity.md): the console's
     `review.peek_identity_effort` runs this as a subprocess to scan a staged document for
-    Mitos-Agent's identity fragment. No staging, no proposing, no interactive folder pick.
+    a planning harness's identity fragment. No staging, no proposing, no interactive folder pick.
     Invariant #11 holds the same way `connect` already does: this is the separate
     `build/mitos.py` entrypoint, never imported by `compile.py`."""
     from agentic import loader

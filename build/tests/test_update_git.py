@@ -14,7 +14,7 @@ _SKILL = """---
 name: {name}
 description: "Update test skill {name}."
 version: 1.0.0
-targets: [mitos-agent]
+targets: [overlay-harness]
 category: productivity
 ---
 

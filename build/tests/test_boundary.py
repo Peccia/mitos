@@ -44,34 +44,28 @@ def test_core_never_names_mitos_agent():
     import re
 
     pattern = re.compile(r"mitos[-_ ]?agent", re.IGNORECASE)
-    scanned_dirs = [
-        REPO_ROOT / "build" / "agentic",
-        REPO_ROOT / "targets",
-        REPO_ROOT / "machines",
-        REPO_ROOT / "registry",
-    ]
-    allowlist = {
-        REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent",
-        # names the retired user.yaml key so the loader can warn about it (OQ-1)
-        REPO_ROOT / "build" / "agentic" / "loader.py",
-    }
+    # Every tracked file, except the changelog's history and this file, which has to
+    # spell the pattern it scans for. Add a legitimate future file here, with a comment.
+    exempt = {"CHANGELOG.md", "build/tests/test_boundary.py"}
+    import subprocess
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
 
     offenders = []
-    for sdir in scanned_dirs:
-        for p in sdir.rglob("*"):
-            if not p.is_file():
-                continue
-            if any(part in ("local", "__pycache__", ".git") for part in p.parts):
-                continue
-            if any(p.is_relative_to(al) for al in allowlist):
-                continue
-            try:
-                text = p.read_text(encoding="utf-8-sig", errors="ignore")
-            except Exception:
-                continue
-            for line_no, line in enumerate(text.splitlines(), 1):
-                if pattern.search(line):
-                    offenders.append(f"{p.relative_to(REPO_ROOT)}:{line_no}: {line.strip()}")
+    for rel in filter(None, tracked):
+        if rel in exempt:
+            continue
+        p = REPO_ROOT / rel
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8-sig", errors="ignore")
+        except Exception:
+            continue
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{rel}:{line_no}: {line.strip()}")
 
     assert not offenders, (
         f"Core Mitos must never name mitos_agent/mitos-agent; found {len(offenders)} occurrence(s):\n"
@@ -96,6 +90,26 @@ def test_core_never_names_mitos_agent():
         f"Docs must not reference docs/decisions; found {len(doc_link_offenders)} link(s):\n"
         + "\n".join(doc_link_offenders)
     )
+
+
+def test_loaded_core_modules_bind_no_mitos_agent_name():
+    """A name assembled at runtime (e.g. `globals()["a" + "b"] = fn`) is invisible to the
+    text scan; this catches it however it is spelled."""
+    import importlib
+    import pkgutil
+    import re
+
+    import agentic
+
+    pattern = re.compile(r"mitos[-_ ]?agent", re.IGNORECASE)
+    offenders = []
+    for info in pkgutil.walk_packages(agentic.__path__, "agentic."):
+        try:
+            module = importlib.import_module(info.name)
+        except ImportError:
+            continue  # optional backend dependency not installed
+        offenders += [f"{info.name}.{n}" for n in dir(module) if pattern.search(n)]
+    assert not offenders, f"core modules must not bind a Mitos Agent name: {offenders}"
 
 
 def test_console_source_scan_no_retired_lanes():

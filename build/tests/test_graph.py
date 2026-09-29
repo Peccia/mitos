@@ -274,7 +274,7 @@ def test_graph_doc_type_round_trip_and_rendering():
         assert "**Brief** `T2` (2026-01-01)" in out   # no annotation when absent
     det_line = next(l for l in det.splitlines() if "Budget" in l)
     full_line = next(l for l in full.splitlines() if "Budget" in l)
-    assert det_line == full_line, "claude-code and mitos-agent doc lines must stay identical"
+    assert det_line == full_line, "claude-code and overlay-harness doc lines must stay identical"
 
 
 def test_retired_predicates_warn_and_are_not_rendered():
@@ -770,7 +770,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert [s for s, _ in proj.section_bodies if render.is_generated_source(s)], \
         "must carry a generated section tagged for marker-free split"
     # full doc context is INLINE here (concise: id inline, no URL), unlike the lean
-    # agents-md/Mitos Agent index that lists titles only
+    # agents-md/overlay harness index that lists titles only
     assert "`1AbCxyz`" in proj.content and "drive.google.com" not in proj.content
     # the connection section is the bound store's (gws) stable label at H2 (under the
     # project's prose H1), not a second H1 or "<project> — documents"
@@ -1157,7 +1157,7 @@ def test_effort_heading_always_carries_its_id():
 
 def test_effort_heading_id_is_the_last_parenthesised_group():
     """A name that itself ends in parentheses still yields an unambiguous id, because the id is
-    appended last — the rule a reader (and tree/parse.py in mitos-agent) relies on."""
+    appended last — the rule a reader (and tree/parse.py in overlay-harness) relies on."""
     from agentic import graph
     e = graph.CreativeWork(id="auth-rework", name="Auth rework (v2)",
                            description="", is_part_of=graph.PROJECT_NS + "p")

@@ -1,5 +1,5 @@
 ---
-audience: [mitos-agent, context-tree]
+audience: [overlay-harness, context-tree]
 ---
 ## Session Protocol
 

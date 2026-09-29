@@ -49,7 +49,7 @@ def is_manual_skill_target(tspec: dict) -> bool:
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
 KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
-RETIRED_USER_KEYS = {"default_deliverables", "mitos_agent"}
+RETIRED_USER_KEYS = {"default_deliverables"}
 KNOWN_AGENT_KEYS = {"name", "description", "targets", "goal", "skills"}
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
                  "email": "user@example.com", "location": "Your City, State"}

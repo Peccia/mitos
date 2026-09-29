@@ -248,7 +248,7 @@ def _temp_registry():
     conn.write_text(conn.read_text(encoding="utf-8").replace(
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
-        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "context-tree"],
+        "name": "rig", "os": _local_os(), "targets": ["overlay-harness", "context-tree"],
         # rig is the fully-wired rig: it hosts gws AND declares the connection, so
         # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
@@ -256,11 +256,11 @@ def _temp_registry():
         "paths": {"context_root": f"{home}/ContextTree",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
-    _plant_overlay_target(tmp, "mitos-agent")
+    _plant_overlay_target(tmp, "overlay-harness")
     (tmp / "machines" / "rig.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
     return loader.load(tmp), tmp
 
-def _plant_overlay_target(tmp: Path, name: str = "mitos-agent") -> Path:
+def _plant_overlay_target(tmp: Path, name: str = "overlay-harness") -> Path:
     dest_dir = tmp / "registry" / "local" / "targets"
     dest_dir.mkdir(parents=True, exist_ok=True)
     fixture_dir = REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent"
@@ -298,7 +298,7 @@ def _plant_candidate(tmp, cid, meta, payload_name, payload_text):
 
 def _skill_meta(rp="skills/gws/SKILL.md"):
     return {"registry_path": rp, "kind": "drift",
-            "source": {"machine": "rig", "tool": "mitos-agent"}, "base_hash": "",
+            "source": {"machine": "rig", "tool": "overlay-harness"}, "base_hash": "",
             "deploy_path": "", "sources": [rp], "captured_at": "2026-06-12T00:00:00Z",
             "note": "test candidate"}
 
@@ -334,9 +334,9 @@ def _make_overlay_hub(tmp):
     (seed / "identity" / "who.md").write_text("v0\n", encoding="utf-8")
     dest_dir = seed / "targets"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    target_fixture = REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent" / "mitos-agent.yaml"
+    target_fixture = REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent" / "overlay-harness.yaml"
     if target_fixture.exists():
-        shutil.copyfile(target_fixture, dest_dir / "mitos-agent.yaml")
+        shutil.copyfile(target_fixture, dest_dir / "overlay-harness.yaml")
     _run_git(seed, "add", "-A")
     _run_git(seed, "commit", "-m", "init")
     _run_git(seed, "branch", "-M", "main")

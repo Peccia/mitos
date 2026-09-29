@@ -157,7 +157,7 @@ def test_returns_root_is_the_state_dir_a_harness_actually_reads():
 
 
 def test_returns_root_does_not_reuse_project_roots_fallback():
-    """A coding-only box has no Mitos Agent and no state dir. project_root would resolve to
+    """A coding-only box has no overlay harness and no state dir. project_root would resolve to
     projects_root there, putting records inside a path the harness's resolver never looks at
     while LOOKING like it worked. A visibly separate directory beats a silently wrong one."""
     from agentic import render
@@ -297,22 +297,17 @@ def test_reverse_expand_project_root_matches_any_machines_root():
     assert render.reverse_expand_placeholders(
         r, "No token here.", "Path ~/ContextTree stays.") == "Path ~/ContextTree stays."
 
-def test_soul_and_new_session_skill_expand_project_root():
-    # acceptance: on the rig machine (mitos-agent + agents-md, assistant_root set) SOUL.md
-    # and the deployed new-session skill name the concrete root, no literal token left.
+def test_soul_expands_project_root():
+    # acceptance: on the rig machine (overlay-harness + agents-md, assistant_root set) SOUL.md
+    # names the concrete root, no literal token left.
     treg, _tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
     by_path = {o.deploy_path: o for o in outs}
     soul = next(o for p, o in by_path.items() if p.endswith("/SOUL.md"))
-    skill = next(o for p, o in by_path.items()
-                 if p.endswith("new-session/SKILL.md"))
-    for out in (soul, skill):
-        assert "ContextTree" in out.content
-        assert "{{project_root}}" not in out.content
-    # the session protocol is inlined in SOUL (no skill-file hop) and the skill's own
-    # copy stays in lock-step wording; neither leaves a literal token behind
+    assert "ContextTree" in soul.content
+    assert "{{project_root}}" not in soul.content
+    # the session protocol is inlined in SOUL (no skill-file hop)
     assert "clean slate IS the new session" in soul.content
-    assert "clean slate IS the new session" in skill.content
     assert "{{skills_root}}" not in soul.content
 
 
