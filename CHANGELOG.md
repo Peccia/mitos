@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.9] - 2026-09-29
 
 ### Migration Guide: Mitos & Mitos Agent Separation
 
@@ -27,6 +27,27 @@ Mitos Agent now lives in its own standalone repository outside Mitos and consume
 
 #### Unknown Target Handling
 - Machine profiles targeting an unknown or unavailable target adapter now load with a warning and the **whole machine is skipped** until the target is defined (for example by accepting a harness's target seed in the inbox). `compile` skips it, `deploy --machine` exits non-zero and writes and deletes nothing, and `mitos update --json` carries the warning in `deploy.error`. Other machines are unaffected.
+
+### Added
+- **Dynamic Overlay Targets & Data-Driven Generic Planner.** Targets can now be defined as user overlays in `registry/local/targets/*.yaml` alongside core targets. Hardcoded target enumerations replaced with dynamic discovery (`reg.target_names`). The generic target planner `_plan_generic` handles context files, skills, agents, and MCP configs for any target adapter.
+- **Multi-Harness Custom Agents as a Core Lane.** Agents are now a core lane across supported harnesses (such as Claude Code at `~/.claude/agents`), supporting harness-specific target blocks, folding agent goals into the prompt body when unsupported natively, and removing the 20-agent limit. The operator console features live target and skill filtering for agents.
+- **Skill Scripts Pass-Through.** `render_skill` passes skill `scripts:` frontmatter through as authored for harnesses supporting executable script abilities.
+- **Knowledge Graph Strip CLI Tool.** Added `mitos graph strip-retired` CLI verb to automate proposing clean graph candidates stripping retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, `peccia:orgDomain`).
+- **Candidate Path Confinement & Schema Validation.** Inbox candidate acceptance for targets and identity partials now enforces strict path traversal confinement and schema validation, preserving verbatim content without corruption.
+- **Harness-Neutral Core Boundary Enforcement.** Added automated tests (`test_boundary.py`) to enforce harness neutrality and ensure zero direct runtime dependencies or naming of external harness implementations in core.
+
+### Changed
+- **Context Tree Target.** Renamed `targets/agents-md.yaml` to `targets/context-tree.yaml`, rekeying `assistant_root` to `context_root` and `agentic_tree` to `context_tree`. Updated partial audiences and removed machine-role exclusivity, allowing context tree targets to cleanly coexist on multi-target machines.
+- **Strict Target Validation & Machine Failure Isolation.** If a machine profile specifies an unknown target, the loader warns and the entire machine is safely skipped during compile and deploy rather than producing broken or partial file trees.
+- **Preserve Unknown Skill Frontmatter.** Generic targets preserve unknown skill frontmatter byte-for-byte under `frontmatter: full`.
+- **Example Machine Agent Validation.** Agent-skill connection checks now skip example template machines (`example: true`), allowing templates to validate without external connection overlays.
+
+### Removed
+- **Retired Mitos Agent Artifacts & Org Lane.** Removed direct `targets/mitos-agent.yaml` from core (moved to overlay fixtures). Stripped the retired org lane (including `org-design`, `org-marketing`, `org-software`, templates, and return-record skills).
+- **Retired Knowledge Graph Predicates & User Configuration.** Dropped `peccia:deliverable`, `peccia:requirementsCoverage`, and `peccia:orgDomain` predicates, retired ADRs 004 and 005, and deprecated `mitos_agent` and `default_deliverables` keys in `user.yaml`.
+
+### Fixed
+- **Flaky Staleness Detection Test.** Resolved intermittent CI failure on Linux runners caused by non-deterministic filesystem glob ordering in `test_compile_status`.
 
 ## [0.1.8] - 2026-09-27
 
