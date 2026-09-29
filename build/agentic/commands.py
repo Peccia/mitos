@@ -149,10 +149,13 @@ def real_machines(reg: Registry) -> list[str]:
 
 
 def cmd_compile(reg: Registry, dist_dir: Path, only_target: str | None = None) -> int:
+    for w in getattr(reg, "warnings", []):
+        print(w)
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
-    machine_names = real_machines(reg)
-    skipped = [n for n in reg.machines if n not in machine_names]
+    skipped_machines = set(getattr(reg, "skipped_machines", {}).keys())
+    machine_names = [m for m in real_machines(reg) if m not in skipped_machines]
+    skipped = [n for n in reg.machines if n not in machine_names and n not in skipped_machines]
     total = 0
     for machine_name in machine_names:
         outputs = plan_machine(reg, machine_name)
@@ -197,7 +200,8 @@ def compile_status(reg: Registry, dist_dir: Path) -> dict:
     """Read-only: does the registry's current render match what's already in dist_dir/?
     Compares a fresh plan_machine() hash per output against the hashes cmd_compile recorded
     in each machine's manifest.json — no writes, safe to call on every console refresh."""
-    machine_names = real_machines(reg)
+    skipped_machines = set(getattr(reg, "skipped_machines", {}).keys())
+    machine_names = [m for m in real_machines(reg) if m not in skipped_machines]
     stale_machines = []
     for machine_name in machine_names:
         manifest_path = dist_dir / machine_name / "manifest.json"
@@ -520,7 +524,7 @@ def compute_deploy_plan(reg: Registry, machine: str, root: Path | None = None,
     blocked = [s for s in statuses
                if s.state in ("drift", "conflict") and s.output.drift_policy == "protect"]
     # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
-    # targets (mitos-agent/claude-app) receiving a scope: project skill. Warn-only — nothing
+    # targets receiving a scope: project skill. Warn-only — nothing
     # here changes what deploys, it just makes a previously silent filter visible.
     skill_warnings = (skill_deploy_warnings(reg, machine)
                        if target is None and lane in ("all", "content") else [])
@@ -561,6 +565,14 @@ def run_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
 
     if machine not in reg.machines:
         return refused(2, f"error: unknown machine {machine!r}")
+    if machine in getattr(reg, "skipped_machines", {}):
+        bad = reg.skipped_machines[machine]
+        t = bad[0] if bad else "unknown"
+        msg = (
+            f"machine {machine}: target '{t}' is not defined — machine skipped. "
+            f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
+        )
+        return refused(1, msg)
     # Example machines are templates: previewing (--dry-run) or sandboxing (--root) is fine,
     # but refuse a real deploy to live paths — copy it into registry/local/machines/ first.
     if reg.machines[machine].get("example") and not dry_run and root is None:
@@ -776,8 +788,34 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
     return result(0)
 
 
+def cmd_graph_strip_retired(reg: Registry, project: str | None = None,
+                            all_graphs: bool = False) -> int:
+    """Propose stripping retired predicates (peccia:orgDomain, peccia:deliverable,
+    peccia:requirementsCoverage) as kind: graph inbox candidates (ARB-02).
+    """
+    from . import review
+    if not all_graphs and not project:
+        print("error: specify --project <slug> or --all")
+        return 2
+    slugs = sorted(reg.graphs) if all_graphs else [project]
+    count = 0
+    for slug in slugs:
+        res = review.propose_strip_retired(reg, slug)
+        if not res.get("ok"):
+            print(f"error ({slug}): {res.get('error')}")
+            return 2
+        if res.get("proposed"):
+            count += 1
+            print(f"proposed strip-retired candidate for {slug} -> {res.get('id')}")
+    if count == 0:
+        print("no graphs contain retired predicates")
+    return 0
+
+
 # ── graph ────────────────────────────────────────────────────────────────────
-def cmd_graph(reg: Registry, project: str | None, query: str, *,
+def cmd_graph(reg: Registry, project: str | None = None, query: str = "documents", *,
+              action: str | None = None,
+              all_graphs: bool = False,
               complete_effort: str | None = None,
               evaluation_doc: str | None = None) -> int:
     """Inspect/validate the knowledge graph and run a saved SPARQL query.
@@ -790,6 +828,8 @@ def cmd_graph(reg: Registry, project: str | None, query: str, *,
     Inbox candidate and never writes the graph (invariant #3) — accept it in the console.
     """
     from . import graph as graphmod
+    if action == "strip-retired":
+        return cmd_graph_strip_retired(reg, project=project, all_graphs=all_graphs)
     if evaluation_doc and not complete_effort:
         print("error: --evaluation-doc requires --complete-effort")
         return 2
@@ -842,9 +882,7 @@ def _propose_complete_effort(reg: Registry, project: str | None, effort_id: str,
         return 2
     out = review.propose_graph_change(reg, project, documents=[], efforts=[{
         "id": effort.id, "name": effort.name, "description": effort.description,
-        "orgDomain": effort.org_domain, "goal": effort.goal,
-        "deliverables": list(effort.deliverables),
-        "requirementsCoverage": list(effort.requirements_coverage),
+        "goal": effort.goal,
         "keywords": effort.keywords, "hidden": effort.hidden,
         "status": "done", "evaluation": evaluation_doc}],
         reason=f"CLI complete-effort {effort_id}")
@@ -990,13 +1028,37 @@ def route_into_registry(reg: Registry, registry_path: str, payload_text: str,
     if not registry_path:
         return [], [], ("no registry route for this content (multi-source candidate "
                         "without a per-section base) — apply it by hand.")
+    clean = PurePosixPath(registry_path.replace("\\", "/"))
+    if clean.is_absolute() or ".." in clean.parts:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
     real = _real_registry_rel(reg, registry_path)   # route overlay-backed paths into local/
-    dest = reg.root / "registry" / real
+    real_clean = PurePosixPath(real.replace("\\", "/"))
+    if real_clean.is_absolute() or ".." in real_clean.parts:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    dest = (reg.root / "registry" / real).resolve()
+    reg_root_resolved = (reg.root / "registry").resolve()
+    try:
+        dest.relative_to(reg_root_resolved)
+    except ValueError:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    if clean.parts[:2] == ("local", "targets"):
+        allowed_dir = (reg.root / "registry" / "local" / "targets").resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    elif clean.parts[:2] == ("local", "identity"):
+        allowed_dir = (reg.root / "registry" / "local" / "identity").resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+
     if not dest.is_file():
         # a `new` proposal: the payload IS the proposed file, frontmatter and all
         write_text(dest, payload_text.rstrip("\n") + "\n")
         return [real], [], None
-    if keep_frontmatter:
+    if keep_frontmatter or real.startswith("local/targets/") or real.startswith("local/identity/"):
         new_text = payload_text.rstrip("\n") + "\n"
         if dest.read_text(encoding="utf-8") == new_text:
             return [], [], None

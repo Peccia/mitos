@@ -21,48 +21,11 @@ class _FakeReg:
 
 # ── user.yaml: load, merge, validation ───────────────────────────────────────
 def test_user_defaults_when_no_user_yaml_overlay():
-    """user.yaml holds two groups now — IDENTITY (the placeholders render expands) and
-    DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
-    a change to one group cannot be waved through as a change to the other."""
+    """user.yaml holds neutral identity defaults (the placeholders render expands)."""
     treg, tmp = _temp_registry()
-    non_identity = {"default_deliverables", "mitos_agent"}
-    identity = {k: v for k, v in treg.user.items() if k not in non_identity}
-    assert identity == {"given_name": "User", "full_name": "Mitos User",
-                        "email": "user@example.com", "location": "Your City, State"}
-    # documentation + tests: the two every kind of work owes regardless of shape
-    assert treg.user["default_deliverables"] == ["documentation", "tests"]
-    # FEATURES: the planning harness is off until an overlay turns it on
-    assert treg.user["mitos_agent"] is False
+    assert treg.user == {"given_name": "User", "full_name": "Mitos User",
+                         "email": "user@example.com", "location": "Your City, State"}
 
-
-def test_user_yaml_mitos_agent_overlay_wins():
-    """The flag follows the same last-layer-wins merge as identity — the public core
-    ships it off, a maintainer's untracked overlay turns it on."""
-    _treg, tmp = _temp_registry()
-    local = tmp / "registry" / "local"
-    local.mkdir(parents=True, exist_ok=True)
-    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
-    assert loader.load(tmp).user["mitos_agent"] is True
-
-
-def test_user_yaml_rejects_non_bool_mitos_agent():
-    """A typo must fail at load, not read as truthy and silently reveal the harness."""
-    _treg, tmp = _temp_registry()
-    for bad in ("'true'", "1", "0", "null", "[true]"):
-        (tmp / "registry" / "user.yaml").write_text(
-            f"mitos_agent: {bad}\n", encoding="utf-8")
-        try:
-            loader.load(tmp)
-            raise AssertionError(f"expected RegistryError for mitos_agent: {bad}")
-        except loader.RegistryError as e:
-            assert "mitos_agent" in str(e)
-
-
-def test_mitos_agent_is_not_a_placeholder_token():
-    """FEATURES keys never reach render's token map — {{user_mitos_agent}} must not be
-    a thing."""
-    toks = render.user_token_map(_FakeReg({"given_name": "X", "mitos_agent": True}))
-    assert not any("mitos_agent" in t for t in toks)
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()
@@ -181,12 +144,16 @@ def test_state_exposes_both_token_sets():
 
 # ── {{returns_root}} (where a harness writes what it produced) ───────────────
 def test_returns_root_is_the_state_dir_a_harness_actually_reads():
-    """On a Mitos Agent machine this must be byte-for-byte the folder `mitos-agent returns`
-    reads — `<assistant_root>/.local-memory/returns` — or records land where nothing looks."""
+    """returns_root expands directly when defined in paths, and does not fall back from assistant_root."""
     from agentic import render
+    # explicit returns_root expands
     out = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
-                                     {"assistant_root": "~/MitosAgent"})
-    assert out == "write to ~/MitosAgent/.local-memory/returns/x.md"
+                                     {"returns_root": "~/ContextTree/.local-memory/returns"})
+    assert out == "write to ~/ContextTree/.local-memory/returns/x.md"
+    # assistant_root alone does not expand returns_root
+    out_fallback = render.expand_placeholders(_FakeReg({}), "write to {{returns_root}}/x.md",
+                                              {"assistant_root": "~/ContextTree"})
+    assert out_fallback == "write to {{returns_root}}/x.md"
 
 
 def test_returns_root_does_not_reuse_project_roots_fallback():
@@ -236,7 +203,7 @@ def test_connection_reads_document_store_not_paths():
         _ConnReg({}), "{{connection}}", None, {"document_store": "gws"}) \
         == "Google Workspace suite (`gws`)"
     assert render.expand_placeholders(
-        _ConnReg({}), "{{connection}}", {"assistant_root": "~/MitosAgent"}, {}) == "{{connection}}"
+        _ConnReg({}), "{{connection}}", {"assistant_root": "~/ContextTree"}, {}) == "{{connection}}"
 
 
 def test_connection_stays_literal_for_an_unwired_or_unknown_store():
@@ -267,36 +234,22 @@ def test_connection_survives_a_registry_stand_in_with_no_servers():
     assert out == "Paul {{connection}}"
 
 
-def test_every_delivers_skill_names_the_store_through_the_token():
-    """A1's point: the seven return-lane skills must not depend on a connection section that
-    only renders into `agents-md` tree roots — that is precisely why a coding-only box
-    published nothing. Each must carry the token exactly once (a second occurrence would be
-    expanded too, turning the 'no store wired' branch into nonsense on a wired machine)."""
-    import pathlib
-    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
-    delivers = [p for p in sorted(skills.glob("*/SKILL.md"))
-                if "\ndelivers:" in p.read_text(encoding="utf-8")]
-    assert len(delivers) >= 7, "expected the return-lane skills to be found"
-    for p in delivers:
-        body = p.read_text(encoding="utf-8")
-        assert body.count("{{connection}}") == 1, f"{p.parent.name}: token count"
-        assert "always-on context for a connection section" not in body, \
-            f"{p.parent.name}: still depends on a tree-root-only heading"
-
 
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    paths = {"assistant_root": "~/MitosAgent/", "agentic_context_root": "C:/MitosAgent",
+    paths = {"context_root": "~/ContextTree/", "agentic_context_root": "C:/ContextTree",
              "projects_root": "C:/Projects"}
     out = render.expand_placeholders(_FakeReg(user), "cd {{project_root}}", paths)
-    assert out == "cd ~/MitosAgent"   # trailing slash normalized, assistant_root wins
+    assert out == "cd ~/ContextTree"   # trailing slash normalized, context_root wins
 
 def test_expand_project_root_fallback_chain():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
     assert render.expand_placeholders(
-        r, "{{project_root}}", {"agentic_context_root": "C:/MitosAgent"}) == "C:/MitosAgent"
+        r, "{{project_root}}", {"assistant_root": "~/LegacyAgent"}) == "~/LegacyAgent"
+    assert render.expand_placeholders(
+        r, "{{project_root}}", {"agentic_context_root": "C:/ContextTree"}) == "C:/ContextTree"
     assert render.expand_placeholders(
         r, "{{project_root}}", {"projects_root": "D:/Projects"}) == "D:/Projects"
 
@@ -310,34 +263,39 @@ def test_expand_skills_root_from_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
     assert render.expand_placeholders(
-        r, "ls {{skills_root}}", {"assistant_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
-    # no assistant_root on this machine → literal
+        r, "ls {{skills_root}}", {"context_root": "~/ContextTree/"}) == "ls ~/ContextTree/skills"
+    assert render.expand_placeholders(
+        r, "ls {{skills_root}}", {"assistant_root": "~/ContextTree/"}) == "ls ~/ContextTree/skills"
+    # explicit skills_root also expands
+    assert render.expand_placeholders(
+        r, "ls {{skills_root}}", {"skills_root": "~/CustomAgent/skills"}) == "ls ~/CustomAgent/skills"
+    # no context_root on this machine → literal
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"projects_root": "C:/Projects"}) == "ls {{skills_root}}"
 
 def test_reverse_expand_skills_root_matches_any_machines_value():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    r = _FakeReg(user, {"linux-box": {"paths": {"assistant_root": "~/MitosAgent"}}})
+    r = _FakeReg(user, {"linux-box": {"paths": {"assistant_root": "~/ContextTree"}}})
     original = "Skills live at {{skills_root}}."
     assert render.reverse_expand_placeholders(
-        r, original, "Skills live at ~/MitosAgent/skills.") == original
+        r, original, "Skills live at ~/ContextTree/skills.") == original
 
 def test_reverse_expand_project_root_matches_any_machines_root():
     # adopt/review don't always know which machine expanded the live text — every
     # machine's root value must fold back, still scoped to token-bearing partials.
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    machines = {"linux-box": {"paths": {"assistant_root": "~/MitosAgent"}},
-                "win": {"paths": {"agentic_context_root": "C:/MitosAgent"}}}
+    machines = {"linux-box": {"paths": {"assistant_root": "~/ContextTree"}},
+                "win": {"paths": {"agentic_context_root": "C:/ContextTree"}}}
     r = _FakeReg(user, machines)
     original = "Navigate to {{project_root}} first."
     assert render.reverse_expand_placeholders(
-        r, original, "Navigate to ~/MitosAgent first. EXTRA.") == \
+        r, original, "Navigate to ~/ContextTree first. EXTRA.") == \
         "Navigate to {{project_root}} first. EXTRA."
     assert render.reverse_expand_placeholders(
-        r, original, "Navigate to C:/MitosAgent first.") == original
+        r, original, "Navigate to C:/ContextTree first.") == original
     # scoping: a partial without the token is never touched
     assert render.reverse_expand_placeholders(
-        r, "No token here.", "Path ~/MitosAgent stays.") == "Path ~/MitosAgent stays."
+        r, "No token here.", "Path ~/ContextTree stays.") == "Path ~/ContextTree stays."
 
 def test_soul_and_new_session_skill_expand_project_root():
     # acceptance: on the rig machine (mitos-agent + agents-md, assistant_root set) SOUL.md
@@ -349,7 +307,7 @@ def test_soul_and_new_session_skill_expand_project_root():
     skill = next(o for p, o in by_path.items()
                  if p.endswith("new-session/SKILL.md"))
     for out in (soul, skill):
-        assert "MitosAgent" in out.content
+        assert "ContextTree" in out.content
         assert "{{project_root}}" not in out.content
     # the session protocol is inlined in SOUL (no skill-file hop) and the skill's own
     # copy stays in lock-step wording; neither leaves a literal token behind
@@ -469,30 +427,29 @@ def test_root_agents_md_gets_one_combined_generated_section():
     treg, tmp = _temp_registry()
     treg.machines["rig"]["document_store"] = "gws"
     outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("MitosAgent/AGENTS.md"))
+    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
     assert "(`gws`)" in root.content   # the connection section, headed by the store key
     assert "## Skills" in root.content
     gen = [s for s, _ in root.section_bodies if render.is_generated_source(s)]
     assert len(gen) == 1, "connections + skills + branches must merge into ONE <generated> section"
 
-def test_projects_agents_md_gets_generated_roster_and_org_table():
-    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster and the
-    # org-domain table merged into ONE <generated> section; the roster line comes from
-    # the manifest's name/slug/description, not hand-written prose.
+def test_projects_agents_md_gets_generated_roster():
+    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster in ONE
+    # <generated> section; the roster line comes from the manifest's name/slug/description,
+    # not hand-written prose.
     treg, tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
     pa = next(o for o in outs if o.deploy_path.endswith("Projects/AGENTS.md"))
     assert "## Project Roster" in pa.content
     assert "- `Projects/Example Project/` (example-project) — one-line summary" \
         in pa.content
-    assert "## Skills" in pa.content   # the org-domain table is the Projects node's Skills
     gen = [s for s, _ in pa.section_bodies if render.is_generated_source(s)]
-    assert len(gen) == 1, "roster + org table must merge into ONE <generated> section"
+    assert len(gen) == 1, "roster must be in ONE <generated> section"
 
 def test_root_agents_md_omits_connections_without_document_store():
     treg, tmp = _temp_registry()   # rig has no document_store set
     outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("MitosAgent/AGENTS.md"))
+    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
     assert "## Connections" not in root.content
 
 def test_assistant_agents_md_gets_connections_block():
@@ -508,7 +465,7 @@ def test_adopt_reverses_expanded_placeholder_in_who_i_am():
     from agentic.commands import cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     text = soul.read_text(encoding="utf-8")
     expanded_line = ("You are User's personal assistant, focusing on truth, clarity, and "
                      "usefulness rather than on mere politeness.")
@@ -536,7 +493,7 @@ def test_review_console_candidate_not_stale_from_expansion_alone():
     from agentic.commands import cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    soul = tmp / "home/MitosAgent/SOUL.md"
+    soul = tmp / "home/ContextTree/SOUL.md"
     live = soul.read_text(encoding="utf-8")
     anchor = treg.partials["identity/who-i-am.md"].body.splitlines()[0]
     soul.write_text(live.replace(anchor, anchor + " EDITED-VIA-CONSOLE", 1),
@@ -574,35 +531,6 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
 
-def test_scaffold_overlay_writes_mitos_agent_only_when_chosen():
-    """The flag is written ONLY for the user who picked the planning harness. An overlay
-    that restated the core default would read as a setting someone chose, in the one file
-    a user opens to see what is theirs."""
-    from agentic import init as initmod
-
-    _treg, tmp = _temp_registry()
-    initmod.scaffold_overlay(tmp, given_name="Sam", backend="mock", mitos_agent=True)
-    data = yaml.safe_load((tmp / "registry/local/user.yaml").read_text(encoding="utf-8"))
-    assert data["mitos_agent"] is True
-    assert loader.load(tmp).user["mitos_agent"] is True
-
-    _treg2, tmp2 = _temp_registry()
-    initmod.scaffold_overlay(tmp2, given_name="Sam", backend="mock")
-    data2 = yaml.safe_load((tmp2 / "registry/local/user.yaml").read_text(encoding="utf-8"))
-    assert "mitos_agent" not in data2
-    # …and the default still lands, from core
-    assert loader.load(tmp2).user["mitos_agent"] is False
-
-
-def test_overlay_readme_tells_the_owner_how_to_reveal_the_harness():
-    """The flag has no settings dialog on purpose — so the one file that explains the
-    overlay has to say where it lives and what turning it on does."""
-    from agentic import init as initmod
-
-    off = initmod._overlay_readme("none", False)
-    assert "mitos_agent: true" in off and "user.yaml" in off
-    on = initmod._overlay_readme("none", True)
-    assert "Mitos Agent: on" in on
 
 
 # ── {{returns_container}} (the store folder those records are published INTO) ─
@@ -627,7 +555,7 @@ def test_returns_container_expands_to_the_folder_the_connection_names():
 def test_returns_container_is_read_off_the_connection_not_the_machine():
     """The folder belongs to the STORE. Every machine wired to it publishes into the same one,
     and duplicating the id per machine is how two of them drift."""
-    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/MitosAgent"}):
+    for paths in ({}, {"projects_root": "C:/Projects", "assistant_root": "~/ContextTree"}):
         assert render.expand_placeholders(_ConnReg({}, servers=_RET_SERVERS),
                                           "{{returns_container}}", paths,
                                           {"document_store": "gws"}) == "FOLDER-1"
@@ -655,6 +583,24 @@ def test_the_container_token_and_the_root_token_are_different_places():
     """One is where the harness WRITES the record locally, the other is where the copy GOES.
     Collapsing them is how the store lane read an empty folder while records piled up on disk."""
     reg = _ConnReg({}, servers=_RET_SERVERS)
-    paths, machine = {"assistant_root": "~/MitosAgent"}, {"document_store": "gws"}
+    paths, machine = {"assistant_root": "~/ContextTree"}, {"document_store": "gws"}
     assert render.expand_placeholders(reg, "{{returns_root}}", paths, machine) \
         != render.expand_placeholders(reg, "{{returns_container}}", paths, machine)
+
+
+# ── Generic path token tests (TEST-08) ──────────────────────────────────────────
+def test_any_paths_key_expands_and_unknown_stays_literal():
+    r = _FakeReg({})
+    paths = {"custom_path": "/var/custom/data", "backup_dir": "/backup"}
+    template = "Copy from {{custom_path}} to {{backup_dir}} but not {{unknown_token}}"
+    assert render.expand_placeholders(r, template, paths) == "Copy from /var/custom/data to /backup but not {{unknown_token}}"
+
+
+def test_reverse_expand_round_trips_a_generic_path_token():
+    user = {"given_name": "", "full_name": "", "email": "", "location": ""}
+    machines = {"box1": {"paths": {"custom_store": "/srv/store"}}}
+    r = _FakeReg(user, machines)
+    original = "Data at {{custom_store}}."
+    expanded = "Data at /srv/store."
+    assert render.reverse_expand_placeholders(r, original, expanded) == original
+

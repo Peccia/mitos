@@ -5,6 +5,7 @@ pytest auto-imports this file, making all helpers available to every test_*.py f
 from __future__ import annotations
 
 import contextlib
+import shutil
 import sys
 from pathlib import Path
 
@@ -175,7 +176,7 @@ def _full_windows_rig():
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = [
-        "claude-code", "antigravity", "agents-md", "claude-app"]
+        "claude-code", "antigravity", "context-tree", "claude-app"]
     # pin the canonical drive layout too — projects_root is per-PC config (drive letters
     # vary by machine); path-resolution tests assert against this fixed value
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
@@ -223,16 +224,45 @@ def _temp_registry():
     conn.write_text(conn.read_text(encoding="utf-8").replace(
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
-        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "agents-md"],
+        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "context-tree"],
         # rig is the fully-wired rig: it hosts gws AND declares the connection, so
         # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
         "document_store": "gws",
-        "paths": {"assistant_root": f"{home}/MitosAgent",   # single install root
+        "paths": {"context_root": f"{home}/ContextTree",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
+    _plant_overlay_target(tmp, "mitos-agent")
     (tmp / "machines" / "rig.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")
     return loader.load(tmp), tmp
+
+def _plant_overlay_target(tmp: Path, name: str = "mitos-agent") -> Path:
+    dest_dir = tmp / "registry" / "local" / "targets"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fixture_dir = REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent"
+    src = fixture_dir / f"{name}.yaml"
+    dest = dest_dir / f"{name}.yaml"
+    if src.is_file():
+        dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    # Also bridge identity and skills needed by the overlay target in the temp registry's core
+    proto_src = fixture_dir / "identity" / "session-protocol.md"
+    if proto_src.is_file():
+        core_id_dir = tmp / "registry" / "identity"
+        (core_id_dir / "session-protocol.md").write_text(
+            proto_src.read_text(encoding="utf-8"), encoding="utf-8")
+    for id_file in ("who-i-am.md", "operating-rules.md", "security.md", "comms-style.md"):
+        core_id = tmp / "registry" / "identity" / id_file
+        if core_id.is_file():
+            text = core_id.read_text(encoding="utf-8")
+            if "audience: [" in text:
+                text = text.replace("audience: [", f"audience: [{name}, ")
+            core_id.write_text(text, encoding="utf-8")
+    for s_file in (tmp / "registry" / "skills").glob("*/SKILL.md"):
+        text = s_file.read_text(encoding="utf-8")
+        if "targets: [" in text:
+            text = text.replace("targets: [", f"targets: [{name}, ")
+            s_file.write_text(text, encoding="utf-8")
+    return dest
 
 def _plant_candidate(tmp, cid, meta, payload_name, payload_text):
     import yaml as _y
@@ -278,6 +308,11 @@ def _make_overlay_hub(tmp):
     _run_git(seed, "config", "user.name", "t")
     (seed / "identity").mkdir()
     (seed / "identity" / "who.md").write_text("v0\n", encoding="utf-8")
+    dest_dir = seed / "targets"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_fixture = REPO_ROOT / "build" / "tests" / "fixtures" / "overlay-agent" / "mitos-agent.yaml"
+    if target_fixture.exists():
+        shutil.copyfile(target_fixture, dest_dir / "mitos-agent.yaml")
     _run_git(seed, "add", "-A")
     _run_git(seed, "commit", "-m", "init")
     _run_git(seed, "branch", "-M", "main")

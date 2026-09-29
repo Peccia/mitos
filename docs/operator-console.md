@@ -51,11 +51,20 @@ Reload.
 - Only one compile or deploy runs at a time; starting a second while one is in flight is
   refused, not queued.
 
+### ⚠️ Registry Load Warnings Banner
+
+If the registry loader encounters non-fatal configuration anomalies, a prominent **Registry Warning(s)**
+callout banner appears across the top of the console:
+- **Retired `user.yaml` keys**: Warnings if retired keys such as `mitos_agent` or `default_deliverables` are found, naming the exact line to remove.
+- **Retired graph predicates**: Alerts if any project graph contains retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, `peccia:orgDomain`), prompting you to run `python build/mitos.py graph strip-retired --all`.
+- **Unknown targets**: Alerts if a machine profile lists an unknown or missing target adapter, which safely skips deployment for that target on that machine.
+
 ---
 
 ## 📥 The Inbox Tab: Drift & Candidate Review
 
-When a self-improving tool (like Mitos Agent) refines its own copy of a skill, or when you edit a deployed file, the changes are captured in your overlay inbox (`registry/local/inbox/`) as **candidates**.
+When a self-improving tool refines its own copy of a skill, or when you edit a deployed file, the changes are captured in your overlay inbox (`registry/local/inbox/`) as **candidates**.
+
 
 ### 🔍 Diffs & Review
 - The Inbox lists all pending candidates with their capture timestamps, target tools, and logical paths.
@@ -160,47 +169,6 @@ surfaced it — presence anywhere always wins over absence from one scope. The s
 this before clearing anything, so a stale browser tab can never purge a document that's still
 live in some watch.
 
-### Defaults, and the one warning the editor shows
-
-**`+ Work` starts with the project's default deliverables already ticked.** They resolve down a
-chain, and every level of it is a file that already existed:
-
-```
-the effort's own deliverables         ->  wins, always
-  otherwise: the project's default        registry/projects/<slug>.yaml
-    otherwise: the registry-wide default  registry/user.yaml
-```
-
-The Project panel edits the per-project level through the **same `kind: project` valve** every
-other manifest edit uses — an `inherit` checkbox plus a checkbox group, so all three states are
-authorable: inherit (key absent), an explicit set, or an explicit *empty* set meaning "inherit
-nothing". The registry-wide value is shown **read-only** beside the checkbox; it lives in
-`registry/user.yaml`, which the owner edits directly, and inventing a candidate lane for one
-rarely-changed key would be more machinery than the edit is worth.
-
-The effort editor also marks each deliverable with **which skill produces it** (hover), or
-`(no skill)` when nothing declares `delivers: <term>`. That badge is registry-wide on purpose:
-`deploy --dry-run` already reports the exact per-machine gap, and a badge that changed meaning with
-the status-bar machine selector would be read as that check without being it.
-
-The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
-regardless of shape, which is what a silently inherited default should be. Override it per project
-with the same `default_deliverables:` key in the project manifest. Setting it to `[]` inherits
-*nothing*, which is a real answer and deliberately different from omitting the key. The console
-resolves the chain server-side and hands the editor the answer, so the UI can never drift from it.
-
-The editor shows one warning: **an effort that declares requirements coverage but no
-`requirements-receipt`**. That effort runs a requirements interview, and the receipt is what reports
-which of those requirements an implementation actually met — declare the interview without the
-receipt and that half of the loop closes quietly. Mitos cannot see settled requirements (they live
-in the agent's record, across the boundary), so declared coverage is the checkable proxy for "this
-effort gathers requirements". It is a warning, never a block: the registry-wide default deliberately
-omits the receipt, and the owner may have a reason.
-
-### ✅ Expected deliverables on efforts
-
-The effort editor also carries an **Expected deliverables** checkbox group — the *forward contract*: the artifacts every implementation of that effort must produce. The vocabulary is closed (`documentation`, `tests`, `changelog`, `deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`), so it is a checkbox group rather than a free-text field; the boxes are rendered from the registry's own `graph.KNOWN_DELIVERABLES` constant (exposed as `known_deliverables` in `/api/state`), so adding a term to that constant surfaces here with no UI edit. The selection compiles into an `_Expected deliverables: …._` line under the effort's heading in every generated view and is read back by the Mitos Agent planning harness to seed a plan's `## Expected Deliverables` checklist. An unknown value is rejected at propose time with the valid set named. The field is optional — an untagged effort renders no line.
-
 ### ✔️ Done state on efforts
 
 The effort editor has a **Mark as Done** checkbox and an **Implemented Document ID** field. Done
@@ -224,19 +192,6 @@ proposal carries both the mapping and the Done change. From the CLI, `python bui
 graph --project <slug> --complete-effort <id> [--evaluation-doc <doc-id>]` proposes the same
 change without writing the graph.
 
-### 🔎 Requirements coverage on efforts
-
-Beside it sits a **Requirements coverage** checkbox group — the *interview contract*, the mirror
-image of expected deliverables. Where deliverables name what an implementation must **produce**,
-coverage names the dimensions a requirements-gathering session must not leave **unasked**:
-`performance`, `security`, `failure-recovery`, `data-retention`, `access-control`, `scale`. The
-vocabulary is closed for the same reason, rendered from `graph.KNOWN_COVERAGE` (exposed as
-`known_coverage` in `/api/state`), so adding a term to that constant surfaces here with no UI
-edit. The selection compiles into a `_Requirements coverage: …._` line under the effort's
-heading in every generated view, directly after the deliverables line. An unknown value is
-rejected at propose time with the valid set named. The field is optional — an untagged effort
-renders no line.
-
 ---
 
 ## 🧩 The Skills Tab: Skill Cards
@@ -246,20 +201,9 @@ its description and target chips (which tools it deploys to).
 
 The grid opens **scoped to your machines**: only skills a machine in your registry would
 actually deploy. That is the same question `deploy` answers, so both gates apply — a skill's
-`targets:` *and* its `requires_server:` connection. On a coding-harness box with no
-`document_store:` several shipped core skills drop out (`new-session`, `graph-bootstrap` and
-`project-update` target the planning harness; `gws` needs its server wired), leaving your own.
-Switch the **All** chip to browse the whole registry.
+`targets:` *and* its `requires_server:` connection. Switch the **All** chip to browse the whole registry.
 
-**One category is hidden rather than scoped.** The `org-*` domain skills belong to the Mitos
-Agent planning harness, which is an incubating work in progress, so they do not appear under
-either scope and neither does the `mitos-agent` target chip. To work on them, set
-`mitos_agent: true` in `registry/local/user.yaml` and press **Reload from disk** — the org
-cards, the **Orgs only** filter, **+ New org**, the effort editor's **Org domain** field and the
-org panel in the skill drawer all come back, and the tab relabels itself **Skills & Orgs**. This
-is a display setting only: what a machine compiles and deploys is decided by its own `targets:`,
-never by this flag. The
-per-target chips beside it come from the targets your machines *declare*, not every adapter
+The per-target chips beside it come from the targets your machines *declare*, not every adapter
 Mitos supports: a filter that can only ever empty the list isn't a filter. A fresh clone with
 no machine profile yet shows everything. The card face carries only what *distinguishes* one skill from another;
 every skill's uniform detail lives in one reusable **properties drawer** that slides in from the
@@ -287,16 +231,22 @@ provenance, so they sit there as a single compact line rather than a grid of car
   exclude a tool.
 - **Import from .zip**: A placeholder for a future release — no backend yet.
 
+### 🌲 Context Tree in the Console
+
+On the Skills tab, the **Context Tree** button toggles a visual browser for machines that deploy `context-tree`:
+- **Machine Selector**: Switch between machines configured with `context-tree` to see their planned directory trees.
+- **Tree Explorer**: Inspect directory branches (`AGENTS.md` root, `Projects/`, `Assistant/`), view rendered file contents, and verify navigation hierarchies before deploying.
+
 ### 🤖 Agents in the Console
 
-When `mitos_agent: true` is enabled in `registry/local/user.yaml`, the Skills toolbar reveals an **Agents** chip alongside "Orgs only".
+The Skills toolbar includes an **Agents** view toggle to manage subagent personas across supported harnesses:
 
-- **Agents Chip & Grid**: Clicking **Agents** swaps the grid from skills to agent cards, sharing the search input to filter agents by name, description, or goal.
-- **Agent Cards**: Each card displays the agent's name, description, **Goal** (intended outcome), assigned skills (each clickable to view that skill's card and drawer), and the machines where the agent is active with their current count and cap (e.g. `example-linux (1 of 20)`).
-- **+ New agent**: Form providing inputs for name (slug), description, goal, a skills picker constrained to skills that target `mitos-agent`, and an embedded Contextual Editor for the agent's Markdown body instructions. Submitting writes a `kind: new` candidate to `registry/local/inbox/`.
-- **Edit agent**: Clicking **Edit agent →** on any card opens the edit form for that agent's description, goal, assigned skills, and body. Submitting proposes a `kind: drift` candidate to the Inbox.
-- **Draft Preservation**: Like skill forms, agent forms maintain in-memory drafts (`newAgentFieldDraft`, `newAgentDraftBody`, `agentEditDraft`) that survive re-renders and tab switches until saved or cancelled.
-- **Inbox Proposal Flow**: The console never writes to `registry/` directly (console invariant #3). Once proposed, review the candidate's diff in the **Inbox** tab and click **Accept** to write or update `registry/local/agents/<name>.md`.
+- **Agents View & Grid**: Clicking **Agents** swaps the grid from skills to agent cards, sharing the search input to filter agents by name, description, or goal.
+- **Agent Cards**: Each card displays the agent's name, description, **Goal** (intended outcome), assigned skills (each clickable to view that skill's card and drawer), and the machines where the agent is active.
+- **+ New agent / Edit agent**: Forms providing inputs for portable fields (`name`, `description`, `goal`, `skills`) and named harness blocks (e.g. `claude-code: {tools: [...], model: ...}`).
+- **Skill Compatibility Warning**: The skills picker checks whether selected skills deploy to all targeted harnesses and displays inline warnings if a chosen skill is missing from any target.
+- **Draft Preservation**: Like skill forms, agent forms maintain in-memory drafts that survive re-renders and tab switches until saved or cancelled.
+- **Inbox Proposal Flow**: Submitting writes a `kind: new` or `kind: drift` candidate to `registry/local/inbox/`. Once proposed, review the candidate's diff in the **Inbox** tab and click **Accept** to write or update `registry/local/agents/<name>.md`.
 
 ---
 
@@ -304,7 +254,7 @@ When `mitos_agent: true` is enabled in `registry/local/user.yaml`, the Skills to
 
 The **Prompt Library** acts as a scratchpad and library for one-shot chat sessions in tools that Mitos does not deploy directly to (like standard web/desktop chat interfaces).
 
-- **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Like the Skills tab, the Library opens **scoped to your machines** — a coding-harness box isn't handed the mitos-agent-only skill bodies or the agentic-tree partials (`agentic-root.md`, `projects-index.md`, `operating-rules.md`) it can never use; the **All** chip reveals them. The scope pair only appears when something is actually being withheld. Kind/category chips reflect what the active scope contains, so a chip never yields an empty list. A prompt with no `targets:` is console-only by design and always shows. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
+- **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Like the Skills tab, the Library opens **scoped to your machines** — a coding-harness box isn't handed context-tree partials (`agentic-root.md`, `projects-index.md`, `operating-rules.md`) if it doesn't deploy them; the **All** chip reveals them. The scope pair only appears when something is actually being withheld. Kind/category chips reflect what the active scope contains, so a chip never yields an empty list. A prompt with no `targets:` is console-only by design and always shows. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
 - **Find anything (Ctrl/⌘K)**: Opens a command palette that searches every skill, prompt, and partial at once, from any tab — pick a result to jump straight to it in the Prompt Library.
 - **Favorites**: Toggle the star icon to pin a skill or prompt to your favorites list (drag to reorder, or use **Manage** for batch-unpin). Pins persist to `registry/local/prompt-favorites.yaml` and sync across sessions/devices.
 - **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal.

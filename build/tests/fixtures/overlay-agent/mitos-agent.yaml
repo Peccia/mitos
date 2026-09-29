@@ -20,7 +20,7 @@ target: mitos-agent
 # the core working rules immediately after, then security/comms, session protocol last.
 context_file:
   sources: [identity/who-i-am.md, identity/operating-rules.md, identity/security.md, identity/comms-style.md, identity/session-protocol.md]
-  deploy_to_key: assistant_root          # the single install root (resolved per machine)
+  deploy_to_key: context_root          # the single install root (resolved per machine)
   filename: SOUL.md
   drift_policy: protect
 
@@ -38,7 +38,7 @@ skills:
   # Names are validated against registry/skills/ at compile. After deselecting, run
   # `deploy --machine <m> --prune` to remove the already-deployed copies.
   mode: copy
-  deploy_to_key: assistant_root
+  deploy_to_key: context_root
   subdir: skills/{category}/{name}       # preserves the devops/productivity grouping
   # Emit Mitos-Agent-native frontmatter: name, description, version, author, license,
   # platforms, and metadata.mitos_agent.tags (reconstructed from the canonical tag key
@@ -50,8 +50,9 @@ skills:
 # Curation lives in machine profiles under `agents: {include: [...] | exclude: [...]}`;
 # after deselecting, run `deploy --machine <m> --prune` to remove the already-deployed copies.
 agents:
-  deploy_to_key: assistant_root
+  deploy_to_key: context_root
   subdir: agents
+  supports_skills: true
   drift_policy: harvest
 
 # MCP — a WHOLE mcp.json Mitos owns (invariant #7 does not apply: this is Mitos Agent's
@@ -61,6 +62,6 @@ agents:
 # — a single hard-coded alias would defeat that.
 mcp:
   filename: mcp.json
-  deploy_to_key: assistant_root
+  deploy_to_key: context_root
   render: mitos_agent_mcp_config
   drift_policy: protect

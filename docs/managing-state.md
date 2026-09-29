@@ -103,8 +103,8 @@ when its deployed copy drifts:
 - **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill the assistant tunes).
   On drift, deploy **captures the edit to `inbox/` and then overwrites** (registry wins), so the
   proposal is preserved for you to accept later, and the machine still converges on the registry.
-- **`generated`** — knowledge-graph-derived files with no human prose: the Agentic Context
-  **roster** (`AGENTS.md` at the tree root) and, on the agents-md/Mitos-Agent side, each project's
+- **`generated`** — knowledge-graph-derived files with no human prose: the Context Tree
+  **roster** (`AGENTS.md` at the tree root) and, in a context tree, each project's
   `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
   **overwritten silently** and are **non-adoptable** (there's no registry partial to route an edit
   back to — edit `registry/graph/<slug>.jsonld` instead). A picture lives there as a
@@ -124,13 +124,13 @@ source is your `.local/` overlay), staged `.zip` skills (binary build artifacts)
 
 **Skill supporting files.** A skill's `examples/` and `scripts/` files deploy alongside
 `SKILL.md` as their own separately-tracked outputs, each carrying the skill's own drift
-policy (`harvest` on mitos-agent/claude-code) — an edited script drifts, captures, and
+policy (`harvest` on claude-code) — an edited script drifts, captures, and
 adopts/harvests **back to its own file**, never to `SKILL.md`. Deploy also sets the executable
 bit on files under `scripts/` when the target machine isn't Windows.
 
 ## Worked example: a first deploy onto a populated machine
 
-This is the exact plan from a first real deploy where the machine already had Antigravity/Mitos-Agent files:
+This is the exact plan from a first real deploy where the machine already had Antigravity/Claude files:
 
 ```
 deploy plan for windows-laptop (apply):
@@ -139,10 +139,10 @@ deploy plan for windows-laptop (apply):
   [unchanged] ~/.gemini/config/skills/gws/SKILL.md — untracked existing file
   [conflict ] ~/.gemini/config/skills/changelog/SKILL.md — untracked existing file  <-- will capture to inbox/, then overwrite
   [conflict ] ~/ClaudeSkills/gws.zip — untracked existing file  <-- protected, blocked
-  [create   ] C:/Projects/MyAssistant/AGENTS.md
-  [create   ] C:/Projects/MyAssistant/Projects/apdict/AGENTS.md
+  [create   ] C:/Projects/ContextTree/AGENTS.md
+  [create   ] C:/Projects/ContextTree/Projects/apdict/AGENTS.md
   ...
-  [clone    ] C:/Projects/MyAssistant/Projects/mitos/mitos — absent -> will clone
+  [clone    ] C:/Projects/ContextTree/Projects/mitos/mitos — absent -> will clone
 
 refusing to deploy: 2 protected file(s) drifted. Resolve with `adopt` / `harvest`, or pass --force.
 ```
@@ -211,8 +211,7 @@ ever overlap.
 > orphans are computed as lockfile-paths minus planned-paths — those keys never surface as a
 > reportable orphan and `--prune` cannot reach them. Invariant #9's "deletion is explicit" holds; its
 > companion "orphans are reported" does not, because merges live outside the orphan mechanism. Removing
-> a retired merge's keys is a manual edit of the tool's config file. (Mitos Agent avoids this for its
-> own wiring by owning `mcp.json` as a whole file, not a merge.) A separate change to lockfile-track
+> a retired merge's keys is a manual edit of the tool's config file. A separate change to lockfile-track
 > merge outputs so retirement becomes reportable is tracked but not yet implemented.
 
 ## The reconciliation toolbox
@@ -249,7 +248,7 @@ ever overlap.
 - **Example-project guard.** The shipped `registry/projects/example-project.yaml` is a sample
   (`example: true`). It renders on a fresh clone (so the quick-start shows a worked example), but
   steps aside automatically as soon as you add your own projects under `registry/local/projects/`
-  — so a configured fleet's roster and assistant tree never list the sample. Same spirit as the
+  — so a configured fleet's roster and context tree never list the sample. Same spirit as the
   machine guard, but keyed off "you have overlay projects" rather than a per-deploy refusal.
 - **Lanes.** `--lane content` touches only prose; `--lane connections` touches only MCP wiring +
   env files; default `all` does both. Orphans are always computed against the **full** plan, so a
@@ -271,8 +270,9 @@ it, so drift candidates and staged document listings move to your review PC via 
 ## Automating an update
 
 `mitos update --machine M --json` is the unattended form of `sync pull`, for a caller that
-reads data instead of prose (MitosAgent's updater). It runs **core pull → overlay pull →
+reads data instead of prose (such as a harness updater or scheduled runner). It runs **core pull → overlay pull →
 deploy**, stops at the first failure, and prints exactly one `schema: 1` JSON object on stdout
+
 (all deploy prose goes to stderr). The exit code is 0 only when the outcome's `ok` is true; 2
 means an unknown machine.
 

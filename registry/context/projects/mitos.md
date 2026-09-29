@@ -1,12 +1,11 @@
 ---
-audience: [claude-code, agents-md]
+audience: [claude-code, context-tree]
 ---
 # Mitos
 
-Mitos and MitosAgent together close the agentic SDLC loop. Mitos is the registry and
-compiler that materializes one canonical body of context across every tool and machine.
-MitosAgent is the planning harness that reads that context to ground a request and plan the
-work before a coding harness executes it.
+Mitos closes the agentic SDLC loop. It is the registry and compiler that materializes one
+canonical body of context across every tool and machine, so any harness, including a planning
+harness, can ground a request in it before a coding harness executes it.
 
 ## Navigation
 

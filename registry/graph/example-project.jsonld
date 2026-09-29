@@ -13,11 +13,10 @@
       "@id": "http://peccia.net/creativework/launch-prep",
       "@type": "CreativeWork",
       "name": "Launch Prep",
-      "description": "Marketing work for the public launch — an example of tagging an effort with an org domain.",
+      "description": "Marketing work for the public launch.",
       "isPartOf": {
         "@id": "http://peccia.net/project/example-project"
-      },
-      "http://peccia.net/orgDomain": "marketing"
+      }
     },
     {
       "@id": "http://peccia.net/document/EXAMPLE_DRIVE_ID_1",

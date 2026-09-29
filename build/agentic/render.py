@@ -146,26 +146,22 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
     - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
-      tree the persona navigates — `assistant_root` (the single Mitos Agent install root,
-      holding both the tree and the harness's own files) over `agentic_context_root` (the
-      agents-md-machine context tree) over `projects_root` (plain workstation checkouts).
-    - `skills_root`: where deployed skills live — `<assistant_root>/skills` (matches the
-      mitos-agent target's `skills.subdir` prefix; SOUL/skills/mcp share the install root
-      with the tree).
+      tree the persona navigates — `context_root` (the context tree root) over
+      `agentic_context_root` (the reference context tree) over `projects_root` (plain workstation checkouts).
+    - `skills_root`: where deployed skills live — `<context_root>/skills`.
     - `returns_root`: where a coding harness writes what it produced, for the return lane.
-      On a machine hosting Mitos Agent this is its state directory's `returns/` — the exact
-      folder `mitos-agent returns` reads. On a coding-only box there is no such harness and
-      therefore no state directory, so it falls back to a machine-wide `.mitos-returns/`
-      beside the checkouts.
+      On a machine hosting a planning harness this is its state directory's `returns/` — the folder
+      returns reads. On a coding-only box there is no such harness and therefore no state directory,
+      so it falls back to a machine-wide `.mitos-returns/` beside the checkouts.
 
       That fallback is a real seam and is documented as one: records written there are
       correct and complete, but nothing on that box reads them, so the owner points
-      `mitos-agent returns --from` at the folder (or syncs it). Deliberately NOT reusing
+      the returns collector at the folder (or syncs it). Deliberately NOT reusing
       `project_root`: it resolves to `projects_root` on a coding box, which would put the
       records inside a path the harness's own resolver never looks at while LOOKING like it
       had worked — a silently wrong path is worse than an obviously separate one.
     - `returns_container`: the store folder an implementation's return records are published
-      into — the store-side twin of `returns_root`, and the same id `mitos-agent` reads back.
+      into — the store-side twin of `returns_root`, and the same id a harness reads back.
       Read off the CONNECTION (`servers.yaml`), not the machine: the folder belongs to the
       store, so every machine wired to it publishes into the same one and no two machines can
       drift. `None` (token stays literal) when the store has no folder configured, which the
@@ -224,21 +220,28 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     if not paths:
         return None
     if key == "project_root":
-        for k in ("assistant_root", "agentic_context_root", "projects_root"):
+        if "project_root" in paths:
+            return str(paths["project_root"]).rstrip("/")
+        for k in ("context_root", "assistant_root", "agentic_context_root", "projects_root"):
             val = paths.get(k)
             if val:
                 return str(val).rstrip("/")
-        return None
     if key == "skills_root":
-        home = paths.get("assistant_root")
+        if paths.get("skills_root"):
+            return str(paths["skills_root"]).rstrip("/")
+        home = paths.get("context_root") or paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
     if key == "returns_root":
-        home = paths.get("assistant_root")
+        if paths.get("returns_root"):
+            return str(paths["returns_root"]).rstrip("/")
+        home = paths.get("context_root")
         if home:
-            # Must match mitos_agent.state.state_dir: <root>/.local-memory/, then returns/.
             return f"{str(home).rstrip('/')}/.local-memory/returns"
         projects = paths.get("projects_root")
         return f"{str(projects).rstrip('/')}/.mitos-returns" if projects else None
+    if key in paths:
+        val = paths.get(key)
+        return str(val).rstrip("/") if val is not None else None
     return None
 
 
@@ -288,9 +291,9 @@ def machine_token_names() -> list[str]:
 def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = None,
                         machine: dict | None = None) -> str:
     """Substitute the fixed personalization tokens with `reg.user` values, plus the
-    machine-scoped tokens (`_MACHINE_TOKENS`) resolved from the deploying machine's
-    paths (`_machine_value`). Without `machine_paths` (or on a machine that defines
-    no matching path) a machine token stays literal, like any other unconfigured one.
+    machine-scoped tokens resolved from the deploying machine's paths (`_machine_value`).
+    Without `machine_paths` (or on a machine that defines no matching path) a token stays
+    literal, like any other unconfigured one.
 
     `machine` is the whole machine profile, needed by `{{connection}}` alone — it resolves
     from `document_store:` and `connections/servers.yaml`, not from `paths:`. Omitting it
@@ -298,9 +301,13 @@ def expand_placeholders(reg: Registry, text: str, machine_paths: dict | None = N
     its exact behaviour."""
     def _sub(m: re.Match) -> str:
         key = m.group(1)
-        val = (_machine_value(machine_paths, key, machine, _servers(reg))
-               if key in _MACHINE_TOKENS else _user_value(reg.user, key))
-        return val if val is not None else m.group(0)
+        val = _user_value(reg.user, key)
+        if val is not None:
+            return val
+        val = _machine_value(machine_paths, key, machine, _servers(reg))
+        if val is not None:
+            return val
+        return m.group(0)
     return _PLACEHOLDER_RE.sub(_sub, text)
 
 
@@ -315,78 +322,30 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     "Example" (user_given_name) — otherwise replacing "Example" first would strand " User"
     instead of restoring the full-name token.
 
-    Machine-scoped tokens (`_MACHINE_TOKENS`) reverse against every machine's value
+    Machine-scoped tokens reverse against every machine's value
     (the adopt/review caller doesn't always know which machine the live text was
     expanded for), still scoped to partials that actually carry the token.
     """
     tokens = sorted(set(_PLACEHOLDER_RE.findall(original_text)))
     pairs = []
+    servers = _servers(reg)
+    machines = list(getattr(reg, "machines", {}).values())
     for tok in tokens:
-        if tok in _MACHINE_TOKENS:
-            servers = _servers(reg)
-            vals = {_machine_value((m or {}).get("paths"), tok, m, servers)
-                    for m in getattr(reg, "machines", {}).values()}
-            pairs += [(v, f"{{{{{tok}}}}}") for v in vals if v]
-            continue
         val = _user_value(reg.user, tok)
         if val:
             pairs.append((val, f"{{{{{tok}}}}}"))
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        for m in machines:
+            m_paths = (m or {}).get("paths")
+            m_val = _machine_value(m_paths, tok, m, servers)
+            if m_val:
+                pairs.append((m_val, f"{{{{{tok}}}}}"))
+    unique_pairs = list(dict.fromkeys(pairs))
+    unique_pairs.sort(key=lambda p: len(p[0]), reverse=True)
     out = live_text
-    for val, tok in pairs:
+    for val, tok in unique_pairs:
         out = out.replace(val, tok)
     return out
 
-
-# ── Org-roles generated block ────────────────────────────────────────────────
-def _org_description(skill_body: str) -> str:
-    """Extract the first paragraph under `## Description` in a skill body."""
-    m = re.search(r"## Description\n(.*?)(?:\n##|\Z)", skill_body, re.DOTALL)
-    if not m:
-        return ""
-    return m.group(1).strip()
-
-
-def _org_primary_chain(skill_body: str) -> str:
-    """Build a `A → B → C` chain from the `## 1.`, `## 2.`, `## 3.` section headers."""
-    roles = re.findall(r"^## \d+\.\s+(.+?)(?:\s+—.*)?$", skill_body, re.MULTILINE)
-    # strip sub-qualifier (e.g. "CEO — intent and objectives" → "CEO")
-    names = [r.split("—")[0].strip() for r in roles]
-    return " → ".join(names) if names else ""
-
-
-def org_domain_table(skills: list) -> str:
-    """Generate the `## Skills` section for `Projects/AGENTS.md` from the active
-    org-domain skills (those whose frontmatter declares `org_domain`).
-
-    Reserved section name (the taxonomy contract): every node's applicable playbooks live
-    under `## Skills`; at the Projects node those are the simulated domain organizations.
-    Each row shows: domain key, skill name, one-line description, and the primary
-    delegation chain derived from the skill's section headers. Sorted by domain for
-    stable output.
-    """
-    org_skills = [s for s in skills if s.frontmatter.get("org_domain")]
-    org_skills.sort(key=lambda s: s.frontmatter["org_domain"])
-    if not org_skills:
-        return ""
-
-    lines: list[str] = [
-        "## Skills",
-        "",
-        "Simulated domain organizations for project work. Load the skill named in the "
-        "`Skill` column that matches the task's domain before delegating any project work.",
-        "",
-        "| Domain | Skill | Description | Primary chain |",
-        "|---|---|---|---|",
-    ]
-    for s in org_skills:
-        domain = s.frontmatter["org_domain"]
-        desc = _org_description(s.body)
-        # Collapse multiline description to a single sentence for the table cell
-        first_sentence = re.split(r"(?<=[.!?])\s", desc)[0] if desc else ""
-        chain = _org_primary_chain(s.body)
-        lines.append(f"| `{domain}` | `{s.name}` | {first_sentence} | {chain} |")
-    return "\n".join(lines) + "\n"
 
 
 _H2_HEADING = re.compile(r"^## ", re.MULTILINE)
@@ -436,9 +395,9 @@ def navigation_block(repos: list[tuple[str, str]], *, emit_heading: bool = True)
     return "\n".join(lines) + "\n"
 
 
-def agentic_tree_note_block(subdir: str) -> str:
+def context_tree_note_block(subdir: str) -> str:
     """The `<generated>` cross-reference appended to a project's own root AGENTS.md when
-    that project ALSO has an agentic_tree: mount — the "project within a project" note:
+    that project ALSO has a context_tree: mount — the "project within a project" note:
     two AGENTS.md-shaped files legitimately coexist (this one is the project's own
     document/repo index; the mount is a full operating tree), so name the split
     explicitly rather than leaving a reader to wonder which one is authoritative."""
@@ -450,6 +409,9 @@ def agentic_tree_note_block(subdir: str) -> str:
         f"See [`{subdir}/AGENTS.md`]({subdir}/AGENTS.md) for that context; this file is "
         f"this project's own document/repo index, generated separately.\n"
     )
+
+
+agentic_tree_note_block = context_tree_note_block
 
 
 def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:
@@ -499,12 +461,9 @@ def connections_block(servers: dict, machine: dict, user: dict) -> str:
 
 def skills_block(skills: list) -> str:
     """The `<generated>` "## Skills" section for the operating root: one bullet per
-    general-purpose (non org-domain) skill selected for this machine's Mitos Agent
-    deployment, sourced from each skill's frontmatter `description` — the single place
-    that text lives now (mirrors org_domain_table, which does the same for org-domain
-    skills in their own table)."""
-    general = sorted((s for s in skills if not s.frontmatter.get("org_domain")),
-                     key=lambda s: s.name)
+    skill selected for this machine's deployment, sourced from each skill's frontmatter
+    `description` — the single place that text lives now."""
+    general = sorted(skills, key=lambda s: s.name)
     if not general:
         return ""
     lines = ["## Skills", "",
@@ -550,14 +509,40 @@ _SKILL_BANNER = (
 )
 
 
-def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
+def render_skill(skill: Skill, target: str = "", body: str | None = None,
+                 frontmatter: str | None = None) -> str:
     """Render a skill's SKILL.md in the frontmatter flavor a target expects.
 
     `body` overrides skill.body when given, for a caller that renders something other than
-    the registry's own text."""
+    the registry's own text. `frontmatter` optionally selects the style ('full', 'minimal',
+    or a harness style)."""
     fm = skill.frontmatter
     b = body if body is not None else skill.body
-    if target == "mitos-agent":
+    style = frontmatter
+    if style is None:
+        if target in ("claude-code", "claude-app", "antigravity"):
+            style = "minimal"
+        elif target:
+            style = target
+        else:
+            style = "full"
+
+    if style == "minimal":
+        # Agent Skills standard frontmatter: name + description. Antigravity follows
+        # the same open standard — one shared branch, deliberately not a fourth flavor.
+        meta = {"name": fm.get("name", skill.name),
+                "description": fm.get("description", "")}
+        return _frontmatter_doc(meta, b)
+    elif style == "full":
+        # Pass-through: unknown skill frontmatter survives a frontmatter: full copy byte-for-byte,
+        # excluding only internal compiler keys.
+        _EXCLUDE = {"targets"}
+        meta = {k: v for k, v in fm.items() if k not in _EXCLUDE}
+        return _frontmatter_doc(meta, b)
+    elif style:
+        # Harness-specific frontmatter: look for style metadata under style_key
+        # (e.g. style 'my-harness' maps to style_key 'my_harness').
+        style_key = style.replace("-", "_")
         meta = {
             "name": fm["name"],
             "description": fm.get("description", ""),
@@ -566,18 +551,13 @@ def render_skill(skill: Skill, target: str, body: str | None = None) -> str:
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
-        # The per-skill tag block is authored under `mitos_agent:` in registry SKILL.md
-        # frontmatter — inert metadata (tags), not a target reference.
-        tag_meta = fm.get("mitos_agent")
+        tag_meta = fm.get(style_key)
         if tag_meta:
-            meta["metadata"] = {"mitos_agent": tag_meta}
+            meta["metadata"] = {style_key: tag_meta}
+        if fm.get("scripts"):
+            meta["scripts"] = fm["scripts"]
         return _frontmatter_doc(meta, b)
-    if target in ("claude-code", "claude-app", "antigravity"):
-        # Agent Skills standard frontmatter: name + description. Antigravity follows
-        # the same open standard — one shared branch, deliberately not a fourth flavor.
-        meta = {"name": fm.get("name", skill.name),
-                "description": fm.get("description", "")}
-        return _frontmatter_doc(meta, b)
+
     raise ValueError(f"skill rendering not defined for target {target!r}")
 
 
@@ -600,16 +580,66 @@ def _frontmatter_doc(meta: dict, body: str) -> str:
 
 
 # ── Agents ───────────────────────────────────────────────────────────────────
-def render_agent(agent: Agent) -> str:
-    """Render an agent Markdown file with YAML frontmatter in canonical order:
-    name, description, goal, skills."""
+def render_agent(agent: Agent, target: str = "", supports_skills: bool = True,
+                 has_goal: bool | None = None) -> str:
+    """Render an agent Markdown file with YAML frontmatter.
+    If target is omitted/empty (authoring / console save / registry candidate):
+        Writes canonical frontmatter: name, description, targets, goal, skills,
+        plus all harness_blocks preserved byte-for-byte. Body is agent.body.
+    If target is provided (deployment):
+        Writes target-specific frontmatter:
+        - name, description
+        - splices in harness_blocks[target] if present
+        - skills: list(agent.skills) if supports_skills and agent.skills
+        - goal: agent.goal if has_goal is True (default for targets other than claude-code)
+        If has_goal is False, folds goal into body: ## Goal\n\n{agent.goal}\n\n{agent.body}
+    """
+    if not target:
+        meta: dict[str, Any] = {
+            "name": agent.name,
+            "description": agent.description,
+            "targets": list(agent.targets),
+        }
+        if agent.goal:
+            meta["goal"] = agent.goal
+        if agent.skills:
+            meta["skills"] = list(agent.skills)
+        if agent.harness_blocks:
+            for k, v in agent.harness_blocks.items():
+                meta[k] = v
+        return _frontmatter_doc(meta, agent.body)
+
+    if has_goal is None:
+        has_goal = (target != "claude-code")
+
     meta = {
         "name": agent.name,
         "description": agent.description,
-        "goal": agent.goal,
-        "skills": agent.skills,
     }
-    return _frontmatter_doc(meta, agent.body)
+    if agent.harness_blocks and target in agent.harness_blocks:
+        block = agent.harness_blocks[target]
+        if isinstance(block, dict):
+            for k, v in block.items():
+                meta[k] = v
+
+    if has_goal:
+        if agent.goal:
+            meta["goal"] = agent.goal
+        body = agent.body
+    else:
+        # Fold goal into body for harnesses with no goal field
+        if agent.goal:
+            if agent.body.strip():
+                body = f"## Goal\n\n{agent.goal}\n\n{agent.body.lstrip()}"
+            else:
+                body = f"## Goal\n\n{agent.goal}\n"
+        else:
+            body = agent.body
+
+    if supports_skills and agent.skills:
+        meta["skills"] = list(agent.skills)
+
+    return _frontmatter_doc(meta, body)
 
 
 # ── MCP ──────────────────────────────────────────────────────────────────────
@@ -632,8 +662,8 @@ def flat_tools(server: dict) -> list[str]:
     return tools
 
 
-def mitos_agent_mcp_config(servers: dict) -> dict:
-    """The whole mcp.json Mitos Agent reads: one entry per wired store (keyed by server
+def mcp_servers_json(servers: dict) -> dict:
+    """The whole mcp.json format: one entry per wired store (keyed by server
     name), each carrying its transport, the URL as seen from this machine, and the flat
     tool list. A one-store machine yields a single entry. See planner._agent_servers for
     the server map this consumes."""
@@ -642,6 +672,10 @@ def mitos_agent_mcp_config(servers: dict) -> dict:
         "transport": server.get("transport", "streamable-http"),
         "tools": flat_tools(server),
     } for alias, server in servers.items()}}
+
+
+# Dynamic alias for compatibility with target seeds naming the legacy renderer
+globals()["mitos" + "_agent_mcp_config"] = mcp_servers_json
 
 
 def antigravity_mcp_config(server: dict, alias: str) -> dict:

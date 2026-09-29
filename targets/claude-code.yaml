@@ -5,6 +5,7 @@
 # content and wiring stay on separate lanes.
 
 target: claude-code
+project_surface: true
 
 # CLAUDE.md per project. For most projects this is identity + the project's repo/builder
 # context. For the mitos project specifically, CLAUDE.md is a thin stub that imports
@@ -13,10 +14,10 @@ target: claude-code
 context_file:
   filename: CLAUDE.md
   # Both who-i-am partials are listed; `audience:` picks exactly one. who-i-am.md is
-  # [mitos-agent, agents-md] (the assistant persona — it names the operating tree and carries
+  # [context-tree] (the assistant persona — it names the operating tree and carries
   # the owner's email/location), who-i-am-coding.md is [claude-code]. A project's CLAUDE.md
   # is normally committed to that repo, so the coding variant deliberately carries no
-  # personal facts. Same reason operating-rules.md stays [mitos-agent, agents-md]: it names a
+  # personal facts. Same reason operating-rules.md stays [context-tree]: it names a
   # tree and a skill a coding-harness box never receives.
   sources: [identity/who-i-am.md, identity/who-i-am-coding.md, identity/security.md, identity/comms-style.md, identity/operating-rules.md, "{project.context.repo}"]
   drift_policy: protect
@@ -48,4 +49,11 @@ skills:
 # Rendered with `description:` frontmatter so the command picker shows the description.
 prompts:
   subdir: .claude/commands
+  drift_policy: harvest
+
+# Agents — Markdown subagents authored in registry/agents/ (and registry/local/agents/)
+# opting into claude-code. Deployed to claude_code_agents (~/.claude/agents/<name>.md).
+agents:
+  deploy_to_key: claude_code_agents
+  supports_skills: true
   drift_policy: harvest

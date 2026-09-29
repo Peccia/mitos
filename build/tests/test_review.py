@@ -7,21 +7,10 @@ from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
 def _one_machine_rig(**machine):
-    """A registry whose fleet is exactly one machine — the fresh-install shape.
-
-    Its example effort declares the whole deliverable vocabulary, because a skill declaring
-    `delivers:` deploys only where some effort asks for that term (planner._selected_skills).
-    Without it this rig would stand for a fleet that never opted into the return lane, and
-    every test below would be asserting the connection gate against a roster the DELIVERABLE
-    gate had already emptied — passing or failing for the wrong reason."""
-    from dataclasses import replace as _replace
-    from agentic import graph as graphmod
+    """A registry whose fleet is exactly one machine — the fresh-install shape."""
     rig = copy.deepcopy(reg)
     rig.machines.clear()
     rig.machines["box"] = {"name": "box", "os": "windows", "paths": {}, **machine}
-    pg = rig.graphs["example-project"]
-    pg.efforts = ([_replace(pg.efforts[0], deliverables=graphmod.KNOWN_DELIVERABLES)]
-                  + list(pg.efforts[1:]))
     return rig
 
 
@@ -40,31 +29,14 @@ def test_deploys_here_scopes_the_console_to_what_a_machine_receives():
     wired = _one_machine_rig(targets=["claude-code"], document_store="gws")
     connected = {s["name"] for s in prompt_index(wired)["skills"] if s["deploys_here"]}
 
-    # The gate under test: gws targets claude-code but needs a store this machine lacks.
-    assert "gws" not in unwired, f"an unwired connection must hide its skill: {unwired}"
-    assert "gws" in connected, f"wiring the store reveals gws: {connected}"
-    # ...and it changes EXACTLY that one skill. Asserting the whole roster instead would break
-    # every time a skill ships and get rubber-stamped into a new set, which is how a real
-    # regression slips through; the gate is the behaviour, the roster is just today's content.
-    assert connected - {"gws"} == unwired
+    # The gate under test: gws and graph-bootstrap target claude-code but need a store this machine lacks.
+    assert "gws" not in unwired and "graph-bootstrap" not in unwired, f"an unwired connection must hide its skill: {unwired}"
+    assert "gws" in connected and "graph-bootstrap" in connected, f"wiring the store reveals gws: {connected}"
+    assert connected - {"gws", "graph-bootstrap"} == unwired
     assert unwired, "skills needing no connection still deploy to a bare coding box"
 
     # nothing is dropped from the payload — the console's "All" chip still reveals them
     assert {s["name"] for s in prompt_index(coding)["skills"]} == set(reg.skills)
-
-
-def test_deploys_here_is_a_no_op_on_a_mitos_agent_machine():
-    """The guard for 'no impact on current functionality': an agentic machine's view is
-    unchanged, since every core skill targets mitos-agent."""
-    from agentic.review import prompt_index
-
-    rig = _one_machine_rig(targets=["mitos-agent", "agents-md"], document_store="gws")
-    idx = prompt_index(rig)
-    assert all(s["deploys_here"] for s in idx["skills"])
-    # the agentic tree's own prose reads as deployable here, and the coding persona does not
-    by_rel = {p["rel"]: p["deploys_here"] for p in idx["partials"]}
-    assert by_rel["identity/who-i-am.md"] and by_rel["context/agentic-root.md"]
-    assert not by_rel["identity/who-i-am-coding.md"]
 
 
 def test_deploys_here_shows_everything_on_a_fresh_clone():
@@ -93,14 +65,13 @@ def test_console_only_prompt_always_reads_as_available():
 def test_state_exposes_machine_targets_separately_from_known_targets():
     """Two lists, not interchangeable: `known_targets` is every adapter (the AUTHORING
     forms — a skill may target a machine you haven't built), `machine_targets` is only what
-    your machines declare (the FILTER chips). Mixing them is what offered a `mitos-agent` filter
-    chip on a coding-harness box."""
+    your machines declare (the FILTER chips). Mixing them is what offered wrong filter chips."""
     from agentic.review import state
 
     st = state(_one_machine_rig(targets=["claude-code"]))
     assert st["machine_targets"] == ["claude-code"]
-    assert "mitos-agent" in st["known_targets"], "authoring must still offer every adapter"
-    assert "mitos-agent" not in st["machine_targets"]
+    assert "context-tree" in st["known_targets"], "authoring must still offer every adapter"
+    assert "context-tree" not in st["machine_targets"]
 
 
 def test_graph_index_lists_local_projects_regardless_of_drive_key():
@@ -911,35 +882,6 @@ def test_identity_types_are_a_closed_set():
     assert review.IDENTITY_TYPES == ("implemented-requirements",)
 
 
-def test_every_delivers_skill_publishes_a_well_formed_identity_fragment():
-    """Each skill must name ITS OWN deliverable in the fragment, using a term Mitos's graph
-    already validates on the effort — one vocabulary in both directions. A copy-paste slip
-    here would file a `tests` record under `runbook` in the graph, which nothing downstream
-    could detect."""
-    import json as _json
-    import pathlib
-    import re as _re
-    from agentic import graph as graphmod
-    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
-    seen = 0
-    for p in sorted(skills.glob("*/SKILL.md")):
-        body = p.read_text(encoding="utf-8")
-        if "\ndelivers:" not in body:
-            continue
-        seen += 1
-        declared = _re.search(r"^delivers:\s*(\S+)", body, _re.M).group(1)
-        block = _re.search(r'```json\n(\{.*?"additionalType": "return-record".*?\})\n```',
-                           body, _re.S)
-        assert block, f"{p.parent.name}: no return-record fragment"
-        frag = _json.loads(block.group(1).replace("<effort-id>", "e").replace("<run>", "r"))
-        assert frag["additionalType"] == "return-record"
-        assert frag["@context"] == graphmod.JSONLD_CONTEXT, f"{p.parent.name}: context drift"
-        assert frag[graphmod.DELIVERABLE_PRED] == declared, f"{p.parent.name}: names another"
-        assert declared in graphmod.KNOWN_DELIVERABLES, f"{p.parent.name}: unknown deliverable"
-        assert frag["isPartOf"]["@id"].startswith(graphmod.CREATIVE_WORK_NS)
-    assert seen >= 7, f"expected the seven return-lane skills, found {seen}"
-
-
 def test_extract_identity_effort_ignores_the_wrong_additional_type():
     """Only the two `IDENTITY_TYPES` count — any other JSON-LD block a document happens
     to carry is not this contract and must not be read as one."""
@@ -1265,70 +1207,11 @@ def test_propose_new_skill_rejects_name_collision_and_bad_shape():
     assert not out["ok"]
 
 
-def test_propose_new_org_domain_creates_domain_skill_and_accepts_cleanly():
-    """The '+ ORG' button: a single kind:new skill candidate carrying org_domain in its
-    frontmatter, immediately valid for a project's org: field once accepted — no separate
-    routing table edit required."""
-    from agentic import loader as loadermod
-    from agentic.review import decide, org_index, propose_new_org_domain
-
-    treg, tmp = _temp_registry()
-    out = propose_new_org_domain(treg, "finance", "")
-    assert out["ok"], out
-    assert out["registry_path"] == "local/skills/org-finance/SKILL.md"
-
-    result = decide(treg, out["id"], "accept", "")
-    assert result["ok"], result
-    written = tmp / "registry" / "local" / "skills" / "org-finance" / "SKILL.md"
-    assert written.is_file()
-    text = written.read_text(encoding="utf-8")
-    assert "org_domain: finance" in text
-    assert "targets:" in text and "mitos-agent" in text
-
-    reloaded = loadermod.load(tmp)
-    assert loadermod.known_org_domains(reloaded) >= {"software", "design", "marketing", "finance"}
-    idx = org_index(reloaded)
-    assert "finance" in idx
-    assert idx["finance"]["skill"] == "org-finance"
-    assert idx["finance"]["skill"] == "org-finance"
-
-
-def test_propose_new_org_domain_rejects_existing_domain_and_bad_slug():
-    from agentic.review import propose_new_org_domain
-
-    treg, _tmp = _temp_registry()
-    out = propose_new_org_domain(treg, "software", "")
-    assert not out["ok"]
-    assert "already exists" in out["error"]
-
-    out = propose_new_org_domain(treg, "Bad Domain!", "")
-    assert not out["ok"]
-
-    out = propose_new_org_domain(treg, "", "")
-    assert not out["ok"]
-
-
-def test_org_index_lists_every_domain_and_the_skill_carrying_it():
-    """Domains are discovered from `org_domain` frontmatter, not a routing table. The index
-    is deliberately thin: a domain playbook is prose about a market's function and output,
-    so there is no structure to parse out of it and nothing to keep in sync with its
-    headings."""
-    from agentic.review import org_index
-
-    result = org_index(reg)
-    assert result["software"]["skill"] == "org-software"
-    assert result["software"]["description"]
-    for domain in ("design", "marketing"):
-        assert result[domain]["skill"] == f"org-{domain}"
-    # No role structure is read out of the body — a heading rename cannot break the console.
-    assert set(result["software"]) == {"skill", "description"}
-
-
-def test_org_tree_reconstructs_agents_md_deploy_paths():
+def test_org_tree_reconstructs_context_tree_deploy_paths():
     from agentic.review import org_tree
 
     machine = next(m for m, cfg in reg.machines.items()
-                   if "agents-md" in cfg.get("targets", []))
+                   if "context-tree" in cfg.get("targets", []))
     result = org_tree(reg, machine)
     assert result["ok"]
     assert result["tree"], "expected a non-trivial tree"
@@ -1349,17 +1232,17 @@ def test_org_tree_unknown_machine():
     assert not result["ok"]
 
 
-def test_state_lists_only_agents_md_machines():
+def test_state_lists_only_context_tree_machines():
     from agentic.review import state
 
     result = state(reg)
-    assert "agents_md_machines" in result
-    for m in result["agents_md_machines"]:
-        assert "agents-md" in reg.machines[m].get("targets", [])
-    # every machine that DOES carry agents-md must be listed
+    assert "context_tree_machines" in result
+    for m in result["context_tree_machines"]:
+        assert "context-tree" in reg.machines[m].get("targets", [])
+    # every machine that DOES carry context-tree must be listed
     for m, cfg in reg.machines.items():
-        if "agents-md" in cfg.get("targets", []):
-            assert m in result["agents_md_machines"]
+        if "context-tree" in cfg.get("targets", []):
+            assert m in result["context_tree_machines"]
 
 
 def test_prompt_index_prompts_key_shape():
@@ -1410,46 +1293,6 @@ def test_state_exposes_known_targets():
 
     result = state(reg)
     assert result["known_targets"] == sorted(loadermod.KNOWN_TARGETS)
-
-
-def test_state_exposes_known_deliverables():
-    from agentic import graph
-    from agentic.review import state
-
-    result = state(reg)
-    assert result["known_deliverables"] == list(graph.KNOWN_DELIVERABLES)
-
-
-def test_propose_graph_change_rejects_unknown_deliverable():
-    """Propose-time validation gives a clean browser error before the candidate is written."""
-    from agentic.review import propose_graph_change
-
-    treg, tmp = _temp_registry()
-    slug = next(iter(treg.projects))
-    out = propose_graph_change(
-        treg, slug, documents=[],
-        efforts=[{"id": "eff-a", "name": "Effort A",
-                  "deliverables": ["documentation", "not-real"]}])
-    assert not out["ok"]
-    assert "not-real" in out["error"]
-
-
-def test_propose_graph_change_valid_deliverables_reach_the_candidate():
-    from agentic.review import decide, load_candidates, propose_graph_change
-    from agentic import graph
-
-    treg, tmp = _temp_registry()
-    slug = next(iter(treg.projects))
-    out = propose_graph_change(
-        treg, slug, documents=[],
-        efforts=[{"id": "eff-b", "name": "Effort B",
-                  "deliverables": ["tests", "documentation"]}])
-    assert out["ok"], out
-    assert decide(loader.load(tmp), out["id"], "accept", "")["ok"]
-    merged = graph.load_project_graph(tmp / "registry" / "graph" / f"{slug}.jsonld")
-    eff = next(e for e in merged.efforts if e.id == "eff-b")
-    # stored in canonical vocabulary order, not the order proposed
-    assert eff.deliverables == ("documentation", "tests")
 
 
 def test_propose_graph_change_updates_effort_visibility_and_surfaces_in_graph_index():
@@ -2163,41 +2006,6 @@ def test_run_deploy_apply_writes_files_and_updates_ops_state():
 
 
 
-# ── default_deliverables through the project-edit valve (batch 5c) ──────────
-def test_project_edit_proposes_a_default_deliverable_set():
-    """Per-project defaults go through the SHIPPED valve — a `kind: project` candidate — rather
-    than a second write path into the registry."""
-    from agentic import review
-    rig, _tmp = _temp_registry()
-    out = review.propose_project_edit(rig, "example-project",
-                                      {"default_deliverables": ["tests", "documentation"]})
-    assert out["ok"], out
-    assert out["id"]                       # a real inbox candidate, reviewed like any other
-
-
-def test_project_edit_orders_defaults_canonically():
-    from agentic import loader, review
-    rig, _tmp = _temp_registry()
-    review.propose_project_edit(rig, "example-project",
-                                {"default_deliverables": ["requirements-receipt", "tests"]})
-    # the trial validation mutates a COPY, so assert through the resolver on a hand-built manifest
-    rig.projects["example-project"] = {
-        **rig.projects["example-project"],
-        "default_deliverables": ["requirements-receipt", "tests"]}
-    assert loader.resolve_default_deliverables(rig, "example-project") == \
-        ("tests", "requirements-receipt")
-
-
-def test_project_edit_rejects_an_unknown_default_deliverable():
-    """A default is copied onto real efforts, so a typo would mint invalid ones from a form."""
-    from agentic import review
-    rig, _tmp = _temp_registry()
-    out = review.propose_project_edit(rig, "example-project",
-                                      {"default_deliverables": ["deployment-book"]})
-    assert not out["ok"]
-    assert "deployment-book" in out["error"] and "deploy-book" in out["error"]
-
-
 def test_project_edit_hides_and_unhides_through_the_same_candidate_valve():
     """The Project panel's Hidden toggle (Batch 3): a kind: project candidate exactly like
     every other project edit — no second write path, and un-hiding restores the manifest to
@@ -2256,51 +2064,6 @@ def test_project_edit_updates_document_store_through_candidate_valve():
     assert result_none["ok"], result_none
     reloaded_none = loadermod.load(tmp)
     assert reloaded_none.projects["example-project"]["document_store"] == "none"
-
-
-def test_an_empty_default_set_is_authorable_and_distinct_from_inheriting():
-    """Two different answers: `[]` inherits NOTHING, an absent key inherits the registry-wide set.
-    Collapsing them would make "this project wants no defaults" unauthorable."""
-    from agentic import loader, review
-    rig, _tmp = _temp_registry()
-    assert review.propose_project_edit(rig, "example-project",
-                                       {"default_deliverables": []})["ok"]
-    rig.projects["example-project"] = {**rig.projects["example-project"],
-                                       "default_deliverables": []}
-    assert loader.resolve_default_deliverables(rig, "example-project") == ()
-
-
-def test_sending_null_restores_inheritance():
-    """The console's `inherit` checkbox sends null to REMOVE the key, which is not the same as
-    sending an empty list."""
-    from agentic import review
-    rig, _tmp = _temp_registry()
-    rig.projects["example-project"] = {**rig.projects["example-project"],
-                                       "default_deliverables": ["tests"]}
-    out = review.propose_project_edit(rig, "example-project",
-                                      {"default_deliverables": None})
-    assert out["ok"], out
-
-
-def test_state_names_which_skill_produces_each_deliverable():
-    """The authoring-time answer to "does anything actually produce this?", shown where the
-    declaration is made. Registry-wide on purpose — `deploy --dry-run` owns the per-machine gap."""
-    from agentic import graph, review
-    m = review.state(reg)["deliverable_skills"]
-    # every term is present, so a term with NO producer is a visible empty list rather than a
-    # missing key the UI would have to guess at
-    assert set(m) == set(graph.KNOWN_DELIVERABLES)
-    assert m["requirements-receipt"] == ["requirements-receipt"]
-    assert m["deploy-book"] == ["deploy-book"]
-
-
-def test_state_exposes_the_registry_wide_default_read_only():
-    """Shown so an author can see what a project inherits. It lives in registry/user.yaml and is
-    edited there — inventing a candidate lane for one rarely-changed key would be more machinery
-    than the edit is worth."""
-    from agentic import review
-    st = review.state(reg)
-    assert st["registry_default_deliverables"] == ["documentation", "tests"]
 
 
 def test_vendored_ui_libs_match_their_recorded_hashes():
@@ -2448,18 +2211,18 @@ def test_api_project_new_endpoint():
         server.server_close()
 
 
-def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
+def test_skills_tab_filters_exclude_context_tree_and_support_hiding_targets():
     """Regression test: within the Skills & Org tab, the target filter chips must
-    not display 'agents-md' (as it never deploys skills), and operators must be able
+    not display 'context-tree' (as it never deploys skills), and operators must be able
     to hide skills associated with a target via the hide mode."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
     css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
 
-    # agents-md must be excluded from targetOpts in Skills & Org. The rule now lives in
+    # context-tree must be excluded from targetOpts in Skills & Org. The rule now lives in
     # the shared isTargetVisible predicate (which also carries the mitos_agent gate), so
     # the chips read it rather than spelling the exclusion out a second time.
-    assert 'const isTargetVisible = (t) => t !== "agents-md"' in app
+    assert 'const isTargetVisible = (t) => t !== "context-tree"' in app
     assert ".filter(isTargetVisible)" in app
 
     # Target filter mode (show vs hide) and hidden targets tracking must exist
@@ -2469,6 +2232,18 @@ def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
 
     # CSS styling for active hidden chips must exist
     assert ".pool-opt.active.hide-active" in css
+
+
+def test_app_js_console_source_scan_no_agents_md_and_viewer_reachable():
+    """Console source scan test ensuring no 'agents-md' or 'Agent-MD' in app.js
+    and that the Context Tree viewer is reachable outside the org drawer."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "agents-md" not in app
+    assert "Agent-MD" not in app
+    assert "renderContextTreeSection" in app
+    assert "contextTreeOpen" in app
 
 
 def test_app_js_propose_graph_draft_includes_hidden():
@@ -2587,22 +2362,6 @@ def test_api_graph_effort_hidden_toggle_end_to_end():
 
 
 
-# ── The mitos_agent presentation gate ────────────────────────────────────────────
-def test_state_exposes_mitos_agent():
-    """The flag reaches the client as its own boolean. It is NOT derived from
-    machine_targets: a fresh clone's example machine legitimately targets mitos-agent and
-    must keep compiling it, while the console still hides the harness."""
-    from agentic.review import state
-
-    treg, tmp = _temp_registry()
-    assert state(treg)["mitos_agent"] is False
-
-    local = tmp / "registry" / "local"
-    local.mkdir(parents=True, exist_ok=True)
-    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
-    assert state(loader.load(tmp))["mitos_agent"] is True
-
-
 def test_app_js_syntax_is_valid():
     """app.js is 4,800+ lines of hand-written vanilla JS with no bundler — one stray
     bracket takes the whole console down, and nothing else in the suite would notice.
@@ -2625,78 +2384,6 @@ def test_app_js_syntax_is_valid():
     for open_c, close_c in (("{", "}"), ("(", ")"), ("[", "]")):
         assert src.count(open_c) == src.count(close_c), f"unbalanced {open_c}{close_c}"
     warnings.warn("node not found — app.js checked for bracket balance only, not syntax")
-
-
-def test_app_js_gates_every_org_surface_behind_the_flag():
-    """The six affordances the flag owns, plus the dead Org-tab code it replaced.
-
-    Asserted as source invariants because there is no DOM to drive here — the point is
-    that nobody reintroduces an ungated org control while the console has no test harness
-    that would render one."""
-    from agentic import review
-    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
-
-    # the single source of the flag, and the two static item predicates
-    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
-    assert "const isTargetVisible = (t) =>" in app
-    assert "const isSkillVisible = (s) =>" in app
-    # static, never a join against the async /api/org response — a predicate that fails
-    # open is not a gate
-    assert "const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;" in app
-    assert 's.name.startsWith("org-")' not in app,         "the org- name prefix is not an identity test — see the regression tests below"
-
-    # 1 + 2: the "+ New org" button and the "Orgs only" chip
-    assert 'if (hasMitosAgent()) {\n    const newOrgBtn' in app
-    assert "if (hasMitosAgent() && scopedSkills.some(" in app
-    # 3: the drawer's org role-tree panel
-    assert "if (hasMitosAgent() && domain && orgData" in app
-    # 4 + 5: target filter chips and new-skill authoring checkboxes
-    assert app.count(".filter(isTargetVisible)") >= 2
-    # 6: the card grid
-    assert "(STATE.prompts.skills || []).filter(isSkillVisible)" in app
-    # the network call the gate makes pointless
-    assert "if (!orgData && hasMitosAgent()) {" in app
-
-    # dead Org-tab leftovers, pruned: both wrote to #view-org, which index.html lost when
-    # the tab merged into Skills
-    assert "function renderOrg(" not in app
-    assert "loadOrgData" not in app
-    assert "view-org" not in app
-
-
-def test_effort_editor_save_preserves_org_domain_when_field_is_hidden():
-    """Hiding a control must never propose its value away. With the flag off the Org
-    domain select is not rendered, so the save handler reads the effort's stored tag
-    instead of dereferencing a null input."""
-    from agentic import review
-    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
-    assert "inputs.orgDomain = null;" in app
-    assert 'orgDomain: inputs.orgDomain ? inputs.orgDomain.value' in app
-    assert "(vals.orgDomain || \"\")" in app
-
-
-def test_propose_graph_change_preserves_existing_org_domain():
-    """The round trip the guard above protects: re-proposing an effort with its stored
-    orgDomain must land that tag in the candidate, so accepting it is a no-op on the
-    org edge rather than a silent untagging."""
-    import json
-    from agentic import review
-
-    treg, tmp = _temp_registry()
-    slug = next(iter(treg.projects))
-    dom = sorted(loader.known_org_domains(treg))[0]
-
-    # tag it, accept-shaped: propose once with a domain, then propose again carrying the
-    # value the editor would have read back out of STATE
-    review.propose_graph_change(treg, slug, [], [], efforts=[
-        {"id": "launch-prep", "name": "Launch prep", "orgDomain": dom}])
-    cand = sorted((tmp / "registry" / "local" / "inbox").glob("*/*.jsonld"))[-1]
-    body = json.loads(cand.read_text(encoding="utf-8"))
-    tagged = [n for n in body["@graph"]
-              if str(n.get("@id", "")).endswith("launch-prep")]
-    assert tagged, "the effort node must be in the candidate"
-    assert any(dom in json.dumps(n) for n in tagged), \
-        "the orgDomain tag must survive into the proposed JSON-LD"
 
 
 def test_propose_graph_change_preserves_effort_keywords_when_key_absent():
@@ -2726,60 +2413,6 @@ def test_propose_graph_change_preserves_effort_keywords_when_key_absent():
     assert any("legacy-alias" in json.dumps(n) for n in work_nodes), \
         "existing keywords must be preserved when the key is omitted in the proposal"
 
-
-def test_org_prefixed_user_skill_is_not_treated_as_an_org_domain_skill():
-    """`org-` is a naming convention the core org skills happen to follow, not an identity
-    test. A user skill called `org-software-implementation-plan` — no `org_domain:`, targeting
-    coding harnesses — is an ordinary skill, and gating the card grid on the name prefix would
-    delete it from the console of the very machines it deploys to.
-
-    The payload must therefore carry `org_domain` for the client to read, and carry it OUTSIDE
-    `frontmatter` so the metadata editor still cannot edit a domain's identity."""
-    import copy
-    from agentic.loader import Skill
-    from agentic.review import prompt_index
-
-    rig = copy.deepcopy(reg)
-    rig.skills["org-software-implementation-plan"] = Skill(
-        name="org-software-implementation-plan",
-        rel="skills/org-software-implementation-plan/SKILL.md",
-        frontmatter={"targets": ["antigravity", "claude-code"],
-                     "description": "Turn an export into a lean implementation plan"},
-        body="")
-    by_name = {s["name"]: s for s in prompt_index(rig)["skills"]}
-
-    impostor = by_name["org-software-implementation-plan"]
-    assert impostor["org_domain"] == "", "a skill with no org_domain: must report none"
-    assert "mitos-agent" not in impostor["targets"]
-
-    real = by_name["org-software"]
-    assert real["org_domain"] == "software", "a real org-domain skill must report its domain"
-    # read-only: the editor edits `frontmatter`, and a domain's identity is not editable
-    assert "org_domain" not in real["frontmatter"]
-
-
-def test_flag_never_hides_a_skill_a_coding_workstation_deploys():
-    """The gate hides ORG skills. It must not hide a skill that merely lists `mitos-agent`
-    among its targets — the seven `delivers:` skills and `gws` name it alongside every coding
-    harness, so a `targets`-based test would empty the console of exactly the skills the
-    README promises a coding workstation on its first deploy.
-
-    The check is the real registry, deliberately: the point is which skills actually declare
-    what, and a hand-built fixture would only assert the rule against itself."""
-    from agentic.review import prompt_index
-
-    by_name = {s["name"]: s for s in prompt_index(reg)["skills"]}
-    # isSkillVisible with the flag OFF, evaluated here exactly as app.js evaluates it
-    visible = lambda s: not s["org_domain"]
-
-    for name in ("documentation", "tests", "changelog", "deploy-book", "runbook",
-                 "migration-notes", "requirements-receipt", "gws"):
-        s = by_name[name]
-        assert "mitos-agent" in s["targets"], f"{name} no longer targets the harness — re-check"
-        assert visible(s), f"{name} must stay visible with the flag off"
-
-    for name in ("org-software", "org-design", "org-marketing"):
-        assert not visible(by_name[name]), f"{name} is an org skill and must be hidden"
 
 
 # ── Effort Done state through the Inbox valve ─────────────────────────────────
@@ -2934,7 +2567,7 @@ def test_app_js_propose_graph_draft_includes_status_and_evaluation():
     assert 'if ("status" in x) item.status = x.status ?? "";' in body
     assert 'if ("evaluation" in x) item.evaluation = x.evaluation ?? "";' in body
     # both Edit-button draft seeds and the effort editor carry the fields
-    assert src.count('status: effort.status || ""') == 3
+    assert src.count('status: effort.status || ""') == 2
     assert 'status: inputs.status.checked ? "done" : ""' in src
 
 
@@ -3054,8 +2687,8 @@ def test_add_document_type_dropdown_defaults_to_document():
 # ── Milestone 2: Agents in console ───────────────────────────────────────────
 def test_api_agents_shape():
     """GET /api/agents returns the expected payload shape: agents list with
-    name, description, goal, skills, machines, source; machines list with
-    name, selected, limit."""
+    name, description, targets, goal, skills, machines, source; machines list with
+    name, selected."""
     from agentic import review
 
     treg, tmp = _temp_registry()
@@ -3066,6 +2699,7 @@ def test_api_agents_shape():
         "---\n"
         "name: test-agent\n"
         "description: Test agent description.\n"
+        "targets: [mitos-agent]\n"
         "goal: Help test.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3081,16 +2715,16 @@ def test_api_agents_shape():
 
     agent_entry = next((a for a in res["agents"] if a["name"] == "test-agent"), None)
     assert agent_entry is not None
-    expected_agent_keys = {"name", "description", "goal", "skills", "machines", "source"}
+    expected_agent_keys = {"name", "description", "targets", "goal", "skills", "machines", "source"}
     assert expected_agent_keys <= set(agent_entry.keys())
     assert agent_entry["description"] == "Test agent description."
+    assert agent_entry["targets"] == ["mitos-agent"]
     assert agent_entry["goal"] == "Help test."
     assert agent_entry["skills"] == ["new-session"]
     assert "local/agents/test-agent.md" in agent_entry["source"]
 
     for m in res["machines"]:
-        assert {"name", "selected", "limit"} <= set(m.keys())
-        assert m["limit"] == 20
+        assert {"name", "selected"} <= set(m.keys())
         assert isinstance(m["selected"], int)
 
 
@@ -3102,7 +2736,7 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
     treg, tmp = _temp_registry()
     out = review.propose_new_agent(
         treg, "scout-agent",
-        {"description": "Scout things.", "goal": "Find stuff.", "skills": ["new-session"]},
+        {"description": "Scout things.", "targets": ["mitos-agent"], "goal": "Find stuff.", "skills": ["new-session"]},
         "# Instructions\n\nScout around.",
         reason="initial scaffold"
     )
@@ -3126,6 +2760,7 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
     content = reg_target.read_text(encoding="utf-8")
     assert "name: scout-agent" in content
     assert "description: Scout things." in content
+    assert "targets:" in content
     assert "goal: Find stuff." in content
     assert "skills:" in content
     assert "Scout around." in content
@@ -3136,31 +2771,29 @@ def test_propose_new_agent_lands_in_inbox_not_registry():
 
 
 def test_propose_new_agent_validates():
-    """propose_new_agent enforces M1 agent validation rules on candidate text."""
+    """propose_new_agent enforces agent validation rules on candidate text."""
     from agentic import review
 
     treg, _tmp = _temp_registry()
 
     # Empty name
-    assert not review.propose_new_agent(treg, "", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Bad slug
-    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "Bad_Slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Empty description
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "goal": "g", "skills": ["new-session"]}, "body")["ok"]
-    # Empty goal
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "", "skills": ["new-session"]}, "body")["ok"]
-    # Empty skills
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": []}, "body")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
+    # Missing targets
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": [], "goal": "g", "skills": ["new-session"]}, "body")["ok"]
     # Unknown skill
-    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
+    res = review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["unknown-skill-xyz"]}, "body")
     assert not res["ok"]
     assert "unknown skill" in res["error"]
     # Empty body
-    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "goal": "g", "skills": ["new-session"]}, "")["ok"]
+    assert not review.propose_new_agent(treg, "valid-slug", {"description": "d", "targets": ["mitos-agent"], "goal": "g", "skills": ["new-session"]}, "")["ok"]
 
 
 def test_propose_agent_meta_edit_lands_in_inbox():
-    """propose_meta_edit accepts kind='agent' for description, goal, skills,
+    """propose_meta_edit accepts kind='agent' for description, goal, skills, targets,
     writing a verbatim candidate that updates the agent file when accepted."""
     from agentic import review
     import yaml as _y
@@ -3172,6 +2805,7 @@ def test_propose_agent_meta_edit_lands_in_inbox():
         "---\n"
         "name: worker\n"
         "description: Original description.\n"
+        "targets: [mitos-agent]\n"
         "goal: Original goal.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3198,6 +2832,7 @@ def test_propose_agent_meta_edit_lands_in_inbox():
 
     text = (adir / "worker.md").read_text(encoding="utf-8")
     assert "description: Updated description." in text
+    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
     assert "goal: Updated goal." in text
     assert "Work hard." in text
 
@@ -3213,6 +2848,7 @@ def test_propose_agent_body_edit():
         "---\n"
         "name: coder\n"
         "description: Code agent.\n"
+        "targets: [mitos-agent]\n"
         "goal: Write code.\n"
         "skills: [new-session]\n"
         "---\n\n"
@@ -3234,29 +2870,191 @@ def test_propose_agent_body_edit():
     text = (adir / "coder.md").read_text(encoding="utf-8")
     assert "name: coder" in text
     assert "description: Code agent." in text
+    assert "targets: [mitos-agent]" in text or "targets:\n- mitos-agent" in text
     assert "goal: Write code." in text
     assert "Updated instructions." in text
     assert "Initial instructions." not in text
 
 
 def test_agents_section_hidden_without_flag():
-    """The Agents chip and grid are gated behind hasMitosAgent() in app.js."""
+    """Agents is a core lane: no hasContextTree() gate on agents in app.js, no 'of 20'."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
 
-    # Flag gate predicate exists
-    assert "const hasMitosAgent = () => !!STATE.mitos_agent;" in app
+    # No hasContextTree() gating agents
+    assert "if (hasContextTree()) {\n    const agentsChip = el" not in app
+    assert "if (skillShowingAgents && hasContextTree()) {\n    renderAgentsGrid" not in app
+    assert "if (skillShowingAgents && hasContextTree()) {\n    const newAgentBtn" not in app
+    assert "if (!agentsData && hasContextTree())" not in app
+    assert "of 20" not in app
 
-    # Agents chip is gated behind hasMitosAgent()
-    assert "if (hasMitosAgent()) {" in app
-    assert 'const agentsChip = el("button", "pool-opt" + (skillShowingAgents ? " active" : ""), "Agents");' in app
 
-    # Agents grid rendering is gated behind hasMitosAgent()
-    assert "if (skillShowingAgents && hasMitosAgent()) {\n    renderAgentsGrid(gridWrap);" in app
+def test_accept_new_target_candidate():
+    """A valid target is accepted and appears in reg.target_names; malformed YAML,
+    schema-invalid YAML, a core-name collision and a ../ path are each refused, with
+    nothing written. The same cases are mirrored for identity."""
+    from agentic import review
 
-    # + New agent button is gated behind hasMitosAgent()
-    assert 'if (skillShowingAgents && hasMitosAgent()) {\n    const newAgentBtn = el("button", "accept", "+ New agent");' in app
+    treg, tmp = _temp_registry()
 
-    # Fetch is gated behind hasMitosAgent()
-    assert "if (!agentsData && hasMitosAgent()) {" in app
+    # 1. Valid target accepted
+    target_payload = (
+        "target: scratch-target\n"
+        "context_file:\n"
+        "  deploy_to_key: context_root\n"
+        "  filename: CONTEXT.md\n"
+    )
+    meta = {
+        "registry_path": "local/targets/scratch-target.yaml",
+        "kind": "new",
+        "source": {"machine": "test", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "test candidate",
+    }
+    _plant_candidate(tmp, "valid-target", meta, "scratch-target.yaml", target_payload)
+    res = review.decide(loader.load(tmp), "valid-target", "accept", "")
+    assert res["ok"], res
+    written_target = tmp / "registry" / "local" / "targets" / "scratch-target.yaml"
+    assert written_target.is_file()
+    treg2 = loader.load(tmp)
+    assert "scratch-target" in treg2.target_names
+
+    # 2. Malformed YAML refused
+    bad_meta = dict(meta, registry_path="local/targets/malformed.yaml")
+    _plant_candidate(tmp, "malformed-target", bad_meta, "malformed.yaml", ": bad: [yaml")
+    res = review.decide(loader.load(tmp), "malformed-target", "accept", "")
+    assert not res["ok"]
+    assert "malformed" in res["error"]
+    assert not (tmp / "registry" / "local" / "targets" / "malformed.yaml").exists()
+
+    # 3. Schema-invalid YAML:
+    # 3a. Target name doesn't match stem
+    bad_schema_meta = dict(meta, registry_path="local/targets/mismatched.yaml")
+    _plant_candidate(tmp, "mismatched-target", bad_schema_meta, "mismatched.yaml", "target: other-name\n")
+    res = review.decide(loader.load(tmp), "mismatched-target", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "targets" / "mismatched.yaml").exists()
+
+    # 3b. Skills block has include/exclude
+    bad_skills_meta = dict(meta, registry_path="local/targets/bad-skills.yaml")
+    _plant_candidate(tmp, "bad-skills-target", bad_skills_meta, "bad-skills.yaml",
+                     "target: bad-skills\nskills:\n  include: [test]\n")
+    res = review.decide(loader.load(tmp), "bad-skills-target", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "targets" / "bad-skills.yaml").exists()
+
+    # 4. Core-name collision refused
+    core_collision_meta = dict(meta, registry_path="local/targets/context-tree.yaml")
+    _plant_candidate(tmp, "core-collision", core_collision_meta, "context-tree.yaml", "target: context-tree\n")
+    res = review.decide(loader.load(tmp), "core-collision", "accept", "")
+    assert not res["ok"]
+    assert "collides with a core target" in res["error"]
+    assert not (tmp / "registry" / "local" / "targets" / "context-tree.yaml").exists()
+
+    # 5. Traversal path refused
+    traversal_meta = dict(meta, registry_path="local/targets/../machines/evil.yaml")
+    _plant_candidate(tmp, "traversal-target", traversal_meta, "evil.yaml", "target: evil\n")
+    res = review.decide(loader.load(tmp), "traversal-target", "accept", "")
+    assert not res["ok"]
+    assert "path traversal refused" in res["error"]
+    assert not (tmp / "machines" / "evil.yaml").exists()
+
+    # --- Identity partial mirrored cases ---
+
+    # 1. Valid identity accepted
+    id_payload = "---\naudience: [context-tree]\n---\n# Identity\n\nCustom rules.\n"
+    id_meta = {
+        "registry_path": "local/identity/custom-rules.md",
+        "kind": "new",
+        "source": {"machine": "test", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "test identity",
+    }
+    _plant_candidate(tmp, "valid-id", id_meta, "custom-rules.md", id_payload)
+    res = review.decide(loader.load(tmp), "valid-id", "accept", "")
+    assert res["ok"], res
+    written_id = tmp / "registry" / "local" / "identity" / "custom-rules.md"
+    assert written_id.is_file()
+    treg3 = loader.load(tmp)
+    assert "identity/custom-rules.md" in treg3.partials
+
+    # 2. Malformed YAML frontmatter refused
+    bad_id_meta = dict(id_meta, registry_path="local/identity/bad-frontmatter.md")
+    _plant_candidate(tmp, "bad-id-fm", bad_id_meta, "bad-frontmatter.md", "---\n: bad: [yaml\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "bad-id-fm", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "identity" / "bad-frontmatter.md").exists()
+
+    # 3. Schema-invalid YAML: missing audience
+    no_aud_meta = dict(id_meta, registry_path="local/identity/no-audience.md")
+    _plant_candidate(tmp, "no-aud-id", no_aud_meta, "no-audience.md", "---\nname: not-audience\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "no-aud-id", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "identity" / "no-audience.md").exists()
+
+    # 4. Unknown audience / retired target refused
+    bad_aud_meta = dict(id_meta, registry_path="local/identity/bad-audience.md")
+    _plant_candidate(tmp, "bad-aud-id", bad_aud_meta, "bad-audience.md", "---\naudience: [not-a-real-target]\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "bad-aud-id", "accept", "")
+    assert not res["ok"]
+    assert "unknown audience" in res["error"]
+    assert not (tmp / "registry" / "local" / "identity" / "bad-audience.md").exists()
+
+    # 5. Traversal path refused
+    id_traversal_meta = dict(id_meta, registry_path="local/identity/../evil.md")
+    _plant_candidate(tmp, "traversal-id", id_traversal_meta, "evil.md", "---\naudience: [context-tree]\n---\n")
+    res = review.decide(loader.load(tmp), "traversal-id", "accept", "")
+    assert not res["ok"]
+    assert "path traversal refused" in res["error"]
+    assert not (tmp / "registry" / "local" / "evil.md").exists()
+
+
+def test_upgrade_path_unknown_target_then_accept_seed():
+    """TEST-02: core target removed, an overlay machine targeting it, the seed pending;
+    the registry loads with the warning; accept; plan_machine('rig') is non-empty."""
+    from agentic import review, planner
+
+    treg, tmp = _temp_registry()
+
+    target_file = tmp / "registry" / "local" / "targets" / "mitos-agent.yaml"
+    if not target_file.is_file():
+        target_file = tmp / "targets" / "mitos-agent.yaml"
+    seed_content = target_file.read_text(encoding="utf-8")
+    target_file.unlink()
+
+    # In post-M6 core, partials/skills no longer name mitos-agent; only machines do
+    for p in (tmp / "registry").rglob("*.md"):
+        text = p.read_text(encoding="utf-8")
+        if "mitos-agent" in text:
+            p.write_text(text.replace("mitos-agent, ", "").replace(", mitos-agent", "").replace("mitos-agent", "context-tree"), encoding="utf-8")
+
+    # Machine targets mitos-agent (which is now unknown)
+    loaded_warn = loader.load(tmp)
+    assert "rig" in loaded_warn.skipped_machines
+
+    # Seed is pending in inbox
+    meta = {
+        "registry_path": "local/targets/mitos-agent.yaml",
+        "kind": "new",
+        "source": {"machine": "rig", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "seed target",
+    }
+    _plant_candidate(tmp, "seed-mitos-agent", meta, "mitos-agent.yaml", seed_content)
+
+    # Accept the seed
+    res = review.decide(loaded_warn, "seed-mitos-agent", "accept", "")
+    assert res["ok"], res
+
+    # Registry now loads cleanly, machine is not skipped, outputs are non-empty
+    loaded_fixed = loader.load(tmp)
+    assert "rig" not in loaded_fixed.skipped_machines
+    outputs = planner.plan_machine(loaded_fixed, "rig")
+    assert len(outputs) > 0
 

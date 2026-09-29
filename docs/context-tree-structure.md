@@ -9,12 +9,9 @@ not a style preference. It is enforced at plan time by `lint_node_markdown`
 file and problem named.
 
 This taxonomy is identical regardless of where the tree is *mounted*: a machine-wide
-operating mount at `assistant_root` and a project-wide operating mount
-at a project's `agentic_tree:` render through the same `_emit_tree` and are linted the
-same way — only the deploy root differs. It does not apply to a reference mount
-(`agentic_context_root`/agentic-graph): that lane's files are `drift_policy: generated`
-and carry no prose to structure — see the root [`README.md`](../README.md)'s Core
-Concepts table for the operating-mount-vs-reference-mount distinction.
+context tree at `context_root` and a project-wide tree
+at a project's `context_tree:` render through the same `_emit_tree` and are linted the
+same way — only the deploy root differs.
 
 ## The rules
 
@@ -39,29 +36,19 @@ Concepts table for the operating-mount-vs-reference-mount distinction.
    description sentence, which would rename the section on every edit and orphan every
    reference. Its document map renders effort groups at **`###`** (`### Documents`,
    `### <effort>`), one level under the connection heading, so an effort name can never
-   collide with a reserved `##` prose section. A tagged effort's `###` heading carries the
-   org-routing line that names the `org-<domain>` skill governing its work.
+   collide with a reserved `##` prose section.
 
    An effort's `###` heading is **`<name> (<id>)`** (`graph.effort_heading`) — the same
    human-name-then-stable-id form a project roster line uses (`` - `Projects/Website/`
-   (website) — … ``). The id is emitted for every effort, tagged or not, and rides the heading
+   (website) — … ``). The id is emitted for every effort and rides the heading
    rather than a line of its own: a harness keying a long-lived record on an effort must key it
    on something a rename cannot move, and the heading text is the NAME, which the owner edits
    freely. Reusing the heading costs no always-on tokens. The id is always the **last**
    parenthesised group, so a name that itself ends in parentheses stays unambiguous.
 
-   Under an effort's `###` heading the generated lines render in a fixed order: the
-   org-routing line, then the effort description, then the `**Goal:** …` intent line
-   (`graph._effort_goal_line`), then the `_Expected deliverables: …._` forward-contract line
-   (`graph._effort_deliverables_line`), then the `_Requirements coverage: …._` interview-contract
-   line (`graph._effort_coverage_line`), then the effort's documents. The deliverables line
-   names the artifacts every implementation of the effort must yield (`documentation`,
-   `tests`, `changelog`, `deploy-book`, in canonical vocabulary order); the coverage line names
-   the dimensions a requirements-gathering session must close before those requirements are
-   exportable (`graph.KNOWN_COVERAGE`, same canonical-order rule). Unlike the org-routing
-   line, **neither is ever suppressed** on the claude-code workstation surface
-   (`org_routing=False`): they instruct nobody to load a skill, and that surface is exactly the
-   harness that must produce the deliverables.
+   Under an effort's `###` heading the generated lines render in a fixed order: the effort
+   description, then the `**Goal:** …` intent line (`graph._effort_goal_line`), then the effort's
+   documents.
 
    A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. The
    `· <type>` label appears only for a kind other than the default `document` (a sheet, a
@@ -115,27 +102,21 @@ back. A hand-edit to the roster is silently regenerated; a hand-edit to the pros
 is still ordinary, adoptable drift.
 
 Only project nodes whose checkouts are actually siblings of the file get a roster — the
-workstation `local_path` node, the `agentic_context_root` reference mount, and the `mitos-agent`
-operating tree (which clones repos into `<assistant_root>/Projects/<name>/<basename>/` as
-siblings of the project node). That includes a `context.builder` project such as Mitos
-self-hosting: on a machine that also deploys `mitos-agent`, its node carries the roster too;
-on an `agents-md`-only machine it does not, because nothing clones beside it there.
-An `agentic_tree:` mount puts clones beside the mount rather
-than inside it.
+workstation `local_path` node, reference mounts, or a harness context root
+(which mounts repos beside the project node). That includes a `context.builder` project such as Mitos
+self-hosting: its node carries the roster when checkouts are present beside it.
+A `context_tree:` mount puts clones beside the mount rather than inside it.
 
 ## Skills
 
 A `SKILL.md` body opens with `# <Skill Title>` (a human-readable name, so the file
 self-identifies even where frontmatter is stripped) and a short purpose paragraph, then
-`## Instructions`. Org skills keep their parser-bound sections (`## Description`,
-`## <n>. <Role> — <mandate>`) unchanged — those feed the
-generated org-domain table and the extension-splice anchor.
+`## Instructions`.
 
 ## Exceptions
 
-`SOUL.md` is a stacked system prompt, not a navigable node — it has no file identity, so
-it is all-H2 (the identity partials) with no H1, and is **not** linted. It carries only
-the session protocol (realign at the root, capture memory, reset); the taxonomy itself is
-taught **inside the tree**, by the operating root's `## Navigation` section
-(`registry/context/agentic-root.md`) — the first node every session reads — so the tree
-stays self-describing and SOUL stays lean.
+Stacked system prompts or identity partials are not navigable tree nodes — having no
+single file identity, they are all-H2 (identity partials) with no H1, and are **not**
+linted as tree nodes. The taxonomy itself is taught **inside the tree**, by the
+operating root's `## Navigation` section (`registry/context/agentic-root.md`) — the
+first node read — so the tree stays self-describing.

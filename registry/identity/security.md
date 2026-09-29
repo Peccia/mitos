@@ -1,5 +1,5 @@
 ---
-audience: [mitos-agent, claude-code, antigravity, agents-md]
+audience: [claude-code, antigravity, context-tree]
 ---
 ## Security & Privacy Philosophy
 

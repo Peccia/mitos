@@ -334,6 +334,31 @@ def test_cli_exit_codes(monkeypatch):
         monkeypatch.undo()
 
 
+def test_update_reports_skipped_machine(tmp_path):
+    import copy
+    from conftest import reg
+    from agentic.update import run_update
+
+    r = copy.deepcopy(reg)
+    r.machines["m"] = {"name": "m", "sync": {"git": {"hub": "file:///hub.git"}}}
+    r.skipped_machines["m"] = ["unknown-tgt"]
+    r.warnings.append("machine m: target 'unknown-tgt' is not defined — machine skipped. If a harness supplies this target, accept its seed in the inbox (mitos review).")
+
+    result = run_update(
+        _repo(tmp_path),
+        "m",
+        scheduled=False,
+        skip_core_pull=True,
+        dry_run=True,
+        git=FakeGit(),
+        load=lambda root: r,
+    )
+    assert not result["ok"]
+    assert result["deploy"] is not None
+    assert result["deploy"]["rc"] == 1
+    assert "target 'unknown-tgt' is not defined — machine skipped" in result["deploy"]["error"]
+
+
 def write_goldens() -> None:
     """Regenerate fixtures/update_outcome/*.json (run by hand after a schema change)."""
     import tempfile

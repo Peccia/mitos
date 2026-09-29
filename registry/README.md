@@ -25,12 +25,11 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 │                               {{user_*}} placeholders every deployed context file uses
 │
 ├── identity/                ← who you are; overrides core personas by filename
-│   ├── who-i-am.md          ← from `mitos init` (your name + how to be addressed)
-│   └── session-protocol.md  ← from your chosen org template (session protocol + routing)
+│   └── who-i-am.md          ← from `mitos init` (your name + how to be addressed)
 ├── context/                 ← your domain / project prose (background the agents read)
 │   └── projects/<slug>.md
 ├── skills/                  ← your private or overriding skills
-│   └── org/SKILL.md
+│   └── <name>/SKILL.md
 ├── prompts/                 ← harness-agnostic reusable prompts
 │   └── <name>.md
 ├── projects/                ← project manifests (stage, repo, document_store)
@@ -48,8 +47,8 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Three groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`), registry-wide defaults (`default_deliverables`), and the `mitos_agent` display flag | field key |
-| `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
+| `user.yaml` | Field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) | field key |
+| `identity/` | Personas and your "about me" — name, form of address | filename (e.g. `who-i-am.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
 | `prompts/<name>.md` | Harness-agnostic reusable prompts (the substrate every harness understands) | prompt name |
@@ -73,7 +72,7 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping in **three groups** — identity, registry-wide defaults, and a display flag:
+A flat mapping of identity keys:
 
 ```yaml
 # IDENTITY — the personalization placeholders
@@ -81,37 +80,18 @@ given_name: Example
 full_name: Example User
 email: example@domain.com
 location: Your City, State
-
-# DEFAULTS — what a new effort inherits when it names none of its own
-default_deliverables: [documentation, tests]
-
-# DISPLAY — show the incubating Mitos Agent planning harness
-mitos_agent: true
 ```
 
 Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`, `default_deliverables: [documentation, tests]`,
-`mitos_agent: false`). Any key
+`location: Your City, State`). Any key
 outside this exact set is a hard error at compile time — the schema is intentionally
 closed (`loader.KNOWN_USER_KEYS`).
 
-The four identity keys are **strings**. `default_deliverables` is a **list** — the one
-key here that is, validated against the closed deliverables vocabulary
-(`graph.KNOWN_DELIVERABLES`) exactly as a declared deliverable is, because a default is
-*copied* onto real efforts and a typo would otherwise mint invalid ones from a file
-nobody looks at twice. See [Default deliverables](#default-deliverables) below.
+> [!WARNING]
+> **Retired keys:** Legacy agent flag and `default_deliverables` in `user.yaml` are retired. If present in an existing configuration, the loader emits a warning naming the line to delete. The planning harness now lives in a separate repository and consumes Mitos context exports, while deliverables contracts are managed outside Mitos.
 
-`mitos_agent` is a **boolean**; only YAML `true`/`false` is accepted (`"true"` and `1` fail at
-load). On, the operator console shows the Mitos Agent surfaces — org-domain skills, the
-`mitos-agent` target chip, **+ New org**, the effort editor's **Org domain** field — and relabels
-the Skills tab **Skills & Orgs**; `mitos init` also lists the Mitos Agent setup option. It is
-display only: what a machine compiles and deploys is decided by its `targets:`. See
-[ADR-004](../docs/decisions/004-presentation-facade-mitos-agent-flag.md).
-
-**Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
-token list rather than this file's keys, so a defaults key can never leak into placeholder
-expansion as `{{user_default_deliverables}}`.
+The four identity keys are **strings**.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
 context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Example's`,
@@ -126,35 +106,23 @@ Four additional tokens are machine-scoped rather than user-scoped. Three resolve
 deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolves from its
 `document_store:` instead:
 
-- `{{project_root}}` — the agent tree root: `assistant_root`, else
-  `agentic_context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
+- `{{project_root}}` — the context tree root: `context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
   session routing, the `new-session` skill) name the concrete directory to navigate to
-  (e.g. `~/MitosAgent`) instead of an abstract key name.
-- `{{skills_root}}` — where deployed skills live: `<assistant_root>/skills`. Lets `SOUL.md`
+  (e.g. `~/ContextTree`) instead of an abstract key name.
+- `{{skills_root}}` — where deployed skills live: `<context_root>/skills`. Lets `SOUL.md`
   explain the skill mechanism with a real path (a skill is an instruction file to read,
   not a callable tool — models otherwise look for a tool named after the skill and
   declare it unavailable).
 - `{{returns_root}}` — where a coding harness writes what it produced, for the return
-  lane. On a machine hosting Mitos Agent: `<assistant_root>/.local-memory/returns`, the
-  exact folder `mitos-agent returns` reads. On a coding-only box there is no such harness
-  and no state directory, so it falls back to `<projects_root>/.mitos-returns`, read with
-  `mitos-agent returns --from`. It deliberately does **not** reuse `{{project_root}}`,
-  which falls back to `projects_root` there and would put records inside a path the
-  harness's own resolver never looks at *while looking like it had worked* — a silently
-  wrong path is worse than an obviously separate one. The seven shipped deliverable skills
-  write to `{{returns_root}}/<run>/<deliverable>.md`.
+  lane (`<projects_root>/.mitos-returns`).
 - `{{connection}}` — the machine's wired document store, named as the stable section label
   `<Name> (`key`)` that `render.connection_label` mints, so a skill naming the store and a
   tree node heading it can never drift apart. A multi-store machine expands to every label,
   comma-joined. Resolved from `document_store:`, **not** from `paths:` — a connection is not
-  a filesystem fact. The same seven deliverable skills use it to publish a copy of each
-  record to the store: `connections_block` renders a connection heading into tree roots
-  only, so a coding-only box (no `agents-md` target) had a live `mcp.json` and nothing in
-  its context naming it, and every publish step correctly refused to guess.
+  a filesystem fact.
 
 On a machine that defines no matching path — or, for `{{connection}}`, no document store —
-a machine token stays literal. That literal is load-bearing for the deliverable skills:
-their "no store wired, print it for the owner by hand" branch keys on it. Reversal on
+a machine token stays literal. Reversal on
 `adopt`/review-accept matches any machine's value, scoped as above to partials that
 actually carry the token.
 
@@ -194,49 +162,17 @@ context:                      # label → registry-relative partial (must resolv
 | `example` | no | Set `true` on shipped sample projects (e.g. `example-project.yaml`). Example projects step aside automatically once you add your own overlay projects. Must be a boolean if set. |
 | `stage` | **yes** | Lifecycle phase — must be exactly one of `ideation`, `speccing`, `build`, `maintain`. Anything else aborts compile. |
 | `hidden` | no | Set `true` to keep a finished or parked project out of every deployed tree — no tree node, no roster entry, no clone, no per-project `AGENTS.md`/`CLAUDE.md`, on any machine. Its manifest and `graph/<slug>.jsonld` still load and query fine (`mitos graph`, the console); only planning is blind to it. Deployed files a prior deploy left behind become ordinary orphans (invariant #9 — `deploy --prune` removes them). Must be a boolean if set. Deliberately separate from `stage`: a `maintain` project still needs its context deployed, so stage can't double as visibility. |
-| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `agents-md`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **agentic machines** (`agents-md` also in targets), it clones into `<agentic_context_root>/Projects/<slug>/<basename>` instead. |
+| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `context-tree`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **context-tree machines** (`context-tree` also in targets), it clones into `<context_root>/Projects/<slug>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
 | `exclude_folders` | no | List of folder **names or IDs** to skip during `mitos connect` staging. Merged with any `exclude_folders` defined on the server in `connections/servers.yaml` (server entries first, then project entries, deduped). |
 | `skills` | no | Skills bound to *this project's* checkout (deployed to `<checkout>/.claude/skills/` or `.agents/skills/`). Each must exist **and** list `claude-code` or `antigravity` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
 | `prompts` | no | Prompts bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/commands/<name>.md`). Each must exist **and** list `claude-code` in its own `targets:`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
-| `default_deliverables` | no | The deliverables a **new effort under this project** starts with when it declares none of its own — the forward contract, prefilled in the console's `+ Work` editor. A list of terms from the closed deliverables vocabulary (`graph.KNOWN_DELIVERABLES`); an unknown one aborts compile. Omit the key to inherit the registry-wide default in `user.yaml`; set it to `[]` to inherit **nothing**, which is a real answer and deliberately distinct from omitting it. See [Default deliverables](#default-deliverables). |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
 > it replaces the core manifest wholesale (last-layer-wins) — useful for pointing a public example
 > project at your own repo without editing tracked files.
-
-### Default deliverables
-
-An effort's **expected deliverables** are the forward contract: the artifacts every
-implementation under it must yield. A new effort does not start empty — it starts with a
-set resolved down one chain, and every level of that chain is a file that already existed:
-
-```
-the effort's own deliverables         ->  wins, always
-  otherwise: the project's default        registry/projects/<slug>.yaml
-    otherwise: the registry-wide default  registry/user.yaml  ->  [documentation, tests]
-```
-
-This is the same resolution order the [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project)
-design uses — one rule to learn rather than two. `loader.resolve_default_deliverables`
-owns it, and the console resolves the chain server-side so no UI reimplements it.
-
-**`default_deliverables: []` inherits nothing**, and that is deliberately distinct from
-omitting the key. The resolver tests `is None`; a falsy test would collapse two different
-answers into one.
-
-Both levels validate against the same closed vocabulary a *declared* deliverable does,
-because a default is copied onto real efforts and a typo would otherwise mint invalid ones
-from a file nobody looks at twice.
-
-The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
-regardless of shape. Note what is deliberately **absent**: `requirements-receipt`. An
-effort that inherits this set files no receipt, so an effort declaring requirements
-coverage but no receipt gathers requirements that nothing will report on. The console
-surfaces that as a **warning**, never a block — see
-[the operator console](../docs/operator-console.md).
 
 ### Machine profile — `machines/<name>.yaml`
 
@@ -248,16 +184,17 @@ but each box deploys only its own with `deploy --machine <name>`.
 ```yaml
 name: windows-main            # unique; this is the `deploy --machine` target
 os: windows                   # windows | linux | macos — deploy REFUSES on a host whose OS differs
-targets: [claude-code, antigravity, claude-app, agents-md]   # which adapters emit here
+targets: [claude-code, antigravity, claude-app, context-tree]   # which adapters emit here
 document_store: gws           # optional — the connection(s) THIS box has; gates all MCP wiring
 paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
-  agentic_context_root: "C:/Mitos"      # where the graph-derived AGENTS.md roster + Projects/<slug>/ land
+  context_root: "C:/Mitos"              # where the context tree (AGENTS.md roster + Projects/<slug>/) lands
   antigravity_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/config/skills"
   claude_skills_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
+  claude_code_skills: "~/.claude/skills"
+  claude_code_agents: "~/.claude/agents"
   gws_env: ".local/gws.env"             # <server>_env → where a merged MCP env file is written
-  assistant_root: "~/MitosAgent"        # the operating AGENTS.md tree (agents-md target)
 sync:                                   # optional — consumed only by `mitos sync`, never the compiler
   backend: git                          # git is the only backend (may be omitted)
   git:
@@ -271,7 +208,7 @@ sync:                                   # optional — consumed only by `mitos s
 |---|---|---|
 | `name` | **yes** | Unique host identity and the `deploy --machine` selector. Two files claiming one name are refused (no silent shadowing). |
 | `os` | **yes (in practice)** | `windows` \| `linux` \| `macos` (matched against `sys.platform` — a Mac reports `macos`, not `darwin`). A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
-| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `agents-md`, `mitos-agent`); an unknown one aborts compile. `mitos-agent` (the agentic harness) is mutually exclusive with the coding harnesses on one machine (`loader._validate`). |
+| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `context-tree`); an unknown target warns and causes this machine to be skipped. |
 | `paths` | **yes** | Map of named locations the targets write to (see the key list below). Values use **forward slashes** even on Windows — an unescaped `\` shows up as a control character and is rejected with a pointed error. |
 | `document_store` | no | The MCP connection(s) this box actually has — a server key from `connections/servers.yaml`, the literal `none`, or a list (same field and validation as a project's). It is the single switch every connection-bound output hangs off: with it unset (the default, and what all shipped templates do) the box gets **no** MCP server merged into any harness config, no generated connection section, and no skill declaring `requires_server:` — so a brand-new machine never receives instructions for tools nobody wired. `deploy` reports each skill it withheld and names this field as the fix. Add it once the server is really running (see [`docs/connectors/`](../docs/connectors/)). |
 | `example` | no | `true` marks a shipped *template* profile (skipped by compile once a real machine exists, refused by a real deploy). Must be a bool if present. Your own profiles omit it. |
@@ -282,40 +219,32 @@ sync:                                   # optional — consumed only by `mitos s
 | Path key | Used by | Points at |
 |---|---|---|
 | `projects_root` | all | Base directory that relative project `local_path` entries resolve under. |
-| `agentic_context_root` | claude-code (agents-md machines) | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on machines with **`agents-md`** in `targets`. On pure workstation machines (without `agents-md`), project AGENTS.md files deploy directly to each project's `local_path` instead — `agentic_context_root` is not required. |
+| `context_root` | claude-code (context-tree machines) | Root of the Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on machines with **`context-tree`** in `targets`. On pure workstation machines (without `context-tree`), project AGENTS.md files deploy directly to each project's `local_path` instead — `context_root` is not required. |
 | `antigravity_config` | antigravity | Antigravity config dir (`mcp_config.json` + `config.json`) — also shared with the classic Gemini CLI it succeeds, until that CLI retires 2026-06-18. |
 | `antigravity_skills` | antigravity | Antigravity's **global** skills dir (`~/.gemini/config/skills/`, per the official Antigravity 2.0 docs). Skills deploy as Agent Skills standard folders (`<name>/SKILL.md` + supporting files). `scope: global` (default) skills targeting `antigravity` deploy here; `scope: project` skills deploy to `<project>/.agents/skills/` (Antigravity's workspace-level location) instead — see [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project). |
 | `claude_code_skills` | claude-code | Claude Code's personal/user-level skill dir (`~/.claude/skills/`, [confirmed](https://code.claude.com/docs/en/skills)). `scope: global` (default) skills targeting `claude-code` deploy here; `scope: project` skills deploy only to the projects that bind them instead. |
+| `claude_code_agents` | claude-code | Claude Code's personal/user-level agents dir (`~/.claude/agents/`). Subagents author in `registry/agents/<name>.md` deploy here. |
 | `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). claude-app has no project-scoped surface — it ignores a skill's `scope` and always stages every skill it targets. |
 | `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |
-| `assistant_root` | mitos-agent + agents-md | The ONE Mitos Agent install root — `SOUL.md`, the `skills/` tree, a whole-file `mcp.json`, AND the operating `AGENTS.md` tree all share it. The harness writes runtime state to `<assistant_root>/.local-memory/`. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
 
-#### Workstation vs Agentic: two claude-code deploy modes
+#### Workstation vs Context-tree: two claude-code deploy modes
 
-The `claude-code` target behaves differently depending on whether `agents-md` is also in the machine's `targets`:
+The `claude-code` target behaves differently depending on whether `context-tree` is also in the machine's `targets`:
 
 | Machine type | `targets` includes | Project AGENTS.md lands at | Repo clones into |
 |---|---|---|---|
-| **Workstation** | `claude-code` (no `agents-md`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
-| **Agentic** | `claude-code` + `agents-md` | `<agentic_context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<agentic_context_root>/Projects/<slug>/<repo_basename>/` |
-
-> [!NOTE]
-> "Agentic" in this table names the **deploy mode** (lightweight index vs. full inline
-> doc context) — it does not mean the `mitos-agent` target is present. A `claude-code +
-> agents-md` machine with no `mitos-agent` target (e.g. `machines/example-windows.yaml`) is
-> firmly in the "Agentic" row here, but never gets org content: the org skills, the
-> org-domain table, and per-effort org routing lines all require `mitos-agent` literally in
-> `targets:`. Don't infer "has orgs" from this table.
+| **Workstation** | `claude-code` (no `context-tree`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
+| **Context-tree** | `claude-code` + `context-tree` | `<context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<context_root>/Projects/<slug>/<repo_basename>/` |
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
-- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
+- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `context-tree` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
 - **`<local_path>/CLAUDE.md`** — a thin `@AGENTS.md` stub so Claude Code auto-loads the full context above.
 
-A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.
+A workstation machine does **not** need `context_root`. The `local_path` in the project manifest is what activates this for each project.
 
-The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `agents-md` audience (the same one the agentic tree uses), so a partial with `audience: [mitos-agent, agents-md]` is visible in both places without any frontmatter change.
+The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `context-tree` audience (the same one the context tree uses), so a partial with `audience: [context-tree]` is visible in both places without any frontmatter change.
 
 ### MCP server definitions — `connections/servers.yaml`
 
@@ -400,7 +329,7 @@ ever overwrite a file you already have**, so it's safe to run over existing data
 
 | You have… | Pick | What happens |
 |---|---|---|
-| Nothing yet | **[1] Scaffold a fresh one** | Seeds a starter overlay from your name + an org template. If some files already exist, only the *missing* pieces are added. |
+| Nothing yet | **[1] Scaffold a fresh one** | Seeds a starter overlay from your name. If some files already exist, only the *missing* pieces are added. |
 | An overlay on a **hub** (another machine's `mitos-local`) | **[2] Pull from a git hub** | Clones your real files into `registry/local/` (wraps `sync clone`), installs the auto-deploy hook, and captures this machine's sync config. **Your existing files come down as-is — nothing is generated.** |
 | Custom files **already in `registry/local/`** | **[3] Use them as-is** | Finishes the install around your files untouched, and optionally publishes them to a hub (wraps `sync init`). |
 
@@ -416,7 +345,7 @@ Nothing here is a black box: most updates are just edits to the files mapped in
 
 **Re-run `mitos init` — it's safe and idempotent.** Running it again over an existing overlay
 **never overwrites a file you already have**; it only fills in *missing* pieces. Use it to pick up a
-scaffold tree you skipped the first time, or to add an org template you didn't seed. It is the one
+scaffold tree you skipped the first time, or to configure a machine target you didn't add. It is the one
 "update" path that's a guided prompt rather than a file edit.
 
 **Dedicated verbs for the structured additions:**

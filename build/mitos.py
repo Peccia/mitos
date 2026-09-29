@@ -93,19 +93,6 @@ def _init_dispatch() -> int:
     return _init_scaffold_fresh(initmod, has_local)
 
 
-def _overlay_has_mitos_agent() -> bool:
-    """Does registry/local/user.yaml already turn the planning harness on? Read defensively
-    and by hand rather than through the loader — this runs before anything has validated the
-    overlay, and a half-written file must not stop `init` from getting the user set up."""
-    path = REPO_ROOT / "registry" / "local" / "user.yaml"
-    try:
-        import yaml
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return isinstance(data, dict) and data.get("mitos_agent") is True
-    except Exception:
-        return False
-
-
 def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     given = _ask("Given (first) name: ")
     family = _ask("Family (last) name: ")
@@ -115,50 +102,13 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     email = _ask("Your email: ")
     location = _ask("Location (optional): ")
 
-    # Use case gates everything below it: org routing is meaningless outside the mitos-agent
-    # use case (org skills declare targets: [mitos-agent] only — see MACHINE_USE_CASES), so
-    # asking it unconditionally is what previously left claude-code/antigravity-only users
-    # with a machine profile that never asked "do you even want orgs?" in the first place.
-    # The Mitos Agent option is not OFFERED on a fresh setup — the planning harness is an
-    # incubating work in progress, and a wizard that lists it as one of two equal choices
-    # tells a new user it is finished. Typing 2 still works: the path is unadvertised, not
-    # retired, so anyone already running the harness (or told to pick it) keeps it. An
-    # overlay that already carries `mitos_agent: true` is someone in exactly that position,
-    # so the option is printed back for them.
-    knows_agent = _overlay_has_mitos_agent()
-    print("\nHow will you run Mitos on this machine?")
-    print("  [1] Coding harnesses only (Claude Code / Antigravity / Claude Desktop) — skills")
-    print("      and prompts inside your existing editor.")
-    if knows_agent:
-        print("  [2] Mitos Agent — the planning harness (SOUL.md, the operating tree, org "
-              "routing).")
-    use_choice = _ask("Choice [1]: ") or "1"
-    is_agent = use_choice == "2"
-
-    org = None
-    if is_agent:
-        templates = initmod.org_templates(REPO_ROOT)
-        # Describe where an org domain is actually tagged. This used to say "each project's
-        # `org:` field", which `loader._validate` rejects outright — routing is per TASK, from
-        # the effort's `orgDomain` in the knowledge graph (console effort editor), never a
-        # manifest field. A wizard that names a field the loader refuses teaches a new user
-        # the one thing guaranteed to fail.
-        print("\nOrg routing (optional):")
-        print("  blank (recommended) — dynamic multi-org router: all three domain orgs are")
-        print("    available and the right one activates per TASK, from the effort's org")
-        print("    domain in the knowledge graph. Best for mixed-domain work.")
-        print("  a template name — locks the assistant to one domain's delegation chain")
-        print("    for all project work, whatever an effort is tagged with.")
-        print(f"  Available templates: {', '.join(templates) or '(none found)'}")
-        org_raw = _ask("Org template [blank=dynamic multi-org]: ").strip()
-        org = org_raw if org_raw else None
     store = _ask_document_store(initmod)
     backend = store or "none"
     try:
         written = initmod.scaffold_overlay(REPO_ROOT, given_name=given, family_name=family,
                                            address=address, email=email,
-                                           location=location, org_template=org,
-                                           backend=backend, mitos_agent=is_agent)
+                                           location=location,
+                                           backend=backend)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -169,18 +119,18 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     if has_local:
         print("\nKept all your existing files; only the missing pieces above were added.")
 
-    # Machine profile — the file that actually decides what deploy() materializes (init
-    # alone never did; targets came only from copying a machines/example-*.yaml template
-    # by hand, which is how a coding-only checkout could end up with agents-md/mitos-agent).
+    # Machine profile — the file that actually decides what deploy() materializes.
     from agentic.commands import _local_os
     print("\nNow let's set up this machine's profile (registry/local/machines/<name>.yaml) — "
           "the file that decides what actually deploys here.")
-    use_case, targets = (None, None)
-    if is_agent:
-        use_case = "mitos-agent"
-        print("Mitos Agent selected — this profile will target [mitos-agent, agents-md].")
-    else:
-        targets = _ask_coding_targets(initmod)
+    targets = _ask_coding_targets(initmod)
+    print("\nA personal context tree provides a unified directory of projects,")
+    print("documentation, and identity context readable by any harness. See docs/context-tree.md.")
+    context_root_val = initmod._PATH_VALUES.get("context_root", "~/ContextTree")
+    print(f"Deploy location (context_root): {context_root_val}")
+    ans = _ask("Deploy a personal context tree? [y/N]: ").strip().lower()
+    if ans in ("y", "yes"):
+        targets.append("context-tree")
     default_name = "my-machine"
     machine_name = _ask(f"A short name for this machine [{default_name}]: ") or default_name
     default_os = _local_os()
@@ -800,9 +750,11 @@ def _cmd_update(args) -> int:
 
     from agentic.update import run_update
     with contextlib.redirect_stdout(sys.stderr):
-        result = run_update(REPO_ROOT, args.machine, scheduled=args.scheduled,
-                            skip_core_pull=args.skip_core_pull, dry_run=args.dry_run)
-    if args.json:
+        result = run_update(REPO_ROOT, args.machine,
+                            scheduled=getattr(args, "scheduled", False),
+                            skip_core_pull=getattr(args, "skip_core_pull", False),
+                            dry_run=getattr(args, "dry_run", False))
+    if getattr(args, "json", False):
         sys.__stdout__.write(json.dumps(result, ensure_ascii=True) + "\n")
         sys.__stdout__.flush()
     else:
@@ -896,14 +848,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="unattended core pull → overlay pull → deploy (never force, "
                              "prune, or push)")
     pu.add_argument("--machine", required=True)
+    pu.add_argument("--scheduled", action="store_true",
+                    help="run unattended (e.g. from cron or Task Scheduler)")
     pu.add_argument("--dry-run", action="store_true",
                     help="no pulls; preview the deploy only")
     pu.add_argument("--json", action="store_true",
                     help="print exactly one schema-1 JSON object to stdout")
     pu.add_argument("--skip-core-pull", action="store_true",
                     help="internal: set by the re-exec after a core pull")
-    pu.add_argument("--scheduled", action="store_true",
-                    help="internal: a timer run — a dirty core skips the whole update")
     args = p.parse_args(argv)
     if args.cmd == "init":
         return _cmd_init(args)

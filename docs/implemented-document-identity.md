@@ -1,18 +1,15 @@
 # The Implemented Document's identity fragment
 
-> This page documents a **cross-repo contract**, not a Mitos feature you configure. Mitos
-> Agent is a separate planning harness, still incubating; its console affordances in Mitos are
-> hidden behind `mitos_agent` in `registry/local/user.yaml`. What follows is the JSON-LD shape
-> both repos conform to, so that the side reading a document and the side writing it cannot
-> drift. Nothing here is required to use Mitos with a coding harness.
+> This page documents a **cross-repo contract**, not a Mitos feature you configure.
+> What follows is the JSON-LD shape both repos conform to, so that the side reading a document
+> and the side writing it cannot drift. Nothing here is required to use Mitos with a coding harness.
 
-**The contract.** When Mitos-Agent graduates a Work item, it publishes an Implemented Document —
-the evaluated record of what was actually built — into the project's watched store folder. That
-document carries a small, fenced JSON-LD block naming which Work item it reports on, in the same
-vocabulary Mitos's own knowledge graph validates (`build/agentic/graph.py`). Mitos never imports
-Mitos-Agent and Mitos-Agent never imports Mitos (see each repo's boundary test,
-`build/tests/test_boundary.py` here and `tests/test_boundary.py` there) — this document is the
-contract both sides conform to instead of sharing code.
+**The contract.** When a harness returns an implemented document — the evaluated record of what
+was actually built — into the project's watched store folder, that document carries a small,
+fenced JSON-LD block naming which Work item it reports on, in the same vocabulary Mitos's own
+knowledge graph validates (`build/agentic/graph.py`). Mitos never imports the planning harness
+and the planning harness never imports Mitos — this document is the contract both sides conform
+to instead of sharing code.
 
 **This file is the source of truth for the fragment's shape.** Mitos-Agent's renderer
 (`mitos-agent/src/mitos_agent/artifact/evaluation.py::identity_fragment`) implements it; Mitos's
@@ -106,13 +103,9 @@ records which effort the run belonged to. When the work item key has no `__` the
 name, and that ONE line is omitted — never the whole block, which would throw away the work key
 and the run along with it.
 
-- `http://peccia.net/deliverable` — the deliverable this record answers for, written as the FULL
-  predicate IRI because that is exactly how Mitos serializes it on the effort itself
-  (`graph.DELIVERABLE_PRED`; see any `registry/graph/<slug>.jsonld`, where an effort's forward
-  contract appears as `"http://peccia.net/deliverable": [...]` under the same bare
-  `{"@vocab": "https://schema.org/"}` context). One vocabulary in both directions: the effort
-  declares `tests` as expected, and the record answers with `tests`. Its value is a member of
-  `graph.KNOWN_DELIVERABLES`.
+- `http://peccia.net/deliverable` — the deliverable this record answers for, written as the full
+  predicate IRI (`http://peccia.net/deliverable`). One vocabulary across planning and execution:
+  the planning harness contract expects e.g. `tests`, and the return record answers with `tests`.
 - `identifier` — the run, the same string the record's own `run:` header field carries. It is what
   groups the several records of one run back together once they are flat documents in a store.
 - `isPartOf` and `@type` are unchanged, and carry the same meaning.
@@ -154,7 +147,7 @@ it only saves the operator from retyping what Mitos-Agent already knew.
 
 The same peek also shows a **Mark effort as Done with this Implemented Document** checkbox, which
 starts unticked. If the operator ticks it, the effort edit (`status: done`,
-`evaluation: <this document's id>`) goes into the same proposal as the mapping (see ADR-005).
+`evaluation: <this document's id>`) goes into the same proposal as the mapping.
 Mapping a document without ticking the box doesn't change the effort's status.
 
 ### The completion line (cross-repo contract)

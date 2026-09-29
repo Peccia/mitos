@@ -8,18 +8,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-KNOWN_TARGETS = {"mitos-agent", "claude-code", "antigravity", "agents-md", "claude-app"}
+KNOWN_TARGETS = {"claude-code", "antigravity", "context-tree", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 VALID_SKILL_SCOPES = {"global", "project"}
 # Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
 # antigravity: <local_path>/.agents/skills/) — the only targets a project's `skills:` list
-# binds a skill for, and the only targets where `scope: project` changes anything. mitos-agent
-# and claude-app have no project-scoped surface at all (account-wide/global only) and simply
-# IGNORE `scope` — always global, on any skill, regardless of value — the same way the assistant
-# harness always did before this feature existed. See validate_skill_scope / Skill.scope.
+# binds a skill for, and the only targets where `scope: project` changes anything. claude-app
+# has no project-scoped surface at all (account-wide/global only) and simply
+# IGNORES `scope` — always global, on any skill, regardless of value.
+# See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
 
@@ -36,48 +37,22 @@ def is_manual_skill_target(tspec: dict) -> bool:
 
 
 # The registry-wide user config (registry/user.yaml + registry/local/user.yaml overlay).
-# Two groups of settings, both resolved core-then-overlay with last-layer-wins:
+# Resolved core-then-overlay with last-layer-wins:
 #
 #   IDENTITY — the personalization placeholders render.py expands ({{user_given_name}},
 #     {{users_given_name}}, {{user_full_name}}, {{user_email}}, {{user_location}}). These
-#     are the file's original and still primary contents.
-#   DEFAULTS — settings a project or an effort inherits when it names none of its own.
-#     `default_deliverables` is the first: the forward contract a new effort starts with.
-#     Widening this file beyond identity is deliberate and recorded here rather than left
-#     to be inferred; the alternative was a second registry-level config file for one key.
-#   FEATURES — presentation flags. `mitos_agent` is the first: it gates the console and
-#     `mitos init` affordances for the incubating planning harness (org skills, the
-#     mitos-agent target chip, the effort Org domain field, the init wizard's agent
-#     option). It gates presentation only — the compiler keys off machine `targets:`, so
-#     a machine that names mitos-agent compiles identically whatever this flag says.
-#     Deliberately absent from _USER_TOKENS: a feature flag is not a placeholder.
+#     are the file's contents.
 #
 # Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
-# _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
-# placeholder expansion as {{user_default_deliverables}}.
+# _USER_TOKENS list, never reg.user's keys.
 #
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
-KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
-                   "default_deliverables", "mitos_agent"}
-MAX_ACTIVE_AGENTS = 20
-KNOWN_AGENT_KEYS = {"name", "description", "goal", "skills"}
-# The subset of KNOWN_USER_KEYS whose value is a list, not a string.
-_USER_LIST_KEYS = {"default_deliverables"}
-# The subset whose value is a bool. YAML's `true` is the only accepted spelling — the
-# string "true" and the int 1 are rejected, so a typo fails at load rather than reading
-# as truthy and quietly turning a surface on.
-_USER_BOOL_KEYS = {"mitos_agent"}
-# documentation + tests are the registry-wide default because they are the two every kind
-# of work owes regardless of shape, and a default inherited silently should fit everything
-# it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
-# inherits this set files no receipt, so the requirements half of the return lane would
-# close quietly — _validate does not fix that by overriding the owner's default, it is
-# surfaced as a warning where the declaration is made (see the console's effort editor).
+KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
+RETIRED_USER_KEYS = {"default_deliverables", "mitos_agent"}
+KNOWN_AGENT_KEYS = {"name", "description", "targets", "goal", "skills"}
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
-                 "email": "user@example.com", "location": "Your City, State",
-                 "default_deliverables": ["documentation", "tests"],
-                 "mitos_agent": False}
+                 "email": "user@example.com", "location": "Your City, State"}
 
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
@@ -176,10 +151,9 @@ class Skill:
     @property
     def scope(self) -> str:
         """`global` (default): deploys to every global surface a target offers
-        (mitos-agent, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
+        (the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
         into the project checkouts that bind it via that project's `skills:` list —
-        never a global directory. mitos-agent deliberately ignores this field (it has no
-        project-scoped skill surface); see validate_skill_scope."""
+        never a global directory; see validate_skill_scope."""
         return self.frontmatter.get("scope", "global")
 
     @property
@@ -194,20 +168,6 @@ class Skill:
         server this machine never declared, so a coding-harness box with no workspace
         wired never receives instructions for tools it cannot call."""
         return self.frontmatter.get("requires_server") or None
-
-    @property
-    def delivers(self) -> str | None:
-        """The `KNOWN_DELIVERABLES` term this skill satisfies — the return lane's binding
-        between what an effort DECLARES it must produce and the procedure that produces it.
-
-        One skill per deliverable, never one skill for all of them: the set is meant to grow,
-        so adding a deliverable must be an ADDITION (a new file) and never a modification to a
-        file that keeps getting longer. This field is what makes the pairing checkable —
-        planner.skill_deploy_warnings can say an effort declares 'deploy-book' on a machine
-        where nothing delivers it, instead of leaving that a silent gap discovered months
-        later by the deploy book's absence. Optional; omit for a skill that produces no
-        declared deliverable."""
-        return self.frontmatter.get("delivers") or None
 
 
 @dataclass
@@ -232,23 +192,32 @@ class Prompt:
 
 @dataclass
 class Agent:
-    """An assistant-lane agent, authored in registry/agents/<name>.md (or registry/local/agents/).
+    """An agent authored in registry/agents/<name>.md (or registry/local/agents/).
     Curated per machine under `agents: {include: [...] | exclude: [...]}`."""
     name: str
     description: str
-    goal: str
-    skills: list[str]
-    body: str
-    source: Path
+    targets: list[str] = field(default_factory=list)
+    goal: str = ""
+    skills: list[str] = field(default_factory=list)
+    body: str = ""
+    source: Path = field(default_factory=lambda: Path("."))
+    harness_blocks: dict[str, Any] = field(default_factory=dict)
 
     @property
     def frontmatter(self) -> dict:
-        return {
+        fm = {
             "name": self.name,
             "description": self.description,
-            "goal": self.goal,
-            "skills": list(self.skills),
+            "targets": list(self.targets),
         }
+        if self.goal:
+            fm["goal"] = self.goal
+        if self.skills:
+            fm["skills"] = list(self.skills)
+        if self.harness_blocks:
+            for k, v in self.harness_blocks.items():
+                fm[k] = v
+        return fm
 
     @property
     def rel(self) -> str:
@@ -275,6 +244,12 @@ class Registry:
                                    # full_name, email, location — core defaults merged
                                    # with registry/local/user.yaml (field-level overlay)
     agents: dict[str, Agent] = field(default_factory=dict)  # name -> Agent (registry/agents/)
+    warnings: list[str] = field(default_factory=list)
+    skipped_machines: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def target_names(self) -> set[str]:
+        return set(self.targets.keys())
 
     def partial(self, rel: str) -> Partial:
         if rel not in self.partials:
@@ -295,40 +270,35 @@ def _split_frontmatter(text: str, where: str) -> tuple[dict, str]:
     return meta, m.group(2)
 
 
-def _load_user(dir_path: Path, label: str) -> dict:
+def _load_user(dir_path: Path, label: str) -> tuple[dict, list[str]]:
     """One layer of user.yaml (core or overlay) — {} when the file is absent, so a
     hermetic test registry without one still loads fine (the dataclass default supplies
     neutral values). Unlike `_load_yaml`, an empty file is valid (yaml.safe_load returns
     None) rather than a schema error, since a scaffolded overlay may start blank."""
     path = dir_path / "user.yaml"
     if not path.is_file():
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return {}, []
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text) or {}
     if not isinstance(data, dict):
         raise RegistryError(f"{label}: must be a YAML mapping")
-    bad = set(data) - KNOWN_USER_KEYS
+    warnings: list[str] = []
+    lines = text.splitlines()
+    for k in sorted(data):
+        if k in RETIRED_USER_KEYS:
+            line_no = next((idx for idx, line in enumerate(lines, 1)
+                            if re.match(rf"^\s*{re.escape(k)}\s*:", line)), None)
+            loc = f" line {line_no}" if line_no else ""
+            warnings.append(f"{label}{loc}: '{k}' in user.yaml is retired — delete this line")
+    clean_data = {k: v for k, v in data.items() if k not in RETIRED_USER_KEYS}
+    bad = set(clean_data) - KNOWN_USER_KEYS
     if bad:
         raise RegistryError(f"{label}: unknown key(s) {sorted(bad)} — known: "
                             f"{sorted(KNOWN_USER_KEYS)}")
-    for k, v in data.items():
-        # Identity keys are strings; the DEFAULTS group is not. default_deliverables is a
-        # list, and its element types + vocabulary are checked in _validate (where the
-        # graph module is already imported) rather than duplicated here.
-        if k in _USER_LIST_KEYS:
-            if not isinstance(v, list):
-                raise RegistryError(f"{label}: {k!r} must be a list")
-            continue
-        if k in _USER_BOOL_KEYS:
-            # `is bool` via isinstance is exact here: bool is the only type accepted, and
-            # Python's int/bool subclassing does not let 1 through because isinstance(1,
-            # bool) is False.
-            if not isinstance(v, bool):
-                raise RegistryError(f"{label}: {k!r} must be true or false, not "
-                                    f"{v!r}")
-            continue
+    for k, v in clean_data.items():
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")
-    return data
+    return clean_data, warnings
 
 
 def _load_yaml(path: Path) -> dict:
@@ -343,12 +313,15 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
     if not reg_dir.is_dir():
         raise RegistryError(f"no registry/ directory at {root}")
 
+    user_warnings: list[str] = []
     partials = _load_partials(reg_dir)
     skills = _load_skills(reg_dir)
     prompts = _load_prompts(reg_dir)
     projects = _load_projects(reg_dir)
     graphs = _load_graphs(reg_dir)
-    user = {**_DEFAULT_USER, **_load_user(reg_dir, "registry/user.yaml")}
+    core_user, w = _load_user(reg_dir, "registry/user.yaml")
+    user_warnings.extend(w)
+    user = {**_DEFAULT_USER, **core_user}
 
     # Mitos overlay (the Mitos overlay design): load registry/local/ on top of the core with
     # last-layer-wins precedence — a local entry replaces a same-key core entry, new local
@@ -364,7 +337,9 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
         local_projects = _load_projects(local_dir, is_local=True)
         projects = _overlay(projects, local_projects)
         graphs = _overlay(graphs, _load_graphs(local_dir))
-        user = {**user, **_load_user(local_dir, "registry/local/user.yaml")}
+        overlay_user, w = _load_user(local_dir, "registry/local/user.yaml")
+        user_warnings.extend(w)
+        user = {**user, **overlay_user}
 
     # MCP servers are moat TOOLS, not registry content — they live in connections/
     # (own deploy lane); see the connections-lane design.
@@ -375,10 +350,17 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
     targets = _load_dir_of_yaml(root / "targets", key="target")
     machines = _load_dir_of_yaml(root / "machines", key="name")
 
-    # Mitos overlay for machines and connections: same last-layer-wins contract as
-    # partials/skills/projects. Private machine profiles with real hostnames/IPs and
-    # server configs with LAN addresses live in registry/local/ (gitignored).
+    # Mitos overlay for targets, machines and connections: targets are add-only
+    # (same-name overlay target is an error, Q1). Private machine profiles with
+    # real hostnames/IPs and server configs with LAN addresses live in registry/local/ (gitignored).
     if local_dir.is_dir() and not ignore_local:
+        local_targets_dir = local_dir / "targets"
+        if local_targets_dir.is_dir() and any(local_targets_dir.glob("*.yaml")):
+            local_targets = _load_dir_of_yaml(local_targets_dir, key="target")
+            collision = set(targets) & set(local_targets)
+            if collision:
+                raise RegistryError(f"overlay target collisions not allowed: {sorted(collision)}")
+            targets.update(local_targets)
         local_machines_dir = local_dir / "machines"
         if local_machines_dir.is_dir() and any(local_machines_dir.glob("*.yaml")):
             machines = _overlay(machines, _load_dir_of_yaml(local_machines_dir, key="name"))
@@ -398,9 +380,12 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
                     merged[sname] = sval
             servers["servers"] = merged
 
+    reg_warnings: list[str] = list(user_warnings)
+    for pg in graphs.values():
+        reg_warnings.extend(pg.warnings)
     reg = Registry(root=root, partials=partials, skills=skills, servers=servers,
                    projects=projects, targets=targets, machines=machines, graphs=graphs,
-                   prompts=prompts, user=user)
+                   prompts=prompts, user=user, warnings=reg_warnings)
     reg.agents = _load_agents(reg, ignore_local=ignore_local)
     _validate(reg)
     return reg
@@ -519,16 +504,32 @@ def _load_projects(base: Path, *, is_local: bool = False) -> dict[str, dict]:
 
 
 def validate_agent_file_content(text: str, rel: str, stem: str, skills: dict[str, Skill],
-                                source: Path | None = None) -> tuple[Agent | None, str | None]:
+                                source: Path | None = None,
+                                known_targets: set[str] | None = None,
+                                targets_spec: dict[str, dict] | None = None,
+                                warnings: list[str] | None = None) -> tuple[Agent | None, str | None]:
     """Validate an agent Markdown document (frontmatter + body).
     Returns (Agent, None) on success, or (None, error_str) on failure."""
     try:
         meta, body = _split_frontmatter(text, rel)
     except RegistryError as e:
         return None, str(e)
-    bad = set(meta) - KNOWN_AGENT_KEYS
-    if bad:
-        return None, f"{rel}: unknown frontmatter key(s) {sorted(bad)} — known: {sorted(KNOWN_AGENT_KEYS)}"
+
+    # 1. Inspect frontmatter keys: known keys vs mapping blocks vs scalar keys
+    harness_blocks: dict[str, Any] = {}
+    bad_scalars: list[str] = []
+    for k, v in meta.items():
+        if k in KNOWN_AGENT_KEYS:
+            continue
+        if isinstance(v, dict):
+            harness_blocks[k] = v
+        else:
+            bad_scalars.append(k)
+
+    if bad_scalars:
+        return None, f"{rel}: unknown frontmatter key(s) {sorted(bad_scalars)} — known: {sorted(KNOWN_AGENT_KEYS)}"
+
+    # 2. Required fields: name, description, targets
     name = meta.get("name")
     if not name or not isinstance(name, str):
         return None, f"{rel}: agent missing or empty 'name'"
@@ -536,35 +537,99 @@ def validate_agent_file_content(text: str, rel: str, stem: str, skills: dict[str
         return None, f"{rel}: agent 'name' {name!r} does not match filename stem {stem!r}"
     if not re.fullmatch(r"[a-z0-9-]+", name):
         return None, f"{rel}: agent 'name' {name!r} is not a valid slug (lowercase [a-z0-9-]+)"
+
     desc = meta.get("description")
     if not desc or not isinstance(desc, str) or not desc.strip():
         return None, f"{rel}: agent missing or empty 'description'"
-    goal = meta.get("goal")
-    if not goal or not isinstance(goal, str) or not goal.strip():
-        return None, f"{rel}: agent missing or empty 'goal'"
-    sk_list = meta.get("skills")
-    if not sk_list or not isinstance(sk_list, list) or not all(isinstance(s, str) and s.strip() for s in sk_list):
-        return None, f"{rel}: agent missing or empty 'skills'"
+
+    if "targets" not in meta or meta.get("targets") is None:
+        return None, f"{rel}: agent has no 'targets'"
+    targets_val = meta.get("targets")
+    if not isinstance(targets_val, list) or not targets_val:
+        return None, f"{rel}: agent has no 'targets'"
+    if not all(isinstance(t, str) and t.strip() for t in targets_val):
+        return None, f"{rel}: agent 'targets' must be a list of strings"
+    targets = [t.strip() for t in targets_val]
+    if known_targets is not None:
+        bad_targets = set(targets) - known_targets
+        if bad_targets:
+            return None, f"{rel}: unknown target(s) {sorted(bad_targets)}"
+
+    # 3. Portable fields: goal, skills
+    goal_val = meta.get("goal")
+    if goal_val is not None and not isinstance(goal_val, str):
+        return None, f"{rel}: agent 'goal' must be a string"
+    goal = str(goal_val or "").strip()
+
+    skills_val = meta.get("skills")
+    if skills_val is not None:
+        if not isinstance(skills_val, list) or not all(isinstance(s, str) and s.strip() for s in skills_val):
+            return None, f"{rel}: agent 'skills' must be a list of strings"
+        sk_list = [s.strip() for s in skills_val]
+    else:
+        sk_list = []
+
+    # 4. Validate skills
     for s in sk_list:
         if s not in skills:
             return None, f"{rel}: agent {name!r} references unknown skill {s!r}"
-        if "mitos-agent" not in skills[s].targets:
-            return None, f"{rel}: agent {name!r} references skill {s!r} whose targets do not include 'mitos-agent'"
-    agent = Agent(name=name, description=desc.strip(), goal=goal.strip(),
-                  skills=sk_list, body=body.strip("\n"), source=source or Path(rel))
+        for t in targets:
+            if t not in skills[s].targets:
+                return None, f"{rel}: agent {name!r} references skill {s!r} whose targets do not include '{t}'"
+
+    # 5. ARB-03 harness blocks: unknown block warns, target-block not in targets warns
+    for k in harness_blocks:
+        if known_targets is not None:
+            if k in known_targets:
+                if k not in targets:
+                    msg = f"{rel}: block ignored: '{k}' not in targets"
+                    if warnings is not None:
+                        warnings.append(msg)
+            else:
+                msg = f"{rel}: unknown block '{k}' ignored"
+                if warnings is not None:
+                    warnings.append(msg)
+
+    # 6. Target supports_skills: false check
+    if targets_spec is not None and warnings is not None and sk_list:
+        for t in targets:
+            tspec = targets_spec.get(t) or {}
+            ag_spec = tspec.get("agents") or {}
+            if ag_spec.get("supports_skills") is False:
+                msg = f"agent {name!r}: target '{t}' has supports_skills: false"
+                if msg not in warnings:
+                    warnings.append(msg)
+
+    agent = Agent(
+        name=name,
+        description=desc.strip(),
+        targets=targets,
+        goal=goal,
+        skills=sk_list,
+        body=body.strip("\n"),
+        source=source or Path(rel),
+        harness_blocks=harness_blocks,
+    )
     return agent, None
 
 
-def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path) -> dict[str, Agent]:
+def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path,
+                     reg: Registry | None = None) -> dict[str, Agent]:
     out: dict[str, Agent] = {}
     if not adir.is_dir():
         return out
+    known_targets = reg.target_names if reg is not None else None
+    targets_spec = reg.targets if reg is not None else None
+    warnings = reg.warnings if reg is not None else None
     for af in sorted(adir.glob("*.md")):
         try:
             rel = af.relative_to(root).as_posix()
         except ValueError:
             rel = af.as_posix()
-        agent, err = validate_agent_file_content(af.read_text(encoding="utf-8"), rel, af.stem, skills, af)
+        agent, err = validate_agent_file_content(
+            af.read_text(encoding="utf-8"), rel, af.stem, skills, af,
+            known_targets=known_targets, targets_spec=targets_spec, warnings=warnings
+        )
         if err:
             raise RegistryError(err)
         out[agent.name] = agent
@@ -574,6 +639,7 @@ def _load_agents_dir(adir: Path, skills: dict[str, Skill], root: Path) -> dict[s
 def _load_agents(reg_or_root: Registry | Path, skills: dict[str, Skill] | None = None, *, ignore_local: bool = False) -> dict[str, Agent]:
     """Load agents from registry/agents/*.md and registry/local/agents/*.md with
     last-layer-wins precedence."""
+    reg = reg_or_root if isinstance(reg_or_root, Registry) else None
     if isinstance(reg_or_root, Registry):
         root = reg_or_root.root
         reg_skills = reg_or_root.skills if skills is None else skills
@@ -582,73 +648,36 @@ def _load_agents(reg_or_root: Registry | Path, skills: dict[str, Skill] | None =
         reg_skills = skills or {}
     core_dir = root / "registry"
     local_dir = core_dir / LOCAL_OVERLAY
-    out = _load_agents_dir(core_dir / "agents", reg_skills, root)
+    out = _load_agents_dir(core_dir / "agents", reg_skills, root, reg=reg)
     if local_dir.is_dir() and not ignore_local:
-        local_out = _load_agents_dir(local_dir / "agents", reg_skills, root)
+        local_out = _load_agents_dir(local_dir / "agents", reg_skills, root, reg=reg)
         out = _overlay(out, local_out)
     return out
 
 
-def selected_agents(reg: Registry, machine: dict) -> list[str]:
-    """Active agents deployed to a machine running the mitos-agent target.
-    Empty unless the machine has the mitos-agent target.
-    Curated via optional machine-side `agents: {include: [...] | exclude: [...]}`.
-    At most MAX_ACTIVE_AGENTS (20) may be active."""
-    if "mitos-agent" not in (machine.get("targets") or []):
-        return []
+def selected_agents(reg: Registry, machine: dict, target: str | None = None) -> list[str]:
+    """Active agents deployed to a machine.
+    If target is given, only agents that include that target in their targets:
+    and the machine runs that target are selected.
+    Curated via optional machine-side `agents: {include: [...] | exclude: [...]}`."""
+    machine_targets = set(machine.get("targets") or [])
+    if target is not None:
+        if target not in machine_targets:
+            return []
+        candidates = [a for a in reg.agents.values() if target in a.targets]
+    else:
+        candidates = [a for a in reg.agents.values() if any(t in machine_targets for t in a.targets)]
+
     mag = machine.get("agents") or {}
     inc = mag.get("include")
     exc = set(mag.get("exclude") or [])
     if inc is not None:
-        selected = [a for a in reg.agents if a in inc]
+        selected = [a.name for a in candidates if a.name in inc]
     else:
-        selected = [a for a in reg.agents if a not in exc]
-    name = machine.get("name", "machine")
-    if len(selected) > MAX_ACTIVE_AGENTS:
-        raise RegistryError(
-            f"mitos-agent allows at most {MAX_ACTIVE_AGENTS} active agents; "
-            f"{name} selects {len(selected)}: exclude some under `agents:` in machines/{name}.yaml"
-        )
+        selected = [a.name for a in candidates if a.name not in exc]
     return selected
 
 
-def _validate_default_deliverables(names, label: str, graphmod) -> None:
-    """A `default_deliverables:` value, wherever it is authored. Absent is fine; a list of
-    known terms is fine; anything else fails loudly, naming the file and the valid set."""
-    if names is None:
-        return
-    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-        raise RegistryError(
-            f"{label}: 'default_deliverables' must be a list of strings")
-    for n in names:
-        if n not in graphmod.KNOWN_DELIVERABLES:
-            raise RegistryError(
-                f"{label}: unknown default deliverable {n!r}; "
-                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-
-
-def resolve_default_deliverables(reg: "Registry", slug: str) -> tuple[str, ...]:
-    """The deliverables a NEW effort under `slug` starts with, resolved down one chain:
-
-        the Work item's own deliverables   ->  wins, always (never reaches here)
-          otherwise: the project manifest      registry/projects/<slug>.yaml
-            otherwise: registry-wide           registry/user.yaml
-
-    Only the last two levels live here — an effort that declares its own deliverables never
-    consults a default at all. The chain is the same resolution order the skill-scope design
-    already uses (a project binding wins, the global default fills in), so there is one rule
-    to learn rather than two.
-
-    A project that sets `default_deliverables: []` inherits NOTHING, which is a real answer
-    and distinct from omitting the key; `is None` rather than a falsy test keeps them apart.
-    Ordering is canonical, so the console renders the same set the graph would serialize.
-    """
-    from . import graph as graphmod
-    proj = reg.projects.get(slug) or {}
-    names = proj.get("default_deliverables")
-    if names is None:
-        names = reg.user.get("default_deliverables") or []
-    return graphmod.order_deliverables(names)
 
 
 def _load_graphs(base: Path) -> dict:
@@ -694,18 +723,6 @@ def _load_dir_of_yaml(folder: Path, *, key: str) -> dict[str, dict]:
                                 f"in {folder.name}/ already declares it")
         out[name] = data
     return out
-
-
-def known_org_domains(reg: Registry) -> set[str]:
-    """The valid org-domain tags for a knowledge-graph effort: every domain declared by
-    a skill's `org_domain` frontmatter key (core + overlay, already merged on `reg`) —
-    the console's `+ ORG` button adds a domain purely by proposing a new skill candidate
-    with this key, no loader change required. Falls back to the legacy hardcoded set
-    when no skill declares one yet, so a repo mid-migration doesn't suddenly invalidate
-    every effort tagged software/design/marketing."""
-    declared = {s.frontmatter.get("org_domain") for s in reg.skills.values()
-               if s.frontmatter.get("org_domain")}
-    return declared or {"software", "design", "marketing"}
 
 
 def document_stores(raw) -> list[str]:
@@ -754,7 +771,7 @@ def _check_document_store(label: str, ds, known: set[str]) -> None:
 def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
     """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
     when valid. No per-target incompatibility to check: a target with no project-scoped
-    surface (mitos-agent, claude-app) simply ignores `scope` and always deploys globally, so
+    surface (claude-app) simply ignores `scope` and always deploys globally, so
     `scope: project` is always a legal value regardless of which targets a skill declares
     — see PROJECT_SCOPE_CAPABLE_TARGETS."""
     scope = frontmatter.get("scope", "global")
@@ -768,16 +785,23 @@ def _validate(reg: Registry) -> None:
     # audiences reference known targets
     for p in reg.partials.values():
         if p.audience:
-            bad = set(p.audience) - KNOWN_TARGETS
+            if "agents-md" in p.audience:
+                raise RegistryError(f"{p.rel}: audience 'agents-md' is retired — use 'context-tree'")
+            bad = set(p.audience) - reg.target_names
             if bad:
                 raise RegistryError(f"{p.rel}: unknown audience(s) {sorted(bad)}")
     # skills reference known targets
     for s in reg.skills.values():
+        if "agents-md" in s.targets:
+            raise RegistryError(f"{s.rel}: target 'agents-md' is retired — use 'context-tree'")
         if not s.targets:
             raise RegistryError(f"{s.rel}: skill has no 'targets'")
-        bad = set(s.targets) - KNOWN_TARGETS
+        bad = set(s.targets) - reg.target_names
         if bad:
             raise RegistryError(f"{s.rel}: unknown target(s) {sorted(bad)}")
+    for pr in reg.prompts.values():
+        if "agents-md" in pr.targets:
+            raise RegistryError(f"{pr.rel}: target 'agents-md' is retired — use 'context-tree'")
     # scope: global (default) | project — see validate_skill_scope / Skill.scope
     for s in reg.skills.values():
         err = validate_skill_scope(s.name, s.frontmatter)
@@ -793,31 +817,53 @@ def _validate(reg: Registry) -> None:
             raise RegistryError(
                 f"skill {s.name!r}: requires_server {req!r} is not a server in "
                 f"connections/servers.yaml; known: {', '.join(sorted(known_servers))}")
-    # agents: must be valid slug, non-empty fields, skills must exist and target mitos-agent
+    # agents: valid slug, non-empty description, valid targets, skills must deploy to each target
     for agent in reg.agents.values():
+        if "agents-md" in agent.targets:
+            raise RegistryError(f"{agent.rel}: target 'agents-md' is retired — use 'context-tree'")
         if not re.fullmatch(r"[a-z0-9-]+", agent.name):
             raise RegistryError(f"agent {agent.name!r} is not a valid slug (lowercase [a-z0-9-]+)")
         if not agent.description or not agent.description.strip():
             raise RegistryError(f"agent {agent.name!r}: missing or empty 'description'")
-        if not agent.goal or not agent.goal.strip():
-            raise RegistryError(f"agent {agent.name!r}: missing or empty 'goal'")
-        if not agent.skills or not isinstance(agent.skills, list):
-            raise RegistryError(f"agent {agent.name!r}: 'skills' must be a non-empty list")
+        if not agent.targets:
+            raise RegistryError(f"{agent.rel}: agent has no 'targets'")
+        bad_t = set(agent.targets) - reg.target_names
+        if bad_t:
+            raise RegistryError(f"{agent.rel}: unknown target(s) {sorted(bad_t)}")
         for s in agent.skills:
             if s not in reg.skills:
                 raise RegistryError(f"agent {agent.name!r} references unknown skill {s!r}")
-            if "mitos-agent" not in reg.skills[s].targets:
-                raise RegistryError(f"agent {agent.name!r} references skill {s!r} whose targets do not include 'mitos-agent'")
+            for t in agent.targets:
+                if t not in reg.skills[s].targets:
+                    raise RegistryError(
+                        f"agent {agent.name!r} references skill {s!r} whose targets do not include '{t}'"
+                    )
+        for t in agent.targets:
+            tspec = reg.targets.get(t) or {}
+            ag_spec = tspec.get("agents") or {}
+            if ag_spec.get("supports_skills") is False and agent.skills:
+                msg = f"agent {agent.name!r}: target '{t}' has supports_skills: false"
+                if msg not in reg.warnings:
+                    reg.warnings.append(msg)
+        for k in agent.harness_blocks:
+            if k in reg.target_names:
+                if k not in agent.targets:
+                    msg = f"{agent.rel}: block ignored: '{k}' not in targets"
+                    if msg not in reg.warnings:
+                        reg.warnings.append(msg)
+            else:
+                msg = f"{agent.rel}: unknown block '{k}' ignored"
+                if msg not in reg.warnings:
+                    reg.warnings.append(msg)
     # prompts may omit targets (console-only is valid); when targets are set they must be known
     for p in reg.prompts.values():
-        bad = set(p.targets) - KNOWN_TARGETS
+        bad = set(p.targets) - reg.target_names
         if bad:
             raise RegistryError(f"{p.rel}: unknown target(s) {sorted(bad)}")
     # org domains live on graph EFFORTS, never on projects — a project can hold
     # software and marketing work side by side, so a manifest-level `org:` would be a
     # category error. Checked ahead of stage/etc. so an org problem is reported on its
     # own line.
-    valid_orgs = known_org_domains(reg)
     for slug, proj in reg.projects.items():
         if proj.get("org"):
             raise RegistryError(
@@ -840,41 +886,6 @@ def _validate(reg: Registry) -> None:
                 if "]" in a or "_" in a:
                     raise RegistryError(
                         f"project {slug}: alias {a!r} contains invalid character (']' or '_')")
-    from . import graph as graphmod
-    for slug, pg in reg.graphs.items():
-        for e in pg.efforts:
-            if e.org_domain and e.org_domain not in valid_orgs:
-                raise RegistryError(
-                    f"graph {slug}: effort {e.id!r} has unknown org domain "
-                    f"{e.org_domain!r}; valid: {', '.join(sorted(valid_orgs))}")
-            for d in e.deliverables:
-                if d not in graphmod.KNOWN_DELIVERABLES:
-                    raise RegistryError(
-                        f"graph {slug}: effort {e.id!r} declares unknown deliverable {d!r}; "
-                        f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-            for c in e.requirements_coverage:
-                if c not in graphmod.KNOWN_COVERAGE:
-                    raise RegistryError(
-                        f"graph {slug}: effort {e.id!r} declares unknown coverage dimension "
-                        f"{c!r}; valid: {', '.join(graphmod.KNOWN_COVERAGE)}")
-    # Default deliverable sets are validated against the SAME closed vocabulary as a
-    # declared one. A default is copied onto real efforts, so a typo here would mint
-    # invalid efforts one at a time from a file nobody looks at twice — validate it where
-    # it is authored, not where it lands.
-    # `delivers:` names a term from the same closed vocabulary an effort declares. A typo
-    # here is worse than a missing skill: the skill deploys, looks correct, and satisfies
-    # nothing — so it fails at load like every other unknown vocabulary value.
-    for name, skill in reg.skills.items():
-        d = skill.delivers
-        if d is not None and d not in graphmod.KNOWN_DELIVERABLES:
-            raise RegistryError(
-                f"skill {name!r}: unknown 'delivers' value {d!r}; "
-                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-    _validate_default_deliverables(
-        reg.user.get("default_deliverables"), "registry/user.yaml", graphmod)
-    for slug, proj in reg.projects.items():
-        _validate_default_deliverables(
-            proj.get("default_deliverables"), f"project {slug}", graphmod)
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")
@@ -1003,29 +1014,31 @@ def _validate(reg: Registry) -> None:
             resolve_local_path(mname, reg.machines[mname], raw)  # fails loudly if a
             # relative entry has no projects_root to resolve against
         # agentic_tree (optional): mounts the full agents-md operating tree (the same
-        # Navigation/Workflows/Skills/roster shape a mitos-agent machine gets at its
-        # assistant_root) inside this project's own checkout, at
+        # Navigation/Workflows/Skills/roster shape a context-tree machine gets at its
+        # context_root) inside this project's own checkout, at
         # <local_path>/<agentic_tree>/ — the workstation-side counterpart to a machine
         # mount, e.g. so Antigravity can operate against a project like an agentic
         # harness. A single relative subdirectory name, not a path — must not collide
         # with a repo checkout basename landing in the same local_path (both mounts
         # share that directory).
-        at = proj.get("agentic_tree")
-        if at is not None:
-            if not isinstance(at, str) or not at.strip():
+        if "agentic_tree" in proj:
+            raise RegistryError(f"project {slug}: 'agentic_tree' is retired — use 'context_tree'")
+        ct = proj.get("context_tree")
+        if ct is not None:
+            if not isinstance(ct, str) or not ct.strip():
                 raise RegistryError(
-                    f"project {slug}: 'agentic_tree' must be a non-empty string "
-                    f"(a subdirectory name under local_path, e.g. 'MitosAgent')")
-            at = at.strip()
-            if at in (".", "..") or "/" in at or "\\" in at:
+                    f"project {slug}: 'context_tree' must be a non-empty string "
+                    f"(a subdirectory name under local_path, e.g. 'ContextTree')")
+            ct = ct.strip()
+            if ct in (".", "..") or "/" in ct or "\\" in ct:
                 raise RegistryError(
-                    f"project {slug}: 'agentic_tree' must be a single directory name, "
-                    f"not a path — got {at!r}")
+                    f"project {slug}: 'context_tree' must be a single directory name, "
+                    f"not a path — got {ct!r}")
             for url in repo_raw if isinstance(repo_raw, list) else (
                     [repo_raw] if isinstance(repo_raw, str) and repo_raw.strip() else []):
-                if _repo_basename(url.strip()) == at:
+                if _repo_basename(url.strip()) == ct:
                     raise RegistryError(
-                        f"project {slug}: 'agentic_tree' subdirectory {at!r} collides "
+                        f"project {slug}: 'context_tree' subdirectory {ct!r} collides "
                         f"with the checkout dir of repo {url.strip()!r} — choose a "
                         f"different subdirectory name")
         for label, rel in (proj.get("context") or {}).items():
@@ -1045,10 +1058,11 @@ def _validate(reg: Registry) -> None:
             if sname not in reg.skills:
                 raise RegistryError(
                     f"project {slug}: skills binds unknown skill {sname!r}")
-            if not set(reg.skills[sname].targets) & PROJECT_SCOPE_CAPABLE_TARGETS:
+            capable = {t for t, spec in reg.targets.items() if spec.get("project_surface")}
+            if not set(reg.skills[sname].targets) & capable:
                 raise RegistryError(
                     f"project {slug}: bound skill {sname!r} does not target "
-                    f"{sorted(PROJECT_SCOPE_CAPABLE_TARGETS)} — a project binding only "
+                    f"{sorted(capable)} — a project binding only "
                     f"takes effect on a target with a project-scoped skill surface")
         for pname in (proj.get("prompts") or []):
             if pname not in reg.prompts:
@@ -1082,36 +1096,17 @@ def _validate(reg: Registry) -> None:
     # machines reference known targets
     for name, m in reg.machines.items():
         targets = set(m.get("targets", []))
-        bad = targets - KNOWN_TARGETS
+        if "agents-md" in targets:
+            raise RegistryError(f"machine {name}: target 'agents-md' is retired — use 'context-tree'")
+        bad = targets - reg.target_names
         if bad:
-            raise RegistryError(f"machine {name}: unknown target(s) {sorted(bad)}")
-        # Machine roles are exclusive: an agentic-harness machine (mitos-agent) is dedicated
-        # to that purpose — it does not also run coding harnesses. This keeps every
-        # machine's operating-mount tree (assistant_root) unambiguous and lets the
-        # planner's role checks key off "mitos-agent in targets" alone. agents-md itself is
-        # NOT a harness (it's the context format both roles can consume — a reference
-        # mount via agentic_context_root, or an operating mount via assistant_root or a
-        # project's agentic_tree:), so it is never part of this exclusion. Kept, not retired:
-        # nothing needs a both-classes machine and the planner's role checks assume one class
-        # per machine (mitos-agent-platform.md §4.4).
-        _CODING_TARGETS = {"antigravity", "claude-app", "claude-code"}
-        if "mitos-agent" in targets:
-            coding_present = targets & _CODING_TARGETS
-            if coding_present:
-                raise RegistryError(
-                    f"machine {name}: 'mitos-agent' (the agentic harness) cannot share a "
-                    f"machine with coding harness target(s) {sorted(coding_present)}. "
-                    f"An agentic machine is dedicated to that purpose — put coding "
-                    f"harnesses on a separate machine profile.")
-            # The harness traverses the operating AGENTS.md tree, which is the agents-md
-            # target's output — so mitos-agent REQUIRES agents-md on the same machine
-            # (both deploy into the one `assistant_root` install root). Without it the
-            # harness would install SOUL.md/skills/mcp.json with no tree to read.
-            if "agents-md" not in targets:
-                raise RegistryError(
-                    f"machine {name}: 'mitos-agent' requires 'agents-md' on the same machine "
-                    f"(it traverses the operating tree that target emits) — add 'agents-md' "
-                    f"to targets.")
+            reg.skipped_machines[name] = sorted(bad)
+            for t in sorted(bad):
+                reg.warnings.append(
+                    f"machine {name}: target '{t}' is not defined — machine skipped. "
+                    f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
+                )
+            continue
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
         # shape/validation as a project's document_store.
@@ -1120,6 +1115,8 @@ def _validate(reg: Registry) -> None:
             known = set(reg.servers.get("servers") or {}) | {"none"}
             _check_document_store(f"machine {name}", ds, known)
         paths = m.get("paths") or {}
+        if "assistant_root" in paths:
+            raise RegistryError(f"machine {name}: path 'assistant_root' is retired — use 'context_root'")
         # 1. Detect invalid/control characters in machine path keys (escape sequence bugs)
         for key, pval in paths.items():
             if not pval:
@@ -1170,8 +1167,8 @@ def _validate(reg: Registry) -> None:
             if "ssh_key" in git_cfg and not isinstance(git_cfg["ssh_key"], str):
                 raise RegistryError(
                     f"machine {name}: sync.git.ssh_key must be a string path to the private key")
-        # 5. (retired) The third-party settings-merge lane is gone — Mitos Agent owns its
-        #    own config file whole (targets/mitos-agent.yaml), so there is no third-party
+        # 5. (retired) The third-party settings-merge lane is gone — each harness owns its
+        #    own config file whole, so there is no third-party
         #    config.yaml to reach settings leaves into. Unknown machine keys are silently
         #    ignored (machine keys are not a closed set), so profiles drop retired settings
         #    blocks explicitly rather than relying on a validation error to catch them.
@@ -1185,7 +1182,7 @@ def _validate(reg: Registry) -> None:
             if not isinstance(msk, dict):
                 raise RegistryError(f"machine {name}: 'skills' must be a mapping of "
                                     f"target -> {{include/exclude}}")
-            bad_targets = set(msk) - KNOWN_TARGETS
+            bad_targets = set(msk) - reg.target_names
             if bad_targets:
                 raise RegistryError(f"machine {name}: skills references unknown "
                                     f"target(s) {sorted(bad_targets)}")
@@ -1220,7 +1217,7 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"machine {name}: skills.{tname} lists skill(s) in BOTH "
                         f"include and exclude: {sorted(both)}")
-        # 7. agents (optional): curation of active agents for mitos-agent —
+        # 7. agents (optional): curation of active agents for harnesses —
         #    `{include: [...] | exclude: [...]}`.
         mag = m.get("agents")
         if mag is not None:
@@ -1244,19 +1241,27 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(
                     f"machine {name}: agents lists agent(s) in BOTH "
                     f"include and exclude: {sorted(both)}")
-        sel_agents = selected_agents(reg, m)
-        if sel_agents:
+        # An `example: true` template is never deployed (compile skips it, deploy refuses it),
+        # so an overlay agent needing a skill the template's store omits must not fail it.
+        if not m.get("example"):
             from . import planner as plannermod
-            sk_spec = reg.targets.get("mitos-agent", {}).get("skills", {})
-            machine_skills = {s.name for s in plannermod._selected_skills(reg, sk_spec, m)}
-            for aname in sel_agents:
-                agent = reg.agents[aname]
-                for sk in agent.skills:
-                    if sk not in machine_skills:
-                        raise RegistryError(
-                            f"machine {name}: selected agent {agent.name!r} requires "
-                            f"skill {sk!r}, which is not deployed to this machine"
-                        )
+            for t in m.get("targets", []):
+                tspec = reg.targets.get(t) or {}
+                if not tspec.get("agents"):
+                    continue
+                t_agents = selected_agents(reg, m, target=t)
+                if not t_agents:
+                    continue
+                sk_spec = tspec.get("skills", {})
+                machine_skills = {s.name for s in plannermod._selected_skills(reg, sk_spec, m)}
+                for aname in t_agents:
+                    agent = reg.agents[aname]
+                    for sk in agent.skills:
+                        if sk not in machine_skills:
+                            raise RegistryError(
+                                f"machine {name}: selected agent {agent.name!r} requires "
+                                f"skill {sk!r}, which is not deployed to this machine"
+                            )
     # Skill curation (include:/exclude:) is a PERSONAL choice — which of the compatible
     # skills a given box actually wants — not compiler spec. targets/*.yaml is core and
     # NOT overlayable (see AGENTS.md), so a curation list living there is a fork tax on

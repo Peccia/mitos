@@ -1,5 +1,5 @@
 ---
-audience: [mitos-agent, agents-md]
+audience: [context-tree]
 ---
 ## How to work
 

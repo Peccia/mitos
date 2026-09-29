@@ -80,7 +80,7 @@ connector, the Google client libraries for `gws` (see `pyproject.toml` `[connect
   to a broad audience. Follow the existing frontmatter schema.
 - **Bug fixes**: Compiler, loader, planner, or deploy bugs.
 - **Documentation**: README improvements, setup guides, examples.
-- **Target adapters**: New tools beyond Mitos Agent/Claude/Antigravity.
+- **Target adapters**: New tools beyond Claude Code/Antigravity.
 
 ## What NOT to Contribute
 

@@ -34,80 +34,17 @@ IMAGE_KIND = "image"
 _IMAGE_KINDS = {"image", "png", "jpg", "jpeg", "gif", "webp"}
 IMAGE_HINT = ("_Entries typed `image` are pictures: open one by its ID as an image, never "
               "as text (see your document store skill's Images section)._")
-# org_domain is not a schema.org term — an explicit http://peccia.net/ predicate (rather
-# than borrowing an ill-fitting schema.org property) keeps it honest that this is Mitos's
-# own vocabulary: an effort's org-domain tag names which org-* skill governs work on
-# that effort. The org association lives on the WORK, never on the project — a project
-# can hold software and marketing efforts side by side and the session routes per task.
-# (Orgs are global domain skills; nothing org-shaped is stored per project.)
+# Retired predicates: peccia:orgDomain, peccia:deliverable, and peccia:requirementsCoverage
+# ARB-02: Ignored with a warning at load, refused at write.
 ORG_DOMAIN_PRED = PECCIA + "orgDomain"
+DELIVERABLE_PRED = PECCIA + "deliverable"
+REQ_COVERAGE_PRED = PECCIA + "requirementsCoverage"
+RETIRED_PREDICATES = {ORG_DOMAIN_PRED, DELIVERABLE_PRED, REQ_COVERAGE_PRED}
+
 # goal is likewise a peccia predicate: a free-text statement of what "done" looks like
 # for an effort, rendered as its own line under the effort heading so the agent reads
 # intent — not just a document list. Optional, omit-when-absent, no validation set.
 GOAL_PRED = PECCIA + "goal"
-# deliverable is likewise a peccia predicate, and the only repeated one: an effort declares
-# zero or more artifacts every implementation under it must yield (the forward contract). It
-# is repeated rather than a JSON list literal because RDF stores each value as its own triple;
-# the JSON array is only the JSON-LD surface form of those triples.
-DELIVERABLE_PRED = PECCIA + "deliverable"
-# requirementsCoverage is likewise a peccia predicate, and the second repeated one: an effort
-# declares zero or more dimensions a requirements-gathering session must close before its
-# requirements are exportable. Where `deliverable` is the FORWARD contract (what an implementation
-# must yield), this is the INTERVIEW contract (what the gathering must not leave unasked).
-REQ_COVERAGE_PRED = PECCIA + "requirementsCoverage"
-
-# The controlled vocabulary — scoped to what Mitos should capture from a target harness. Ordered,
-# and that order is canonical everywhere this value is written or rendered (JSON-LD serialization,
-# the compiled line, the agent's checklist): RDF does not preserve order, so ONE rule beats two.
-# Adding a term later is a one-line edit here; there is deliberately no overlay-extension lane.
-#
-# APPEND, NEVER INSERT. _ordered walks this tuple in order and filters, so a term added at the END
-# leaves every existing effort's serialized bytes untouched. Inserting mid-tuple would silently
-# reorder efforts that already declare later terms and produce a graph diff on projects nobody
-# edited — the one way this list can break a repo it was never pointed at.
-#
-# The three adjacent terms are easy to confuse, so the boundary is written down once, here, rather
-# than left to whoever authors the next effort:
-#   deploy-book      how do I SHIP THIS CHANGE?  steps, order, verification, rollback. One release.
-#   runbook          how do I OPERATE it once it runs?  alerts, failures, recovery. Outlives the release.
-#   migration-notes  what changed for EXISTING data and consumers, and what must they do?
-#
-# requirements-receipt is the return lane's spine: per-requirement outcomes keyed by the ids the
-# export minted. It is a deliverable — not a "summary" — precisely because it has a DEFINED SHAPE
-# a reader can parse and check. Unstructured prose about the work is not a deliverable and does not
-# belong in this vocabulary.
-KNOWN_DELIVERABLES = ("documentation", "tests", "changelog", "deploy-book",
-                      "runbook", "migration-notes", "requirements-receipt")
-
-
-# The controlled coverage vocabulary — the dimensions a requirements interview can be told to
-# close. Ordered on the same rule as KNOWN_DELIVERABLES, and for the same reason: RDF preserves no
-# order, so ONE canonical ordering serves the JSON-LD bytes, the compiled line, and the agent's
-# checklist alike. Adding a term is a one-line edit with no migration — an effort that does not
-# name it is unaffected.
-KNOWN_COVERAGE = ("performance", "security", "failure-recovery", "data-retention",
-                  "access-control", "scale")
-
-
-def _ordered(names, vocab: tuple[str, ...]) -> tuple[str, ...]:
-    """The one canonical ordering rule, shared by every controlled vocabulary on an effort:
-    vocabulary index first, deduplicated, unknown names last and alphabetical. It ORDERS, it does
-    not validate (loader._validate does), and it must tolerate an unknown name rather than raise,
-    because review.propose_graph_change builds a CreativeWork before validation runs and
-    parse_fragment reads untrusted candidate text."""
-    seen = set(names)
-    known = tuple(n for n in vocab if n in seen)
-    return known + tuple(sorted(seen - set(vocab)))
-
-
-def order_deliverables(names) -> tuple[str, ...]:
-    """Canonical order for an effort's forward contract (KNOWN_DELIVERABLES)."""
-    return _ordered(names, KNOWN_DELIVERABLES)
-
-
-def order_coverage(names) -> tuple[str, ...]:
-    """Canonical order for an effort's interview contract (KNOWN_COVERAGE)."""
-    return _ordered(names, KNOWN_COVERAGE)
 
 
 # store is not a schema.org term either — an explicit http://peccia.net/ predicate naming
@@ -178,17 +115,7 @@ class CreativeWork:
     name: str             # schema:name
     description: str      # schema:description
     is_part_of: str       # must be the project IRI
-    org_domain: str = ""  # peccia:orgDomain — the org domain governing this effort
-                          # (e.g. "software"); "" → untagged, route by request nature
     goal: str = ""        # peccia:goal — free-text outcome statement for this effort
-    deliverables: tuple[str, ...] = ()  # peccia:deliverable — artifacts an implementation must
-                                        # yield (the forward contract); a tuple, not a list, so a
-                                        # frozen CreativeWork compares/hashes cleanly with no
-                                        # mutable-default hazard
-    requirements_coverage: tuple[str, ...] = ()  # peccia:requirementsCoverage — the dimensions a
-                                        # requirements-gathering session must close before this
-                                        # effort's requirements are exportable (the interview
-                                        # contract). A tuple for the same reason as above.
     keywords: str = ""    # schema:keywords — optional comma-separated tags/aliases
     hidden: bool = False  # peccia:hidden — whether this effort is hidden from deployed trees
     status: str = ""      # schema:creativeWorkStatus — "" (active) or "done" (KNOWN_STATUSES)
@@ -207,6 +134,7 @@ class ProjectGraph:
     documents: list[Document] = field(default_factory=list)
     efforts: list[CreativeWork] = field(default_factory=list)
     path: Path | None = None                    # source file, for diagnostics
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def iri(self) -> str:
@@ -258,13 +186,33 @@ def friendly_doc_type(raw: str) -> str:
 
 
 # ── Load + validate ──────────────────────────────────────────────────────────
+def has_retired_predicates(path_or_text: Path | str) -> bool:
+    """Whether the JSON-LD file at path or text contains any retired predicates."""
+    if isinstance(path_or_text, Path):
+        if not path_or_text.is_file():
+            return False
+        text = path_or_text.read_text(encoding="utf-8")
+    else:
+        text = str(path_or_text)
+    try:
+        from rdflib import Graph
+        g = Graph()
+        g.parse(data=text, format="json-ld")
+        for _s, p, _o in g:
+            if str(p) in RETIRED_PREDICATES:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def load_project_graph(path: Path) -> ProjectGraph:
     """Parse one `<slug>.jsonld` file, validate its shape, return plain data.
 
     Raises GraphError (loudly) on a blank node, an unknown type, a missing required
     field, an out-of-namespace IRI, or more than one Project node.
     """
-    projects, docs, efforts = _parse_nodes(path.read_text(encoding="utf-8"), path.name)
+    projects, docs, efforts, warnings = _parse_nodes(path.read_text(encoding="utf-8"), path.name)
     if len(projects) != 1:
         raise GraphError(
             f"{path.name}: expected exactly one schema:Project node, found "
@@ -295,7 +243,8 @@ def load_project_graph(path: Path) -> ProjectGraph:
         key=lambda d: (d.name.lower(), d.drive_id))
     efforts_sorted = sorted(efforts, key=lambda e: (e.name.lower(), e.id))
     return ProjectGraph(slug=slug, name=proj_name, description=proj_desc,
-                        documents=documents, efforts=efforts_sorted, path=path)
+                        documents=documents, efforts=efforts_sorted, path=path,
+                        warnings=warnings)
 
 
 def check_effort_status(effort: CreativeWork, doc_ids, label: str) -> None:
@@ -317,11 +266,12 @@ def check_effort_status(effort: CreativeWork, doc_ids, label: str) -> None:
                 f"document in this project graph")
 
 
-def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
+def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[dict, list, list, list[str]]:
     """The shared JSON-LD parser/validator. Returns:
       ({project_iri: (name, description)},
        [(isPartOf_iri, Document)],
-       [CreativeWork])
+       [CreativeWork],
+       [warnings])
 
     Two-pass over subjects: pass 1 collects all CreativeWork IRIs so that pass 2 can
     validate document isPartOf links against the known effort set. Raises GraphError on
@@ -343,6 +293,25 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
 
     SDO = lambda term: URIRef(SCHEMA + term)  # noqa: E731
 
+    # Check for retired predicates: peccia:orgDomain, peccia:deliverable, peccia:requirementsCoverage
+    retired_found = set()
+    for s, p, o in g:
+        p_str = str(p)
+        if p_str in RETIRED_PREDICATES:
+            retired_found.add((str(s), p_str))
+
+    if refuse_retired and retired_found:
+        s, p = sorted(retired_found)[0]
+        raise GraphError(f"{label}: retired predicate refused: {p}")
+
+    warnings: list[str] = []
+    if not refuse_retired and retired_found:
+        for s, p in sorted(retired_found):
+            warnings.append(
+                f"{label}: node {s} uses retired predicate '{p}' — "
+                f"run 'mitos graph strip-retired --all' to clean"
+            )
+
     # No blank nodes anywhere — every node is an IRI (deterministic graph).
     for s, _p, o in g:
         if isinstance(s, BNode) or isinstance(o, BNode):
@@ -356,8 +325,7 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # ── Pass 1: collect Project + CreativeWork nodes ──────────────────────────
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
     raw_efforts: list[tuple] = []
-    #  (iri, name, description, org_domain, goal, deliverables, requirements_coverage, keywords,
-    #   hidden, status, evaluation)
+    #  (iri, name, description, goal, keywords, hidden, status, evaluation)
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -387,12 +355,7 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                     f"(lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens)")
             name = _one_literal(g, subj, SDO("name"), label, "CreativeWork", "name")
             desc = g.value(subj, SDO("description"))
-            domain_val = g.value(subj, URIRef(ORG_DOMAIN_PRED))
             goal_val = g.value(subj, URIRef(GOAL_PRED))
-            deliv_vals = order_deliverables(
-                str(o) for o in g.objects(subj, URIRef(DELIVERABLE_PRED)))
-            cover_vals = order_coverage(
-                str(o) for o in g.objects(subj, URIRef(REQ_COVERAGE_PRED)))
             keywords_val = g.value(subj, SDO("keywords"))
             keywords = str(keywords_val) if keywords_val is not None else ""
             hidden_val = g.value(subj, URIRef(HIDDEN_PRED))
@@ -415,9 +378,8 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
                         f"{DOCUMENT_NS}<id> IRI, got {ev!r}")
                 evaluation = ev[len(DOCUMENT_NS):]
             raw_efforts.append((s, name, str(desc) if desc is not None else "",
-                                str(domain_val) if domain_val is not None else "",
                                 str(goal_val) if goal_val is not None else "",
-                                deliv_vals, cover_vals, keywords, hidden, status, evaluation))
+                                keywords, hidden, status, evaluation))
 
     effort_iris = {r[0] for r in raw_efforts}
 
@@ -477,22 +439,18 @@ def _parse_nodes(text: str, label: str) -> tuple[dict, list, list]:
     # Build CreativeWork objects (is_part_of read from the graph; validated later by
     # load_project_graph)
     efforts = []
-    for (iri, name, desc, org_domain, goal, deliverables, coverage, keywords, hidden,
-         status, evaluation) in raw_efforts:
+    for (iri, name, desc, goal, keywords, hidden, status, evaluation) in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
         efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
                                     description=desc,
                                     is_part_of=str(part_of) if part_of is not None else "",
-                                    org_domain=org_domain,
                                     goal=goal,
-                                    deliverables=deliverables,
-                                    requirements_coverage=coverage,
                                     keywords=keywords,
                                     hidden=hidden,
                                     status=status,
                                     evaluation=evaluation))
 
-    return projects, docs, efforts
+    return projects, docs, efforts, warnings
 
 
 def parse_fragment(text: str, slug: str,
@@ -500,10 +458,10 @@ def parse_fragment(text: str, slug: str,
     """Parse a `kind: graph` candidate for one project: zero or more DigitalDocument
     and CreativeWork nodes, and optionally the Project node, for `slug`.
     Returns (project_name_or_None, project_description_or_None, documents, efforts).
-    Raises GraphError if any node belongs to a different project, or on any shape
-    violation."""
+    Raises GraphError if any node belongs to a different project, on retired predicates,
+    or on any shape violation."""
     proj_iri = PROJECT_NS + slug
-    projects, docs, efforts = _parse_nodes(text, label)
+    projects, docs, efforts, _warnings = _parse_nodes(text, label, refuse_retired=True)
     for iri in projects:
         if iri != proj_iri:
             raise GraphError(
@@ -568,17 +526,8 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
             "description": e.description,
             "isPartOf": {"@id": pg.iri},
         }
-        if e.org_domain:
-            effort_node[ORG_DOMAIN_PRED] = e.org_domain
         if e.goal:
             effort_node[GOAL_PRED] = e.goal
-        if e.deliverables:
-            # Already in canonical order (applied on read); the JSON array is the JSON-LD
-            # surface form of the repeated peccia:deliverable triples.
-            effort_node[DELIVERABLE_PRED] = list(e.deliverables)
-        if e.requirements_coverage:
-            # Same shape and same reasoning as deliverables above.
-            effort_node[REQ_COVERAGE_PRED] = list(e.requirements_coverage)
         if e.keywords:
             effort_node["keywords"] = e.keywords
         if e.hidden:
@@ -728,8 +677,7 @@ def _concise_entry(d: Document) -> str:
     document type when it is known AND not the default `document` — the tool-selection
     hint only earns its tokens when it changes which tool to reach for), then description
     and tags only when present. No URL — the document store resolves by ID.
-    Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference,
-    so the claude-code and mitos-agent surfaces render identically."""
+    Shared by the self-contained AGENTS.md block and the AGENTS_DETAILS.md reference."""
     labeled = d.doc_type and d.doc_type != DEFAULT_DOC_KIND
     meta = f"{d.date_modified} · {d.doc_type}" if labeled else d.date_modified
     line = f"- **{d.name}** `{d.drive_id}` ({meta})"
@@ -738,22 +686,6 @@ def _concise_entry(d: Document) -> str:
     if d.keywords:
         line += f" · tags: {d.keywords}"
     return line
-
-
-def _effort_domain_line(e: CreativeWork, *, org_routing: bool = True) -> list[str]:
-    """The routing line under a tagged effort's heading: names the org-* skill that
-    governs work on this effort. This — not any project-level field — is how a session
-    knows which org to load; untagged efforts route by the nature of the request.
-
-    Org skills declare `targets: [mitos-agent]` only, so this line is meaningful exclusively
-    on the agents-md/mitos-agent tree, where those skills are actually deployed. `org_routing`
-    is the caller's declaration of whether that's true for the surface being rendered —
-    `project_full_markdown` (the non-mitos-agent claude-code workstation path) passes False so
-    a claude-code-only checkout is never told to load a skill that was never deployed."""
-    if not e.org_domain or not org_routing:
-        return []
-    return [f"_Work in this effort runs under the `{e.org_domain}` org — load the "
-            f"`org-{e.org_domain}` skill._", ""]
 
 
 def _effort_goal_line(e: CreativeWork) -> list[str]:
@@ -777,28 +709,8 @@ def effort_heading(e: CreativeWork) -> str:
     return f"{e.name} ({e.id})"
 
 
-def _effort_coverage_line(e: CreativeWork) -> list[str]:
-    """The interview contract under an effort's heading: the dimensions a requirements-gathering
-    session must close before this effort's requirements are exportable. Never gated, for the same
-    reason as the deliverables line — it names no skill to load, and it is descriptive metadata any
-    harness benefits from reading. Names arrive already in canonical order (applied on read)."""
-    if not e.requirements_coverage:
-        return []
-    return [f"_Requirements coverage: {', '.join(e.requirements_coverage)}._", ""]
-
-
-def _effort_deliverables_line(e: CreativeWork) -> list[str]:
-    """The forward contract under an effort's heading: the artifacts every implementation of
-    this effort must yield. Unlike the org routing line this is NEVER gated — it names no skill
-    to load, and the coding harness that must PRODUCE these is exactly the surface the org line
-    is suppressed on. The names arrive already in canonical vocabulary order (applied on read)."""
-    if not e.deliverables:
-        return []
-    return [f"_Expected deliverables: {', '.join(e.deliverables)}._", ""]
-
-
 def _effort_status_line(e: CreativeWork) -> list[str]:
-    """The completion line under an effort's goal — the cross-repo contract grammar (MitosAgent's
+    """The completion line under an effort's goal — the cross-repo contract grammar (the harness's
     tree parser reads it with an anchored regex; change both together). Active efforts render
     nothing, so existing trees stay byte-identical."""
     if e.status != "done":
@@ -840,7 +752,7 @@ def _grouped(pg: ProjectGraph) -> tuple[dict[str, list["Document"]], bool]:
 
 def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool,
                intro: str, entry_fn, include_effort_desc: bool,
-               org_routing: bool = True, image_hint: bool = False) -> str:
+               org_routing: bool = False, image_hint: bool = False) -> str:
     """Shared renderer for all three document blocks — the connection-section grammar.
 
     The connection heading (`<Name> (`key`)`) is emitted at `level` (`#` for the standalone
@@ -872,13 +784,10 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
         for e in sorted(visible_efforts, key=lambda e: (e.name.lower(), e.id)):
             docs_in_effort = groups.get(e.iri, [])
             lines += [f"{gh} {effort_heading(e)}", ""]
-            lines += _effort_domain_line(e, org_routing=org_routing)
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
             lines += _effort_goal_line(e)
             lines += _effort_status_line(e)
-            lines += _effort_deliverables_line(e)
-            lines += _effort_coverage_line(e)
             lines += _effort_keywords_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
@@ -889,7 +798,7 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
 
 def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
                            level: int = 2, emit_heading: bool = True,
-                           org_routing: bool = True) -> str:
+                           org_routing: bool = False) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block: the LIGHTWEIGHT index the
     harness auto-loads on every request — titles only, grouped by effort. Full descriptions,
     document IDs, links, and tags live in the on-demand `AGENTS_DETAILS.md`.
@@ -898,12 +807,7 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
     prose H1). When the project's prose already opened that section (curated store-folder
     paths), the planner passes `emit_heading=False` and the titles attach beneath it. When
     the file is wholly generated (no prose H1), the planner passes `level=1` so the
-    connection section is the file's own identity.
-
-    `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`) —
-    callers pass `deploys_org_content(machine)` (org skills deploy only on a mitos-agent machine;
-    `agents-md` alone, e.g. a claude-code workstation with an `agentic_context_root` mount,
-    is not sufficient)."""
+    connection section is the file's own identity."""
     intro = ("Document titles from the knowledge graph. Full details (document IDs, links, "
              f"descriptions, tags) are in [`{DETAILS_FILENAME}`]({DETAILS_FILENAME}). To "
              f"change this list, edit `registry/graph/{pg.slug}.jsonld` and redeploy.")
@@ -922,7 +826,7 @@ def project_index_markdown(pg: ProjectGraph, heading: str | None = None, *,
 
 
 def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
-                             level: int = 1, org_routing: bool = True) -> str:
+                             level: int = 1, org_routing: bool = False) -> str:
     """A project's `Projects/<slug>/AGENTS_DETAILS.md`: the DETAILED reference, read on
     demand — the full, UNCAPPED document set (title, document ID, modified date, plus
     description and tags when present; no URL), grouped by effort. Generated and
@@ -933,9 +837,7 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
     under it. A multi-store project's planner loop passes `level=2` for every store past
     the first (`planner._project_doc_block`) so the file still has exactly one H1 overall
     — the first store's heading stays the file's identity, later stores nest as sibling
-    H2 sections, same shape every other multi-section tree node already uses.
-
-    `org_routing` — see `project_index_markdown`."""
+    H2 sections, same shape every other multi-section tree node already uses."""
     intro = "Full document reference for `AGENTS.md`. Resolve a document by its ID."
 
     def entry_fn(docs: list[Document]) -> list[str]:
@@ -950,7 +852,7 @@ def project_details_markdown(pg: ProjectGraph, heading: str | None = None, *,
 def project_full_markdown(pg: ProjectGraph,
                           heading: str | None = None, *,
                           level: int = 2, emit_heading: bool = True,
-                          org_routing: bool = True) -> str:
+                          org_routing: bool = False) -> str:
     """A project's `Projects/<slug>/AGENTS.md` document block for the agentic-harness tree
     (Antigravity / Claude Code / Claude Desktop): the FULL document context inline — per
     document the description, Drive ID, modified date, and tags (concise, one line each),
@@ -963,11 +865,6 @@ def project_full_markdown(pg: ProjectGraph,
 
     The connection section is rendered as `## <Name> (`key`)` (H2) unless `emit_heading=False`
     (the project's prose already opened it).
-
-    `org_routing` gates the per-effort org-skill routing line (see `_effort_domain_line`).
-    This renderer is also used by non-mitos-agent claude-code workstations (`planner._plan_claude_code`),
-    which pass `org_routing=False` since org skills never deploy there — the agents-md/mitos-agent
-    tree keeps the default `True`.
 
     Returns only the GENERATED block; a project's human-authored prose is prepended by the
     planner as a separate, protected section."""

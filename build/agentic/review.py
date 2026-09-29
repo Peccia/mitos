@@ -247,17 +247,24 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         cur = [(s["source"], reg.partials[s["source"]].body)
                for s in meta["sections"] if s["source"] in reg.partials]
         return (render.plain_document(cur) if cur else ""), payload, True, ""
-    if meta.get("verbatim"):
-        # a structured metadata edit (propose_meta_edit): the payload IS the full file
-        # (frontmatter + body) — diff and write it whole, never strip frontmatter first.
-        rp = meta.get("registry_path") or ""
+    rp = meta.get("registry_path") or ""
+    clean = PurePosixPath(rp.replace("\\", "/"))
+    is_target = clean.parts[:2] == ("local", "targets")
+    is_identity = clean.parts[:2] == ("local", "identity")
+    if meta.get("verbatim") or meta.get("kind") == "new" or is_target or is_identity:
+        # a structured metadata edit (propose_meta_edit) or new/target/identity file:
+        # the payload IS the full file (frontmatter + body) — diff and write it whole,
+        # never strip frontmatter first.
         if not rp:
             return "", payload, False, "no registry route for a verbatim candidate"
+        if clean.is_absolute() or ".." in clean.parts:
+            return "", payload, False, f"path traversal refused: {rp!r} resolves outside its allowed directory"
         real = _real_registry_rel(reg, rp)
         dest = reg.root / "registry" / real
+        note = meta.get("note")
         if not dest.is_file():
-            return "", payload, True, "new file — accept creates it verbatim"
-        return dest.read_text(encoding="utf-8"), payload, True, ""
+            return "", payload, True, note or "new file — accept creates it verbatim"
+        return dest.read_text(encoding="utf-8"), payload, True, note or ""
     rp = meta.get("registry_path") or ""
     planned = _planned_output(reg, meta.get("deploy_path", ""))
     if planned is not None and planned.kind != "text":
@@ -464,11 +471,14 @@ def decide(reg: Registry, candidate_id: str, decision: str, reason: str = "",
             if err:
                 return {"ok": False, "error": err}
         else:
-            verbatim = bool(meta.get("verbatim"))
-            if verbatim:
+            rp = meta.get("registry_path") or ""
+            clean = PurePosixPath(rp.replace("\\", "/"))
+            is_target = clean.parts[:2] == ("local", "targets")
+            is_identity = clean.parts[:2] == ("local", "identity")
+            verbatim = bool(meta.get("verbatim")) or meta.get("kind") == "new" or is_target or is_identity
+            if verbatim or is_target or is_identity or meta.get("kind") == "new" or ".." in clean.parts or clean.is_absolute():
                 # the candidate sat on disk as untrusted text since propose — re-run the
-                # same frontmatter/target/binding checks propose_meta_edit applied before
-                # it ever reaches route_into_registry's verbatim write.
+                # same frontmatter/target/binding/path checks before it ever reaches route_into_registry's write.
                 verr = _revalidate_verbatim(reg, meta, payload)
                 if verr:
                     return {"ok": False, "error": verr}
@@ -822,30 +832,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
     proj_iri = graphmod.PROJECT_NS + slug
     effective_efforts: dict[str, graphmod.CreativeWork] = {
         e.id: e for e in (existing_pg.efforts if existing_pg else [])}
-    _valid_domains = loader.known_org_domains(reg)
     for e_dict in (efforts or []):
-        _dom = str(e_dict.get("orgDomain", "")).strip()
-        if _dom and _dom not in _valid_domains:
-            # reject here, not at accept time — an unknown domain written into the
-            # graph would fail loader validation and break every subsequent compile
-            return {"ok": False, "error": f"unknown org domain {_dom!r}; valid: "
-                                          f"{', '.join(sorted(_valid_domains))}"}
-        # Same reject-at-propose-time posture for deliverables: a clean error in the browser
-        # now, with M5's accept-time check (via loader._validate) as the real gate, since the
-        # candidate sits on disk as untrusted text in between.
-        _deliv = graphmod.order_deliverables(
-            str(x).strip() for x in (e_dict.get("deliverables") or []) if str(x).strip())
-        _bad = [d for d in _deliv if d not in graphmod.KNOWN_DELIVERABLES]
-        if _bad:
-            return {"ok": False, "error": f"unknown deliverable(s) {_bad}; valid: "
-                                          f"{', '.join(graphmod.KNOWN_DELIVERABLES)}"}
-        # And the same posture again for the interview contract.
-        _cover = graphmod.order_coverage(
-            str(x).strip() for x in (e_dict.get("requirementsCoverage") or []) if str(x).strip())
-        _bad_cover = [c for c in _cover if c not in graphmod.KNOWN_COVERAGE]
-        if _bad_cover:
-            return {"ok": False, "error": f"unknown coverage dimension(s) {_bad_cover}; valid: "
-                                          f"{', '.join(graphmod.KNOWN_COVERAGE)}"}
         try:
             eid = str(e_dict["id"]).strip()
             prev_hidden = effective_efforts[eid].hidden if eid in effective_efforts else False
@@ -868,10 +855,7 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
                 is_part_of=proj_iri,
-                org_domain=str(e_dict.get("orgDomain", "")).strip(),
                 goal=str(e_dict.get("goal", "")).strip(),
-                deliverables=_deliv,
-                requirements_coverage=_cover,
                 keywords=kw_val,
                 hidden=hidden_val,
                 status=status_val,
@@ -950,7 +934,7 @@ def _project_file(reg: Registry, slug: str) -> Path:
 
 
 _PROJECT_EDITABLE_FIELDS = {"name", "description", "stage", "repo", "repo_notes",
-                            "default_deliverables", "hidden", "document_store", "skills"}
+                            "hidden", "document_store", "skills"}
 
 
 def propose_project_edit(reg: Registry, slug: str, fields: dict,
@@ -1210,14 +1194,13 @@ def propose_edit(reg: Registry, kind: str, ident: str, body: str,
 # ── structured metadata editing (Track A — no raw YAML ever reaches the operator) ──
 # Per-kind editable whitelist: `name` is deliberately never editable (it must stay in
 # sync with the skill's folder / the prompt's registered identity). Everything else in
-# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's `mitos_agent:` tag block)
+# the skill/prompt's frontmatter that isn't listed here (e.g. a skill's tag block)
 # passes through untouched — _validate_meta_fields only ever overlays whitelisted keys
 # onto a copy of the current frontmatter, it never drops unknown ones.
 _SKILL_META_WHITELIST = {"description", "version", "author", "license", "platforms",
-                         "targets", "category", "scope",
-                         "delivers"}
+                         "targets", "category", "scope"}
 _PROMPT_META_WHITELIST = {"description", "version", "category", "targets"}
-_AGENT_META_WHITELIST = {"description", "goal", "skills"}
+_AGENT_META_WHITELIST = {"description", "goal", "skills", "targets"}
 
 
 def _meta_whitelist(kind: str) -> set[str]:
@@ -1234,7 +1217,8 @@ def _meta_dict(fm: dict, whitelist: set[str]) -> dict:
     return {k: fm.get(k, [] if k in ("targets", "platforms", "skills") else "") for k in whitelist}
 
 
-def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[dict, str | None]:
+def _validate_meta_fields(kind: str, current_fm: dict, fields: dict,
+                          reg: Registry | None = None) -> tuple[dict, str | None]:
     """Overlay whitelisted `fields` onto a copy of `current_fm`. Returns
     (new_frontmatter, error) — error is None on success. `fields` may be a strict subset
     (or empty — a body-only edit); anything not named in `fields` is left untouched."""
@@ -1247,7 +1231,8 @@ def _validate_meta_fields(kind: str, current_fm: dict, fields: dict) -> tuple[di
         if key == "targets":
             if not isinstance(val, list) or not val:
                 return {}, "targets must be a non-empty list"
-            bad = set(val) - loader.KNOWN_TARGETS
+            known_targets = reg.target_names if reg is not None else set()
+            bad = set(val) - known_targets
             if bad:
                 return {}, f"unknown target(s) {sorted(bad)}"
             merged["targets"] = [str(t) for t in val]
@@ -1313,7 +1298,7 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         return {"ok": False, "error": "body is required"}
 
     fields = fields or {}
-    new_fm, err = _validate_meta_fields(kind, obj.frontmatter, fields)
+    new_fm, err = _validate_meta_fields(kind, obj.frontmatter, fields, reg=reg)
     if err:
         return {"ok": False, "error": err}
     if kind == "skill" and "targets" in fields:
@@ -1329,13 +1314,16 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         agent_obj = loader.Agent(
             name=ident,
             description=str(new_fm.get("description", "")).strip(),
+            targets=[str(t) for t in (new_fm.get("targets") or [])],
             goal=str(new_fm.get("goal", "")).strip(),
             skills=[str(s).strip() for s in (new_fm.get("skills") or [])],
             body=str(body).rstrip("\n"),
             source=obj.source,
+            harness_blocks=dict(obj.harness_blocks),
         )
         payload = render.render_agent(agent_obj)
-        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source)
+        _, v_err = loader.validate_agent_file_content(payload, obj.rel, ident, reg.skills, obj.source,
+                                                      known_targets=reg.target_names, targets_spec=reg.targets)
         if v_err:
             return {"ok": False, "error": v_err}
     else:
@@ -1379,7 +1367,100 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
     on disk as untrusted text since propose (this module's own security note). Returns
     an error string, or None when the frontmatter is well-formed and still passes."""
     rp = meta.get("registry_path") or ""
-    m = _FM_LINE.match(payload)
+    clean = PurePosixPath(rp.replace("\\", "/"))
+    if not rp or clean.is_absolute() or ".." in clean.parts:
+        return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+
+    payload_norm = payload.replace("\r\n", "\n")
+
+    # 1. Overlay Targets: local/targets/*.yaml
+    if clean.parts[:2] == ("local", "targets"):
+        allowed_dir = (reg.root / "registry" / "local" / "targets").resolve()
+        real = _real_registry_rel(reg, rp)
+        dest = (reg.root / "registry" / real).resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+        if not rp.endswith(".yaml"):
+            return f"target candidate {rp!r} must be a .yaml file"
+        try:
+            data = yaml.safe_load(payload_norm)
+        except yaml.YAMLError as e:
+            return f"malformed YAML in target candidate {rp!r}: {e}"
+        if not isinstance(data, dict):
+            return f"target candidate {rp!r} must be a YAML mapping"
+        stem = clean.stem
+        target_name = data.get("target")
+        if not target_name:
+            return f"target candidate {rp!r} missing 'target'"
+        if target_name != stem:
+            return f"target {target_name!r} must match file stem {stem!r}"
+        core_targets_dir = reg.root / "targets"
+        core_names = {p.stem for p in core_targets_dir.glob("*.yaml")} if core_targets_dir.is_dir() else set()
+        if stem in core_names:
+            return f"target {stem!r} collides with a core target"
+        if "skills" in data:
+            if not isinstance(data["skills"], dict):
+                return f"target candidate {rp!r}: 'skills' must be a mapping"
+            if "include" in data["skills"] or "exclude" in data["skills"]:
+                return f"target candidate {rp!r}: skills.include/exclude is not allowed in target specs"
+        if "context_file" in data and not isinstance(data["context_file"], dict):
+            return f"target candidate {rp!r}: 'context_file' must be a mapping"
+        if "agents" in data and not isinstance(data["agents"], dict):
+            return f"target candidate {rp!r}: 'agents' must be a mapping"
+        if "mcp" in data and not isinstance(data["mcp"], dict):
+            return f"target candidate {rp!r}: 'mcp' must be a mapping"
+        if "prompts" in data and not isinstance(data["prompts"], dict):
+            return f"target candidate {rp!r}: 'prompts' must be a mapping"
+        if "project_surface" in data and not isinstance(data["project_surface"], bool):
+            return f"target candidate {rp!r}: 'project_surface' must be a boolean"
+        return None
+
+    # 2. Overlay Identity: local/identity/*.md
+    if clean.parts[:2] == ("local", "identity"):
+        allowed_dir = (reg.root / "registry" / "local" / "identity").resolve()
+        real = _real_registry_rel(reg, rp)
+        dest = (reg.root / "registry" / real).resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+        if not rp.endswith(".md"):
+            return f"identity candidate {rp!r} must be a .md file"
+        m = _FM_LINE.match(payload_norm)
+        if not m:
+            return f"identity candidate {rp!r} has no YAML frontmatter"
+        try:
+            fm = yaml.safe_load(m.group(1)) or {}
+        except yaml.YAMLError as e:
+            return f"identity candidate {rp!r} has invalid frontmatter: {e}"
+        if not isinstance(fm, dict):
+            return f"identity candidate {rp!r} frontmatter must be a mapping"
+        aud = fm.get("audience")
+        if aud is None:
+            return f"{rp!r}: missing 'audience'"
+        if not isinstance(aud, list) or not aud:
+            return f"{rp!r}: audience must be a non-empty list"
+        if not all(isinstance(a, str) and a.strip() for a in aud):
+            return f"{rp!r}: audience must be a list of target names"
+        if "agents-md" in aud:
+            return f"{rp!r}: audience 'agents-md' is retired — use 'context-tree'"
+        bad = set(aud) - reg.target_names
+        if bad:
+            return f"{rp!r}: unknown audience(s) {sorted(bad)}"
+        return None
+
+    # 3. General (skills, agents, prompts)
+    allowed_dir = (reg.root / "registry").resolve()
+    real = _real_registry_rel(reg, rp)
+    dest = (reg.root / "registry" / real).resolve()
+    try:
+        dest.relative_to(allowed_dir)
+    except ValueError:
+        return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+
+    m = _FM_LINE.match(payload_norm)
     if not m:
         return f"verbatim candidate {rp!r} has no YAML frontmatter"
     try:
@@ -1391,13 +1472,19 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
     if rp.endswith("SKILL.md"):
         skill = next((s for s in reg.skills.values() if s.rel == rp), None)
         if skill is None:
-            return None   # a brand-new file — nothing registered yet to validate against
+            targets = fm.get("targets")
+            if not isinstance(targets, list) or not targets:
+                return f"{rp!r}: targets must be a non-empty list"
+            bad = set(targets) - reg.target_names
+            if bad:
+                return f"{rp!r}: unknown target(s) {sorted(bad)}"
+            return None
         if fm.get("name") != skill.frontmatter.get("name"):
             return f"{rp!r}: 'name' must not change"
         targets = fm.get("targets")
         if not isinstance(targets, list) or not targets:
             return f"{rp!r}: targets must be a non-empty list"
-        bad = set(targets) - loader.KNOWN_TARGETS
+        bad = set(targets) - reg.target_names
         if bad:
             return f"{rp!r}: unknown target(s) {sorted(bad)}"
         bind_err = _check_target_binding(reg, skill.name, [str(t) for t in targets])
@@ -1411,7 +1498,7 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         agent = next((a for a in reg.agents.values() if a.rel == rp), None)
         if agent is not None and fm.get("name") != agent.name:
             return f"{rp!r}: 'name' must not change"
-        _, err = loader.validate_agent_file_content(payload, rp, stem, reg.skills)
+        _, err = loader.validate_agent_file_content(payload_norm, rp, stem, reg.skills)
         if err:
             return err
     else:
@@ -1422,7 +1509,7 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
             targets = fm.get("targets", [])
             if targets and not isinstance(targets, list):
                 return f"{rp!r}: targets must be a list"
-            bad = set(targets or []) - loader.KNOWN_TARGETS
+            bad = set(targets or []) - reg.target_names
             if bad:
                 return f"{rp!r}: unknown target(s) {sorted(bad)}"
     return None
@@ -1432,7 +1519,7 @@ _SKILL_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
 
 def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
-                      body: str, reason: str = "", org_domain: str = "",
+                      body: str, reason: str = "",
                       resources: dict[str, str] | None = None) -> dict:
     """Propose a brand-new skill as a `kind: new` inbox candidate. The console never
     writes registry/ directly (invariant #3) — accept routes through the same
@@ -1441,10 +1528,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     diff-free "new file" candidate. Always lands in the user's private overlay
     (registry/local/skills/<name>/SKILL.md), never core.
 
-    `org_domain`, when set, is stamped into the frontmatter as-is — it marks this skill
-    as a domain-template org (see loader.known_org_domains / org_index); propose_new_org_
-    domain is the only caller that passes it. `resources` seeds examples/*, scripts/*
-    files alongside the new SKILL.md (optional).
+    `resources` seeds examples/*, scripts/* files alongside the new SKILL.md (optional).
     Returns {ok, id, registry_path} or {ok: False, error}."""
     name = str(name).strip()
     if not name:
@@ -1457,7 +1541,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     targets = frontmatter_fields.get("targets") or []
     if not isinstance(targets, list) or not targets:
         return {"ok": False, "error": "targets is required and must be a non-empty list"}
-    bad = set(targets) - loader.KNOWN_TARGETS
+    bad = set(targets) - reg.target_names
     if bad:
         return {"ok": False, "error": f"unknown target(s) {sorted(bad)}"}
     if not str(body).strip():
@@ -1472,8 +1556,6 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
         "targets": targets,
         "category": str(frontmatter_fields.get("category", "") or "general"),
     }
-    if org_domain:
-        meta_fm["org_domain"] = org_domain
     registry_path = f"local/skills/{name}/SKILL.md"
     payload = ("---\n" + yaml.safe_dump(meta_fm, sort_keys=False, allow_unicode=True)
               + "---\n\n" + str(body).rstrip("\n") + "\n")
@@ -1484,8 +1566,7 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
         "base_hash": "",
         "deploy_path": "",
         "captured_at": _now(),
-        "note": ("new org domain created in the operator console" if org_domain
-                 else "new skill created in the operator console"),
+        "note": "new skill created in the operator console",
     }
     if reason:
         meta["reason"] = reason
@@ -1499,54 +1580,45 @@ def propose_new_skill(reg: Registry, name: str, frontmatter_fields: dict,
     return {"ok": True, "id": cid, "registry_path": registry_path}
 
 
-def propose_new_org_domain(reg: Registry, domain: str, reason: str = "") -> dict:
-    """Propose a brand-new org domain (the console's `+ ORG` button): a single `kind: new`
-    skill candidate at registry/local/skills/org-<domain>/SKILL.md carrying
-    `org_domain: <domain>` in its frontmatter, seeded with the section headings a domain
-    playbook is expected to fill.
+def propose_strip_retired(reg: Registry, slug: str) -> dict:
+    """Propose stripping retired predicates (peccia:orgDomain, peccia:deliverable,
+    peccia:requirementsCoverage) from a project's knowledge graph as a `kind: graph`
+    inbox candidate (ARB-02).
 
-    The seed is a PROMPT TO THE AUTHOR, not a structure to simulate. What a domain skill
-    contributes is expertise — what to ask, what to measure, what to refuse — so the
-    template names those sections and leaves the substance to whoever knows the market.
-    Once accepted the domain is immediately valid (loader.known_org_domains) and appears in
-    the console's domain switcher (org_index); no routing table to edit.
-    Returns {ok, id, registry_path} or {ok: False, error}."""
-    domain = str(domain).strip().lower()
-    if not domain:
-        return {"ok": False, "error": "domain is required"}
-    if not _SKILL_NAME_RE.match(domain):
-        return {"ok": False, "error": "domain must be lowercase alphanumerics and hyphens "
-                                       "(matches the existing skill slug convention)"}
-    if domain in loader.known_org_domains(reg):
-        return {"ok": False, "error": f"org domain {domain!r} already exists"}
-    name = f"org-{domain}"
-    title = domain.replace("-", " ").title()
-    body = (
-        f"# {title} Domain\n\n"
-        "## What this is for\n\n"
-        f"You are the {title.lower()} expert on this Work item. Your output is a "
-        "requirements specification another harness plans and builds from — what must be "
-        "true, and how each is checked. Truth over politeness: if the ask is unsound or "
-        "mis-scoped, say so before a requirement is written, and propose the cheaper "
-        "version.\n\n"
-        "## Turn a wish into something measurable\n\n"
-        f"The words this domain's owners use loosely, the question that pins each one "
-        "down, and the requirement it becomes. Never invent the number — ask for it.\n\n"
-        "## Close a coverage dimension\n\n"
-        "The questions that actually close each dimension this Work item declares. Naming "
-        "a dimension is not closing it.\n\n"
-        "## Surface these unprompted\n\n"
-        "What an owner in this domain will not think to mention and will be unhappy about "
-        "later.\n"
-    )
-    fields = {
-        "description": f"{title} domain expertise for requirements gathering — turns an "
-                       f"owner's ask into requirements another harness can plan and build "
-                       f"from.",
-        "category": "productivity",
-        "targets": ["mitos-agent"],
+    If the graph on disk does not contain retired predicates, proposes nothing.
+    Returns {ok: True, id: cid, registry_path: ..., proposed: True} or
+    {ok: True, proposed: False, message: ...} or {ok: False, error: ...}.
+    """
+    from . import graph as graphmod
+    if slug not in reg.projects and slug not in reg.graphs:
+        return {"ok": False, "error": f"unknown project {slug!r}"}
+
+    graph_file = _graph_file(reg, slug)
+    if not graph_file.is_file():
+        return {"ok": False, "error": f"graph file not found for {slug!r}"}
+
+    text = graph_file.read_text(encoding="utf-8-sig")
+    if not graphmod.has_retired_predicates(text):
+        return {"ok": True, "proposed": False, "message": f"no retired predicates in {slug}"}
+
+    # Load in-memory graph (which drops retired predicates)
+    pg = graphmod.load_project_graph(graph_file)
+    fragment = graphmod.canonical_jsonld(pg)
+
+    graph_rel = _graph_rel(reg, slug)
+    meta = {
+        "registry_path": graph_rel,
+        "kind": "graph",
+        "project": slug,
+        "source": {"machine": socket.gethostname() or "console", "tool": "strip-retired"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": _now(),
+        "note": f"Strip retired predicates from {slug} knowledge graph",
+        "efforts_touched": [e.id for e in pg.efforts],
     }
-    return propose_new_skill(reg, name, fields, body, reason=reason, org_domain=domain)
+    cid = _write_candidate(reg, f"graph-{slug}", meta, "graph.jsonld", fragment)
+    return {"ok": True, "id": cid, "registry_path": graph_rel, "proposed": True}
 
 
 def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
@@ -1574,7 +1646,7 @@ def propose_new_prompt(reg: Registry, name: str, frontmatter_fields: dict,
     targets = frontmatter_fields.get("targets") or []
     if not isinstance(targets, list):
         return {"ok": False, "error": "targets must be a list (may be empty for console-only)"}
-    bad = set(targets) - loader.KNOWN_TARGETS
+    bad = set(targets) - reg.target_names
     if bad:
         return {"ok": False, "error": f"unknown target(s) {sorted(bad)}"}
     meta_fm = {
@@ -1622,6 +1694,9 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
         return {"ok": False, "error": "body is required"}
 
     desc = str(frontmatter_fields.get("description", "")).strip()
+    targets = frontmatter_fields.get("targets")
+    if not isinstance(targets, list):
+        targets = []
     goal = str(frontmatter_fields.get("goal", "")).strip()
     skills = frontmatter_fields.get("skills")
     if not isinstance(skills, list):
@@ -1630,6 +1705,7 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
     temp_agent = loader.Agent(
         name=name,
         description=desc,
+        targets=[str(t) for t in targets],
         goal=goal,
         skills=[str(s).strip() for s in skills],
         body=str(body).rstrip("\n"),
@@ -1639,7 +1715,8 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
 
     # Reuse loader's validator on the candidate text
     _, err = loader.validate_agent_file_content(
-        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source)
+        payload, f"local/agents/{name}.md", name, reg.skills, temp_agent.source,
+        known_targets=reg.target_names, targets_spec=reg.targets)
     if err:
         return {"ok": False, "error": err}
 
@@ -1664,19 +1741,14 @@ def propose_new_agent(reg: Registry, name: str, frontmatter_fields: dict,
 
 def agents_index(reg: Registry) -> dict:
     """Index of agents and machines deploying them for the console (GET /api/agents).
-    Returns {"agents": [{name, description, goal, skills, machines, source}],
-             "machines": [{name, selected, limit: 20}]}."""
-    real = commands.real_machines(reg)
-    mitos_machines = [
-        m for m in real
-        if "mitos-agent" in (reg.machines.get(m) or {}).get("targets", [])
-    ]
-    target_machines = mitos_machines if mitos_machines else real
+    Returns {"agents": [{name, description, targets, goal, skills, body, machines, source}],
+             "machines": [{name, selected}]}."""
+    target_machines = commands.real_machines(reg)
 
     machine_selected: dict[str, list[str]] = {}
     machines_out = []
     for mname in sorted(target_machines):
-        mcfg = reg.machines.get(mname) or {"name": mname, "targets": ["mitos-agent"]}
+        mcfg = reg.machines.get(mname) or {"name": mname, "targets": []}
         try:
             sel = loader.selected_agents(reg, mcfg)
         except Exception:
@@ -1685,7 +1757,6 @@ def agents_index(reg: Registry) -> dict:
         machines_out.append({
             "name": mname,
             "selected": len(sel),
-            "limit": loader.MAX_ACTIVE_AGENTS,
         })
 
     agents_out = []
@@ -1704,6 +1775,7 @@ def agents_index(reg: Registry) -> dict:
         agents_out.append({
             "name": agent.name,
             "description": agent.description,
+            "targets": list(agent.targets),
             "goal": agent.goal,
             "skills": list(agent.skills),
             "body": agent.body,
@@ -1821,8 +1893,7 @@ def prompt_index(reg: Registry) -> dict:
     Every entry also carries `deploys_here` (see _deploys_anywhere): whether any of the
     user's real machines would actually receive it. Nothing is filtered out server-side —
     the console defaults its views to this flag and its "All" chip reveals the rest, so a
-    coding-harness box opens showing only its own content while the mitos-agent-only org skills
-    stay readable as reference.
+    workstation opens showing only its own content while unselected skills stay readable as reference.
 
     Favorites are the user's pinned prompts, persisted in registry/local/prompt-favorites.yaml
     and surfaced so the UI can highlight them across sessions.
@@ -1845,13 +1916,6 @@ def prompt_index(reg: Registry) -> dict:
         "description": s.frontmatter.get("description", ""),
         "category": s.category,
         "targets": s.targets,
-        # READ-ONLY, and deliberately a sibling of `frontmatter` rather than a member of
-        # _SKILL_META_WHITELIST: a domain's identity is fixed by propose_new_org_domain, so
-        # widening the editable set would make it editable as a side effect. The console
-        # needs it only to ANSWER "is this an org-domain skill" — the `org-` name prefix is
-        # not that answer (a user skill may be called org-software-implementation-plan and
-        # have nothing to do with the org model).
-        "org_domain": s.frontmatter.get("org_domain", "") or "",
         "body": s.body,
         "frontmatter": _meta_dict(s.frontmatter, _SKILL_META_WHITELIST),
         "favorited": s.name in favorites,
@@ -2200,7 +2264,7 @@ def refresh_staging(reg: Registry, slug: str, pool: str = "", scope_key: str = "
 
 # ── the identity handshake (docs/implemented-document-identity.md) ───────────
 # When an operator opens the map-to-effort flow ("Tweak & map") for a Discovery document,
-# the console fetches its content and scans it for the JSON-LD block Mitos-Agent embeds in a
+# the console fetches its content and scans it for the JSON-LD block an evaluation harness embeds in a
 # graduated Work item's Implemented Document. A hint, never an authority: the operator still
 # confirms or changes the suggestion before Propose, and every degraded case (unreachable,
 # unparseable, names an unknown effort) is a silent no-suggestion, not an error.
@@ -2228,10 +2292,10 @@ def _store_for_doc(staged: dict, doc_id: str) -> str:
 # kind: the Implemented Document a graduation produces — the single evaluated document that
 # reports what a Work item actually became.
 #
-# `return-record` is deliberately NOT here. A run's return records are Mitos-Agent's raw input,
+# `return-record` is deliberately NOT here. A run's return records are a planning harness's raw input,
 # the several per-deliverable documents it reads to produce that one Implemented Document, and
-# they belong in the evaluation folder and in Mitos-Agent's own context — not in this graph. They
-# still carry an identity block, but it is read by `mitos-agent`'s store reader, not by Discovery.
+# they belong in the evaluation folder and in the harness's own context — not in this graph. They
+# still carry an identity block, but it is read by a returns reader, not by Discovery.
 #
 # Mapping them here looked harmless and was not: a document mapped to an effort is rendered into
 # that project's generated AGENTS.md, so a finished run's claims ("npm audit reports 0
@@ -2242,7 +2306,7 @@ IDENTITY_TYPES = ("implemented-requirements",)
 
 
 def extract_identity_effort(text: str, pg) -> str:
-    """The effort id Mitos-Agent's identity fragment names, when the fragment parses AND that
+    """The effort id an identity fragment names, when the fragment parses AND that
     id exists in `pg` (this project's CURRENT graph, possibly None). Untrusted candidate text:
     a malformed block, an unknown `additionalType`, or an id this project has never heard of all
     degrade to `""` — the console's existing manual flow — never a guess and never an error."""
@@ -2414,23 +2478,8 @@ def graph_index(reg: Registry) -> list[dict]:
             "skills": list(proj.get("skills") or []),
             "repo": _project_repos(proj),
             "repo_notes": dict(proj.get("repo_notes") or {}),
-            # The deliverables a NEW effort under this project starts checked with —
-            # project manifest, else registry/user.yaml (loader.resolve_default_deliverables).
-            # Resolved server-side so the client never reimplements the chain.
-            "defaultDeliverables": list(
-                loader.resolve_default_deliverables(reg, slug)),
-            # The project's OWN key, separate from the resolved value above. `None` means the key
-            # is absent (inherit); a list — INCLUDING an empty one — means this project answered.
-            # Collapsing the two would make "inherits nothing" unauthorable.
-            "defaultDeliverablesOwn": (
-                None if proj.get("default_deliverables") is None
-                else list(graphmod.order_deliverables(proj["default_deliverables"]))),
-            # org domains live on EFFORTS (orgDomain), never on the project — a project
-            # can hold software and marketing work side by side and routes per task
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
-                         "orgDomain": e.org_domain, "goal": e.goal,
-                         "deliverables": list(e.deliverables),
-                         "requirementsCoverage": list(e.requirements_coverage),
+                         "goal": e.goal,
                          "keywords": e.keywords,
                          "hidden": bool(e.hidden),
                          "status": e.status, "evaluation": e.evaluation}
@@ -2444,35 +2493,12 @@ def graph_index(reg: Registry) -> list[dict]:
     return out
 
 
-# ── org visualization (role TREE reading is READ-ONLY — titles and lens/team/vocabulary/
-# trigger playbooks are hand-authored prose in registry/skills/org-*/SKILL.md, parsed
-# here, never generated or edited through this endpoint). Domain DISCOVERY is dynamic —
-# any skill carrying an `org_domain` frontmatter key is a domain (loader.known_org_domains
-# is the same source of truth for effort orgDomain validation) — never a hardcoded table,
-# so `+ ORG` can add a domain purely by proposing a new skill candidate.
-# Orgs are GLOBAL domain skills — nothing org-shaped is stored per project; the only
-# org edge in the graph is an effort's orgDomain tag (see graph.ORG_DOMAIN_PRED). ──
 def org_index(reg: Registry) -> dict:
-    """Every org domain, discovered dynamically from skills carrying an `org_domain`
-    frontmatter key (see loader.known_org_domains).
-
-    READ-ONLY, and deliberately thin: a domain playbook is prose about a market's function
-    and output, not a structure to visualize. The console lists the domains and points at
-    the skill; the playbook itself is read where every other skill is read."""
-    out: dict[str, dict] = {}
-    for skill in sorted(reg.skills.values(), key=lambda s: s.name):
-        domain = skill.frontmatter.get("org_domain")
-        if not domain:
-            continue
-        out[domain] = {
-            "skill": skill.name,
-            "description": skill.frontmatter.get("description", ""),
-        }
-    return out
+    return {}
 
 
 def org_tree(reg: Registry, machine_name: str) -> dict:
-    """The Agent-MD folder view: reconstruct the on-disk tree the agents-md target
+    """The Context Tree folder view: reconstruct the on-disk tree the context-tree target
     deploys for a machine, from plan_machine()'s Output.deploy_path values. A read-only
     display projection of what deploy already computes — no new state, no writes.
     Returns {ok, machine, tree} or {ok: False, error}."""
@@ -2480,7 +2506,7 @@ def org_tree(reg: Registry, machine_name: str) -> dict:
         outputs = plan_machine(reg, machine_name)
     except KeyError:
         return {"ok": False, "error": f"unknown machine {machine_name!r}"}
-    agents_outputs = [o for o in outputs if o.target == "agents-md"]
+    agents_outputs = [o for o in outputs if o.target in ("context-tree", "agents-md")]
     if not agents_outputs:
         return {"ok": True, "machine": machine_name, "tree": []}
 
@@ -2523,38 +2549,14 @@ def state(reg: Registry) -> dict:
         "graphs": graph_index(reg),
         # Available document stores (servers defined in connections/servers.yaml and overlay)
         "known_stores": sorted((reg.servers.get("servers") or {}).keys()),
-        # the fixed target-adapter set (loader.KNOWN_TARGETS) — the metadata panel's
+        # the fixed target-adapter set (reg.target_names) — the metadata panel's
         # targets checkboxes read this instead of hardcoding their own copy.
-        "known_targets": sorted(loader.KNOWN_TARGETS),
-        # The controlled deliverables vocabulary (graph.KNOWN_DELIVERABLES) — the effort
-        # editor's checkbox group reads this instead of hardcoding its own copy, so adding a
-        # term to the registry constant surfaces in the UI with no client edit.
-        "known_deliverables": list(graphmod.KNOWN_DELIVERABLES),
+        "known_targets": sorted(reg.target_names),
+        # Registry load warnings (e.g. unknown targets on machines or scope leaks)
+        "warnings": list(reg.warnings),
         # The document kinds the editor's Type dropdown offers (graph.KNOWN_DOC_TYPES), first
         # entry the default for a hand-mapped document.
         "known_doc_types": list(graphmod.KNOWN_DOC_TYPES),
-        # Which skill(s) declare `delivers: <term>` — the authoring-time answer to "does anything
-        # actually produce this?", so the effort editor can say so where the declaration is made.
-        # Registry-wide, deliberately NOT per machine: `deploy --dry-run` already reports the exact
-        # per-machine gap, and a badge that changed meaning with the status-bar machine selector
-        # would be read as the deploy check without being one.
-        "deliverable_skills": {
-            term: sorted(s.name for s in reg.skills.values() if s.delivers == term)
-            for term in graphmod.KNOWN_DELIVERABLES},
-        # The registry-wide default a project inherits when it names none. READ-ONLY here: it lives
-        # in registry/user.yaml, a file the owner edits directly, and inventing a candidate lane for
-        # one rarely-changed key would be more machinery than the edit is worth (invariant #10).
-        "registry_default_deliverables": list(
-            graphmod.order_deliverables(reg.user.get("default_deliverables") or [])),
-        # The Mitos Agent presentation gate (registry/user.yaml's FEATURES group). A DISPLAY
-        # flag, deliberately NOT a sibling of `machine_targets`: what a machine compiles is
-        # decided by its own `targets:`, so a fleet with a mitos-agent machine keeps compiling
-        # it byte-for-byte while the console hides the harness's affordances. The client reads
-        # it through one predicate (`hasMitosAgent`) — see build/review_ui/app.js.
-        "mitos_agent": bool(reg.user.get("mitos_agent")),
-        # The controlled coverage vocabulary (graph.KNOWN_COVERAGE) — the effort editor's second
-        # checkbox group reads this the same way, for the same reason.
-        "known_coverage": list(graphmod.KNOWN_COVERAGE),
         # The Mitos-owned prompt placeholders, for the one-shot copy flow: `user_tokens`
         # are auto-substituted at copy time (the operator is never asked to type their own
         # name), `machine_tokens` are left literal (a copied prompt goes to a chat app, not
@@ -2562,16 +2564,18 @@ def state(reg: Registry) -> dict:
         # a fillable input the copy modal asks for. See render.user_token_map.
         "user_tokens": render.user_token_map(reg),
         "machine_tokens": render.machine_token_names(),
-        # only machines with an Agent-MD folder tree — the Org tab's folder-view picker
+        # only machines with a Context Tree folder tree — the Context Tree picker
+        "context_tree_machines": sorted(
+            m for m, cfg in reg.machines.items() if "context-tree" in cfg.get("targets", [])),
         "agents_md_machines": sorted(
-            m for m, cfg in reg.machines.items() if "agents-md" in cfg.get("targets", [])),
+            m for m, cfg in reg.machines.items() if "context-tree" in cfg.get("targets", []) or "agents-md" in cfg.get("targets", [])),
         # the status bar's machine selector — same convention as cmd_compile: example
         # templates step aside once the overlay defines a real machine; on a fresh clone
         # (no real machines yet) they show so the quick-start deploy rehearsal works
         "machines": sorted(commands.real_machines(reg)),
         # The targets those machines actually declare. The Skills tab's filter chips read
-        # this instead of `known_targets` (the full adapter set), so a coding-harness box is
-        # not offered `mitos-agent` as a filter for skills it can never receive. Empty only if a
+        # this instead of `known_targets` (the full adapter set), so a workstation is
+        # not offered unconfigured targets as a filter for skills it can never receive. Empty only if a
         # machine profile declares no targets at all.
         "machine_targets": sorted({t for name in commands.real_machines(reg)
                                    for t in (reg.machines.get(name) or {}).get("targets", [])}),
@@ -2742,7 +2746,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/agents/new",
-                                  "/api/org/new-domain", "/api/ops/compile",
+                                  "/api/ops/compile",
                                   "/api/ops/deploy/plan", "/api/ops/deploy/apply"):
                 return self._json(404, {"ok": False, "error": "not found"})
             try:
@@ -2836,12 +2840,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                     fm if isinstance(fm, dict) else {},
                     str(body.get("body", "")), str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
-            if self.path == "/api/org/new-domain":
-                # the "+ ORG" button — propose a new domain-template skill (kind: new)
-                result = propose_new_org_domain(
-                    holder["reg"], str(body.get("domain", "")),
-                    str(body.get("reason", "") or ""))
-                return self._json(200 if result.get("ok") else 400, result)
+
             if self.path == "/api/graph":
                 # propose document/effort mapping(s)/removal(s) as a kind:graph
                 # candidate — only writes inbox/
@@ -2907,7 +2906,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/graph/peek-identity":
                 # "Tweak & map" opening on a staged document — fetch its content and scan
-                # for Mitos-Agent's identity fragment (docs/implemented-document-identity.md)
+                # for an identity fragment (docs/implemented-document-identity.md)
                 # via a mitos.py subprocess. Always 200: an unreachable store or a document
                 # with no fragment is exactly as valid an outcome as finding one, never an
                 # error the console needs to surface.

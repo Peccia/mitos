@@ -6,6 +6,7 @@
 |---|---|---|
 | Context | ✅ | `CLAUDE.md` per project or at repo root |
 | Skills | ✅ | `.claude/skills/<name>/SKILL.md` (project) or `~/.claude/skills/<name>/SKILL.md` (personal/global) — see [Skill scope](#skill-scope-global-vs-project) below |
+| Agents | ✅ | `~/.claude/agents/<name>.md` (personal/global) — see [Agents](#agents--claudeagents) below |
 | Prompts (slash-commands) | ✅ **confirmed** | `.claude/commands/<name>.md` — per-project; `~/.claude/commands/` — global (user-level) |
 | MCP config | project `.mcp.json` | Not currently wired in Mitos (no project opts in) |
 
@@ -26,12 +27,12 @@ A skill's `scope:` frontmatter key picks which one Mitos deploys to (mirrors the
   `skills:` list (`registry/projects/<slug>.yaml`), at `<project-root>/.claude/skills/`. Never
   appears in the personal directory.
 
-`mitos-agent` and `claude-app` have no project-scoped skill surface at all — they ignore `scope`
-entirely and always deploy globally, regardless of the value set.
+`claude-app` has no project-scoped skill surface at all — it ignores `scope`
+entirely and always stages globally.
 
-Set/edit `scope` via the Operator Console's Skills tab (**Skills & Orgs** when
-`mitos_agent: true`; each skill card's **Scope** section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
+Set/edit `scope` via the Operator Console's Skills tab (each skill card's **Scope** section) or directly in the skill's `SKILL.md` frontmatter. Which *projects* bind a
 `scope: project` skill is controlled by each project's manifest `skills:` list — edited directly in `registry/projects/<slug>.yaml` or from the console's Project panel (**Edit properties → Bound skills**).
+
 
 ## Slash-command prompts — `.claude/commands/`
 
@@ -71,3 +72,18 @@ A bound prompt must exist in `registry/prompts/` (or your overlay `registry/loca
 
 ### Rendered Output
 When deployed, Mitos writes `<project-root>/.claude/commands/<name>.md` containing the `description:` frontmatter (for Claude Code's slash-command picker) and the prompt body with `$ARGUMENTS` support. Invoking `/name` within that project's checkout executes the command.
+
+---
+
+## Agents — `~/.claude/agents/`
+
+Claude Code supports custom user agents (subagents) deployed to `~/.claude/agents/<name>.md`.
+Configured via the machine profile path `claude_code_agents`:
+
+```yaml
+paths:
+  claude_code_agents: "~/.claude/agents"
+```
+
+When deployed, Mitos writes each active agent targeting `claude-code` with its frontmatter (`name`, `description`, and any `claude-code:` specific block options such as `tools` and `model`), with `goal` folded into the body text.
+
