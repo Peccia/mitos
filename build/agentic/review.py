@@ -247,17 +247,24 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         cur = [(s["source"], reg.partials[s["source"]].body)
                for s in meta["sections"] if s["source"] in reg.partials]
         return (render.plain_document(cur) if cur else ""), payload, True, ""
-    if meta.get("verbatim"):
-        # a structured metadata edit (propose_meta_edit): the payload IS the full file
-        # (frontmatter + body) — diff and write it whole, never strip frontmatter first.
-        rp = meta.get("registry_path") or ""
+    rp = meta.get("registry_path") or ""
+    clean = PurePosixPath(rp.replace("\\", "/"))
+    is_target = clean.parts[:2] == ("local", "targets")
+    is_identity = clean.parts[:2] == ("local", "identity")
+    if meta.get("verbatim") or meta.get("kind") == "new" or is_target or is_identity:
+        # a structured metadata edit (propose_meta_edit) or new/target/identity file:
+        # the payload IS the full file (frontmatter + body) — diff and write it whole,
+        # never strip frontmatter first.
         if not rp:
             return "", payload, False, "no registry route for a verbatim candidate"
+        if clean.is_absolute() or ".." in clean.parts:
+            return "", payload, False, f"path traversal refused: {rp!r} resolves outside its allowed directory"
         real = _real_registry_rel(reg, rp)
         dest = reg.root / "registry" / real
+        note = meta.get("note")
         if not dest.is_file():
-            return "", payload, True, "new file — accept creates it verbatim"
-        return dest.read_text(encoding="utf-8"), payload, True, ""
+            return "", payload, True, note or "new file — accept creates it verbatim"
+        return dest.read_text(encoding="utf-8"), payload, True, note or ""
     rp = meta.get("registry_path") or ""
     planned = _planned_output(reg, meta.get("deploy_path", ""))
     if planned is not None and planned.kind != "text":
@@ -464,11 +471,14 @@ def decide(reg: Registry, candidate_id: str, decision: str, reason: str = "",
             if err:
                 return {"ok": False, "error": err}
         else:
-            verbatim = bool(meta.get("verbatim"))
-            if verbatim:
+            rp = meta.get("registry_path") or ""
+            clean = PurePosixPath(rp.replace("\\", "/"))
+            is_target = clean.parts[:2] == ("local", "targets")
+            is_identity = clean.parts[:2] == ("local", "identity")
+            verbatim = bool(meta.get("verbatim")) or meta.get("kind") == "new" or is_target or is_identity
+            if verbatim or is_target or is_identity or meta.get("kind") == "new" or ".." in clean.parts or clean.is_absolute():
                 # the candidate sat on disk as untrusted text since propose — re-run the
-                # same frontmatter/target/binding checks propose_meta_edit applied before
-                # it ever reaches route_into_registry's verbatim write.
+                # same frontmatter/target/binding/path checks before it ever reaches route_into_registry's write.
                 verr = _revalidate_verbatim(reg, meta, payload)
                 if verr:
                     return {"ok": False, "error": verr}
@@ -1384,7 +1394,100 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
     on disk as untrusted text since propose (this module's own security note). Returns
     an error string, or None when the frontmatter is well-formed and still passes."""
     rp = meta.get("registry_path") or ""
-    m = _FM_LINE.match(payload)
+    clean = PurePosixPath(rp.replace("\\", "/"))
+    if not rp or clean.is_absolute() or ".." in clean.parts:
+        return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+
+    payload_norm = payload.replace("\r\n", "\n")
+
+    # 1. Overlay Targets: local/targets/*.yaml
+    if clean.parts[:2] == ("local", "targets"):
+        allowed_dir = (reg.root / "registry" / "local" / "targets").resolve()
+        real = _real_registry_rel(reg, rp)
+        dest = (reg.root / "registry" / real).resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+        if not rp.endswith(".yaml"):
+            return f"target candidate {rp!r} must be a .yaml file"
+        try:
+            data = yaml.safe_load(payload_norm)
+        except yaml.YAMLError as e:
+            return f"malformed YAML in target candidate {rp!r}: {e}"
+        if not isinstance(data, dict):
+            return f"target candidate {rp!r} must be a YAML mapping"
+        stem = clean.stem
+        target_name = data.get("target")
+        if not target_name:
+            return f"target candidate {rp!r} missing 'target'"
+        if target_name != stem:
+            return f"target {target_name!r} must match file stem {stem!r}"
+        core_targets_dir = reg.root / "targets"
+        core_names = {p.stem for p in core_targets_dir.glob("*.yaml")} if core_targets_dir.is_dir() else set()
+        if stem in core_names:
+            return f"target {stem!r} collides with a core target"
+        if "skills" in data:
+            if not isinstance(data["skills"], dict):
+                return f"target candidate {rp!r}: 'skills' must be a mapping"
+            if "include" in data["skills"] or "exclude" in data["skills"]:
+                return f"target candidate {rp!r}: skills.include/exclude is not allowed in target specs"
+        if "context_file" in data and not isinstance(data["context_file"], dict):
+            return f"target candidate {rp!r}: 'context_file' must be a mapping"
+        if "agents" in data and not isinstance(data["agents"], dict):
+            return f"target candidate {rp!r}: 'agents' must be a mapping"
+        if "mcp" in data and not isinstance(data["mcp"], dict):
+            return f"target candidate {rp!r}: 'mcp' must be a mapping"
+        if "prompts" in data and not isinstance(data["prompts"], dict):
+            return f"target candidate {rp!r}: 'prompts' must be a mapping"
+        if "project_surface" in data and not isinstance(data["project_surface"], bool):
+            return f"target candidate {rp!r}: 'project_surface' must be a boolean"
+        return None
+
+    # 2. Overlay Identity: local/identity/*.md
+    if clean.parts[:2] == ("local", "identity"):
+        allowed_dir = (reg.root / "registry" / "local" / "identity").resolve()
+        real = _real_registry_rel(reg, rp)
+        dest = (reg.root / "registry" / real).resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+        if not rp.endswith(".md"):
+            return f"identity candidate {rp!r} must be a .md file"
+        m = _FM_LINE.match(payload_norm)
+        if not m:
+            return f"identity candidate {rp!r} has no YAML frontmatter"
+        try:
+            fm = yaml.safe_load(m.group(1)) or {}
+        except yaml.YAMLError as e:
+            return f"identity candidate {rp!r} has invalid frontmatter: {e}"
+        if not isinstance(fm, dict):
+            return f"identity candidate {rp!r} frontmatter must be a mapping"
+        aud = fm.get("audience")
+        if aud is None:
+            return f"{rp!r}: missing 'audience'"
+        if not isinstance(aud, list) or not aud:
+            return f"{rp!r}: audience must be a non-empty list"
+        if not all(isinstance(a, str) and a.strip() for a in aud):
+            return f"{rp!r}: audience must be a list of target names"
+        if "agents-md" in aud:
+            return f"{rp!r}: audience 'agents-md' is retired — use 'context-tree'"
+        bad = set(aud) - reg.target_names
+        if bad:
+            return f"{rp!r}: unknown audience(s) {sorted(bad)}"
+        return None
+
+    # 3. General (skills, agents, prompts)
+    allowed_dir = (reg.root / "registry").resolve()
+    real = _real_registry_rel(reg, rp)
+    dest = (reg.root / "registry" / real).resolve()
+    try:
+        dest.relative_to(allowed_dir)
+    except ValueError:
+        return f"path traversal refused: {rp!r} resolves outside its allowed directory"
+
+    m = _FM_LINE.match(payload_norm)
     if not m:
         return f"verbatim candidate {rp!r} has no YAML frontmatter"
     try:
@@ -1396,7 +1499,13 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
     if rp.endswith("SKILL.md"):
         skill = next((s for s in reg.skills.values() if s.rel == rp), None)
         if skill is None:
-            return None   # a brand-new file — nothing registered yet to validate against
+            targets = fm.get("targets")
+            if not isinstance(targets, list) or not targets:
+                return f"{rp!r}: targets must be a non-empty list"
+            bad = set(targets) - reg.target_names
+            if bad:
+                return f"{rp!r}: unknown target(s) {sorted(bad)}"
+            return None
         if fm.get("name") != skill.frontmatter.get("name"):
             return f"{rp!r}: 'name' must not change"
         targets = fm.get("targets")
@@ -1416,7 +1525,7 @@ def _revalidate_verbatim(reg: Registry, meta: dict, payload: str) -> str | None:
         agent = next((a for a in reg.agents.values() if a.rel == rp), None)
         if agent is not None and fm.get("name") != agent.name:
             return f"{rp!r}: 'name' must not change"
-        _, err = loader.validate_agent_file_content(payload, rp, stem, reg.skills)
+        _, err = loader.validate_agent_file_content(payload_norm, rp, stem, reg.skills)
         if err:
             return err
     else:

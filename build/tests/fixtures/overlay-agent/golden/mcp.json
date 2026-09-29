@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "gws": {
+      "url": "http://localhost:8000/mcp",
+      "transport": "streamable-http",
+      "tools": [
+        "list_calendars",
+        "get_events",
+        "manage_event",
+        "list_contacts",
+        "get_contact",
+        "search_contacts",
+        "get_doc_content",
+        "create_doc",
+        "modify_doc_text",
+        "import_to_google_doc",
+        "search_drive_files",
+        "get_drive_file_content",
+        "get_drive_file_download_url",
+        "get_drive_shareable_link",
+        "create_drive_file",
+        "create_drive_folder",
+        "create_form",
+        "get_form",
+        "search_gmail_messages",
+        "get_gmail_message_content",
+        "get_gmail_messages_content_batch",
+        "read_sheet_values",
+        "modify_sheet_values",
+        "create_spreadsheet",
+        "import_to_google_sheets",
+        "create_presentation",
+        "get_presentation",
+        "import_to_google_slides",
+        "list_tasks",
+        "get_task",
+        "manage_task"
+      ]
+    }
+  }
+}

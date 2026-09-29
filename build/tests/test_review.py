@@ -3267,3 +3267,172 @@ def test_agents_section_hidden_without_flag():
     assert "if (!agentsData && hasMitosAgent())" not in app
     assert "of 20" not in app
 
+
+def test_accept_new_target_candidate():
+    """A valid target is accepted and appears in reg.target_names; malformed YAML,
+    schema-invalid YAML, a core-name collision and a ../ path are each refused, with
+    nothing written. The same cases are mirrored for identity."""
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+
+    # 1. Valid target accepted
+    target_payload = (
+        "target: scratch-target\n"
+        "context_file:\n"
+        "  deploy_to_key: context_root\n"
+        "  filename: CONTEXT.md\n"
+    )
+    meta = {
+        "registry_path": "local/targets/scratch-target.yaml",
+        "kind": "new",
+        "source": {"machine": "test", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "test candidate",
+    }
+    _plant_candidate(tmp, "valid-target", meta, "scratch-target.yaml", target_payload)
+    res = review.decide(loader.load(tmp), "valid-target", "accept", "")
+    assert res["ok"], res
+    written_target = tmp / "registry" / "local" / "targets" / "scratch-target.yaml"
+    assert written_target.is_file()
+    treg2 = loader.load(tmp)
+    assert "scratch-target" in treg2.target_names
+
+    # 2. Malformed YAML refused
+    bad_meta = dict(meta, registry_path="local/targets/malformed.yaml")
+    _plant_candidate(tmp, "malformed-target", bad_meta, "malformed.yaml", ": bad: [yaml")
+    res = review.decide(loader.load(tmp), "malformed-target", "accept", "")
+    assert not res["ok"]
+    assert "malformed" in res["error"]
+    assert not (tmp / "registry" / "local" / "targets" / "malformed.yaml").exists()
+
+    # 3. Schema-invalid YAML:
+    # 3a. Target name doesn't match stem
+    bad_schema_meta = dict(meta, registry_path="local/targets/mismatched.yaml")
+    _plant_candidate(tmp, "mismatched-target", bad_schema_meta, "mismatched.yaml", "target: other-name\n")
+    res = review.decide(loader.load(tmp), "mismatched-target", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "targets" / "mismatched.yaml").exists()
+
+    # 3b. Skills block has include/exclude
+    bad_skills_meta = dict(meta, registry_path="local/targets/bad-skills.yaml")
+    _plant_candidate(tmp, "bad-skills-target", bad_skills_meta, "bad-skills.yaml",
+                     "target: bad-skills\nskills:\n  include: [test]\n")
+    res = review.decide(loader.load(tmp), "bad-skills-target", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "targets" / "bad-skills.yaml").exists()
+
+    # 4. Core-name collision refused
+    core_collision_meta = dict(meta, registry_path="local/targets/context-tree.yaml")
+    _plant_candidate(tmp, "core-collision", core_collision_meta, "context-tree.yaml", "target: context-tree\n")
+    res = review.decide(loader.load(tmp), "core-collision", "accept", "")
+    assert not res["ok"]
+    assert "collides with a core target" in res["error"]
+    assert not (tmp / "registry" / "local" / "targets" / "context-tree.yaml").exists()
+
+    # 5. Traversal path refused
+    traversal_meta = dict(meta, registry_path="local/targets/../machines/evil.yaml")
+    _plant_candidate(tmp, "traversal-target", traversal_meta, "evil.yaml", "target: evil\n")
+    res = review.decide(loader.load(tmp), "traversal-target", "accept", "")
+    assert not res["ok"]
+    assert "path traversal refused" in res["error"]
+    assert not (tmp / "machines" / "evil.yaml").exists()
+
+    # --- Identity partial mirrored cases ---
+
+    # 1. Valid identity accepted
+    id_payload = "---\naudience: [context-tree]\n---\n# Identity\n\nCustom rules.\n"
+    id_meta = {
+        "registry_path": "local/identity/custom-rules.md",
+        "kind": "new",
+        "source": {"machine": "test", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "test identity",
+    }
+    _plant_candidate(tmp, "valid-id", id_meta, "custom-rules.md", id_payload)
+    res = review.decide(loader.load(tmp), "valid-id", "accept", "")
+    assert res["ok"], res
+    written_id = tmp / "registry" / "local" / "identity" / "custom-rules.md"
+    assert written_id.is_file()
+    treg3 = loader.load(tmp)
+    assert "identity/custom-rules.md" in treg3.partials
+
+    # 2. Malformed YAML frontmatter refused
+    bad_id_meta = dict(id_meta, registry_path="local/identity/bad-frontmatter.md")
+    _plant_candidate(tmp, "bad-id-fm", bad_id_meta, "bad-frontmatter.md", "---\n: bad: [yaml\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "bad-id-fm", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "identity" / "bad-frontmatter.md").exists()
+
+    # 3. Schema-invalid YAML: missing audience
+    no_aud_meta = dict(id_meta, registry_path="local/identity/no-audience.md")
+    _plant_candidate(tmp, "no-aud-id", no_aud_meta, "no-audience.md", "---\nname: not-audience\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "no-aud-id", "accept", "")
+    assert not res["ok"]
+    assert not (tmp / "registry" / "local" / "identity" / "no-audience.md").exists()
+
+    # 4. Unknown audience / retired target refused
+    bad_aud_meta = dict(id_meta, registry_path="local/identity/bad-audience.md")
+    _plant_candidate(tmp, "bad-aud-id", bad_aud_meta, "bad-audience.md", "---\naudience: [not-a-real-target]\n---\nbody\n")
+    res = review.decide(loader.load(tmp), "bad-aud-id", "accept", "")
+    assert not res["ok"]
+    assert "unknown audience" in res["error"]
+    assert not (tmp / "registry" / "local" / "identity" / "bad-audience.md").exists()
+
+    # 5. Traversal path refused
+    id_traversal_meta = dict(id_meta, registry_path="local/identity/../evil.md")
+    _plant_candidate(tmp, "traversal-id", id_traversal_meta, "evil.md", "---\naudience: [context-tree]\n---\n")
+    res = review.decide(loader.load(tmp), "traversal-id", "accept", "")
+    assert not res["ok"]
+    assert "path traversal refused" in res["error"]
+    assert not (tmp / "registry" / "local" / "evil.md").exists()
+
+
+def test_upgrade_path_unknown_target_then_accept_seed():
+    """TEST-02: core target removed, an overlay machine targeting it, the seed pending;
+    the registry loads with the warning; accept; plan_machine('rig') is non-empty."""
+    from agentic import review, planner
+
+    treg, tmp = _temp_registry()
+
+    # Remove core mitos-agent target
+    core_target = tmp / "targets" / "mitos-agent.yaml"
+    seed_content = core_target.read_text(encoding="utf-8")
+    core_target.unlink()
+
+    # In post-M6 core, partials/skills no longer name mitos-agent; only machines do
+    for p in (tmp / "registry").rglob("*.md"):
+        text = p.read_text(encoding="utf-8")
+        if "mitos-agent" in text:
+            p.write_text(text.replace("mitos-agent, ", "").replace(", mitos-agent", "").replace("mitos-agent", "context-tree"), encoding="utf-8")
+
+    # Machine targets mitos-agent (which is now unknown)
+    loaded_warn = loader.load(tmp)
+    assert "rig" in loaded_warn.skipped_machines
+
+    # Seed is pending in inbox
+    meta = {
+        "registry_path": "local/targets/mitos-agent.yaml",
+        "kind": "new",
+        "source": {"machine": "rig", "tool": "mitos-agent"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "seed target",
+    }
+    _plant_candidate(tmp, "seed-mitos-agent", meta, "mitos-agent.yaml", seed_content)
+
+    # Accept the seed
+    res = review.decide(loaded_warn, "seed-mitos-agent", "accept", "")
+    assert res["ok"], res
+
+    # Registry now loads cleanly, machine is not skipped, outputs are non-empty
+    loaded_fixed = loader.load(tmp)
+    assert "rig" not in loaded_fixed.skipped_machines
+    outputs = planner.plan_machine(loaded_fixed, "rig")
+    assert len(outputs) > 0
+

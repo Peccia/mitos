@@ -1002,13 +1002,37 @@ def route_into_registry(reg: Registry, registry_path: str, payload_text: str,
     if not registry_path:
         return [], [], ("no registry route for this content (multi-source candidate "
                         "without a per-section base) — apply it by hand.")
+    clean = PurePosixPath(registry_path.replace("\\", "/"))
+    if clean.is_absolute() or ".." in clean.parts:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
     real = _real_registry_rel(reg, registry_path)   # route overlay-backed paths into local/
-    dest = reg.root / "registry" / real
+    real_clean = PurePosixPath(real.replace("\\", "/"))
+    if real_clean.is_absolute() or ".." in real_clean.parts:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    dest = (reg.root / "registry" / real).resolve()
+    reg_root_resolved = (reg.root / "registry").resolve()
+    try:
+        dest.relative_to(reg_root_resolved)
+    except ValueError:
+        return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    if clean.parts[:2] == ("local", "targets"):
+        allowed_dir = (reg.root / "registry" / "local" / "targets").resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+    elif clean.parts[:2] == ("local", "identity"):
+        allowed_dir = (reg.root / "registry" / "local" / "identity").resolve()
+        try:
+            dest.relative_to(allowed_dir)
+        except ValueError:
+            return [], [], f"path traversal refused: {registry_path!r} resolves outside its allowed directory"
+
     if not dest.is_file():
         # a `new` proposal: the payload IS the proposed file, frontmatter and all
         write_text(dest, payload_text.rstrip("\n") + "\n")
         return [real], [], None
-    if keep_frontmatter:
+    if keep_frontmatter or real.startswith("local/targets/") or real.startswith("local/identity/"):
         new_text = payload_text.rstrip("\n") + "\n"
         if dest.read_text(encoding="utf-8") == new_text:
             return [], [], None

@@ -2795,3 +2795,48 @@ def test_agent_with_mitos_agent_target_does_not_reach_claude_code_on_dual_machin
     agent_outs = [p for p in planned if "mitos-only.md" in p.deploy_path]
     assert len(agent_outs) == 0
 
+
+def test_overlay_agent_target_golden():
+    """Milestone 5 contract golden test (TEST-06).
+
+    Renders SOUL.md, skills/<cat>/<name>/SKILL.md, agents/<name>.md and mcp.json
+    for the overlay agent target from fixture inputs, and compares them with
+    checked-in golden files.
+    """
+    import yaml as _y
+    fixture_dir = Path(__file__).parent / "fixtures" / "overlay-agent"
+    target_yaml = (fixture_dir / "mitos-agent.yaml").read_text(encoding="utf-8")
+    agent_md = (fixture_dir / "agents" / "sample-agent.md").read_text(encoding="utf-8")
+
+    treg, tmp = _temp_registry()
+
+    # Configure rig machine with deterministic context_root matching golden outputs
+    rig_file = tmp / "machines" / "rig.yaml"
+    rig_cfg = _y.safe_load(rig_file.read_text(encoding="utf-8"))
+    rig_cfg["paths"]["context_root"] = "/opt/mitos-agent"
+    rig_file.write_text(_y.safe_dump(rig_cfg), encoding="utf-8")
+
+    # Install sample agent into registry/local/agents/
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "sample-agent.md").write_text(agent_md, encoding="utf-8")
+
+    fresh = loader.load(tmp)
+    outs = planner.plan_machine(fresh, "rig")
+
+    golden_dir = fixture_dir / "golden"
+    expected_soul = (golden_dir / "SOUL.md").read_text(encoding="utf-8")
+    expected_mcp = (golden_dir / "mcp.json").read_text(encoding="utf-8")
+    expected_agent = (golden_dir / "agents" / "sample-agent.md").read_text(encoding="utf-8")
+    expected_skill = (golden_dir / "skills" / "productivity" / "gws" / "SKILL.md").read_text(encoding="utf-8")
+
+    actual_soul = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/SOUL.md")
+    actual_mcp = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/mcp.json")
+    actual_agent = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/agents/sample-agent.md")
+    actual_skill = next(o for o in outs if o.deploy_path == "/opt/mitos-agent/skills/productivity/gws/SKILL.md")
+
+    assert actual_soul.content.replace("\r\n", "\n") == expected_soul.replace("\r\n", "\n")
+    assert actual_mcp.content.replace("\r\n", "\n") == expected_mcp.replace("\r\n", "\n")
+    assert actual_agent.content.replace("\r\n", "\n") == expected_agent.replace("\r\n", "\n")
+    assert actual_skill.content.replace("\r\n", "\n") == expected_skill.replace("\r\n", "\n")
+
