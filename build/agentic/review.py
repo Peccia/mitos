@@ -2477,7 +2477,7 @@ def org_index(reg: Registry) -> dict:
 
 
 def org_tree(reg: Registry, machine_name: str) -> dict:
-    """The Agent-MD folder view: reconstruct the on-disk tree the agents-md target
+    """The Context Tree folder view: reconstruct the on-disk tree the context-tree target
     deploys for a machine, from plan_machine()'s Output.deploy_path values. A read-only
     display projection of what deploy already computes — no new state, no writes.
     Returns {ok, machine, tree} or {ok: False, error}."""
@@ -2485,7 +2485,7 @@ def org_tree(reg: Registry, machine_name: str) -> dict:
         outputs = plan_machine(reg, machine_name)
     except KeyError:
         return {"ok": False, "error": f"unknown machine {machine_name!r}"}
-    agents_outputs = [o for o in outputs if o.target == "agents-md"]
+    agents_outputs = [o for o in outputs if o.target in ("context-tree", "agents-md")]
     if not agents_outputs:
         return {"ok": True, "machine": machine_name, "tree": []}
 
@@ -2569,9 +2569,11 @@ def state(reg: Registry) -> dict:
         # a fillable input the copy modal asks for. See render.user_token_map.
         "user_tokens": render.user_token_map(reg),
         "machine_tokens": render.machine_token_names(),
-        # only machines with an Agent-MD folder tree — the Org tab's folder-view picker
+        # only machines with a Context Tree folder tree — the Context Tree picker
+        "context_tree_machines": sorted(
+            m for m, cfg in reg.machines.items() if "context-tree" in cfg.get("targets", [])),
         "agents_md_machines": sorted(
-            m for m, cfg in reg.machines.items() if "agents-md" in cfg.get("targets", [])),
+            m for m, cfg in reg.machines.items() if "context-tree" in cfg.get("targets", []) or "agents-md" in cfg.get("targets", [])),
         # the status bar's machine selector — same convention as cmd_compile: example
         # templates step aside once the overlay defines a real machine; on a fresh clone
         # (no real machines yet) they show so the quick-start deploy rehearsal works

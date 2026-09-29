@@ -5,7 +5,7 @@
 # An "output" = one rendered file: a template fed by registry sources, deployed to a
 # path (resolved per machine), with a drift policy.
 
-target: agents-md
+target: context-tree
 # Each output is the raw concatenation of its registry source partials — no banners,
 # no provenance markers, no per-file template (invariant #5). render.plain_document
 # joins the sections; there is no .j2 layer.
@@ -13,7 +13,7 @@ target: agents-md
 # Tree 1 — the personal-assistant context tree. Two mount kinds render this same tree
 # shape (Navigation/Workflows/Skills, roster, dynamic branches): a MACHINE mount at
 # `root_key` (a path in machines/*.yaml — the Mitos Agent/agentic-machine combo), or a
-# PROJECT mount inside a project's own checkout (a workstation's `agentic_tree:` in
+# PROJECT mount inside a project's own checkout (a workstation's `context_tree:` in
 # registry/projects/<slug>.yaml — the counterpart for e.g. Antigravity operating against
 # one project the way Mitos Agent operates against a whole machine). project_mountable opts
 # this tree into the second kind; drift_policy: protect applies to both — every mount is
@@ -22,7 +22,7 @@ target: agents-md
 # read-only reference map, never an editing surface).
 trees:
   assistant:
-    root_key: assistant_root
+    root_key: context_root
     project_mountable: true
     drift_policy: protect
     files:

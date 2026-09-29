@@ -197,20 +197,17 @@ def test_path_validation_workspace_overlap():
     except RegistryError as e:
         assert "must not overlap with project 'example-project' workspace path" in str(e)
 
-def test_machine_role_exclusivity_assistant_vs_coding():
+def test_machine_combining_mitos_agent_and_coding_harness_is_valid():
+    """A machine can combine mitos-agent with coding harnesses (e.g. claude-code)
+    as long as context-tree is also present."""
     import copy
-    from agentic.loader import _validate, RegistryError
+    from agentic.loader import _validate
     rig = copy.deepcopy(reg)
-    rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md", "claude-code"]
-    try:
-        _validate(rig)
-        raise AssertionError("expected RegistryError due to mitos-agent + coding target on one machine")
-    except RegistryError as e:
-        assert "cannot share a machine with coding harness target(s)" in str(e)
-        assert "claude-code" in str(e)
+    rig.machines["example-linux"]["targets"] = ["mitos-agent", "context-tree", "claude-code"]
+    _validate(rig)  # must not raise
 
-def test_mitos_agent_requires_agents_md():
-    """The harness traverses the agents-md operating tree, so mitos-agent without agents-md
+def test_mitos_agent_requires_context_tree():
+    """The harness traverses the context-tree operating tree, so mitos-agent without context-tree
     on the same machine is refused — it would install SOUL/skills/mcp with no tree to read."""
     import copy
     from agentic.loader import _validate, RegistryError
@@ -218,17 +215,17 @@ def test_mitos_agent_requires_agents_md():
     rig.machines["example-linux"]["targets"] = ["mitos-agent"]
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError: mitos-agent needs agents-md")
+        raise AssertionError("expected RegistryError: mitos-agent needs context-tree")
     except RegistryError as e:
-        assert "requires 'agents-md'" in str(e)
+        assert "requires 'context-tree'" in str(e)
 
-def test_machine_role_agents_md_alone_is_not_a_coding_harness():
-    """agents-md is the context format, not a harness — it may coexist with mitos-agent
+def test_machine_role_context_tree_alone_is_not_a_coding_harness():
+    """context-tree is the context format, not a harness — it may coexist with mitos-agent
     (the agentic machine-mount combo) with no exclusivity violation."""
     import copy
     from agentic.loader import _validate
     rig = copy.deepcopy(reg)
-    rig.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md"]
+    rig.machines["example-linux"]["targets"] = ["mitos-agent", "context-tree"]
     _validate(rig)  # must not raise
 
 def test_agents_md_without_assistant_target_never_leaks_org_routing():
@@ -285,46 +282,88 @@ def test_coverage_line_renders_without_an_assistant_target():
         assert "runs under the `marketing` org" not in o.content   # ...while org routing stays gated
 
 
-def test_agentic_tree_valid():
+def test_context_tree_valid():
     import copy
     from agentic.loader import _validate
     rig = copy.deepcopy(reg)
-    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    rig.projects["example-project"]["context_tree"] = "MitosAgent"
     _validate(rig)  # must not raise
 
-def test_agentic_tree_rejects_path_separators():
+def test_context_tree_rejects_path_separators():
     import copy
     from agentic.loader import _validate, RegistryError
     rig = copy.deepcopy(reg)
-    rig.projects["example-project"]["agentic_tree"] = "sub/dir"
+    rig.projects["example-project"]["context_tree"] = "sub/dir"
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError for path-like agentic_tree")
+        raise AssertionError("expected RegistryError for path-like context_tree")
     except RegistryError as e:
         assert "must be a single directory name" in str(e)
 
-def test_agentic_tree_rejects_empty():
+def test_context_tree_rejects_empty():
     import copy
     from agentic.loader import _validate, RegistryError
     rig = copy.deepcopy(reg)
-    rig.projects["example-project"]["agentic_tree"] = "   "
+    rig.projects["example-project"]["context_tree"] = "   "
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError for empty agentic_tree")
+        raise AssertionError("expected RegistryError for empty context_tree")
     except RegistryError as e:
         assert "must be a non-empty string" in str(e)
 
-def test_agentic_tree_collides_with_repo_checkout_dir():
+def test_context_tree_collides_with_repo_checkout_dir():
     import copy
     from agentic.loader import _validate, RegistryError
     rig = copy.deepcopy(reg)
     rig.projects["example-project"]["repo"] = "git@github.com:example/MitosAgent.git"
-    rig.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    rig.projects["example-project"]["context_tree"] = "MitosAgent"
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError for agentic_tree/repo checkout collision")
+        raise AssertionError("expected RegistryError for context_tree/repo checkout collision")
     except RegistryError as e:
         assert "collides with the checkout dir of repo" in str(e)
+
+def test_renamed_keys_fail_naming_the_new_key():
+    """TEST-14: Renamed keys/targets fail validation naming the new key explicitly."""
+    import copy
+    from agentic.loader import _validate, RegistryError
+
+    # 1. assistant_root in machine paths -> 'context_root'
+    rig1 = copy.deepcopy(reg)
+    rig1.machines["example-linux"]["paths"]["assistant_root"] = "~/MitosAgent"
+    try:
+        _validate(rig1)
+        raise AssertionError("expected RegistryError for assistant_root")
+    except RegistryError as e:
+        assert "assistant_root" in str(e) and "context_root" in str(e)
+
+    # 2. agentic_tree in project -> 'context_tree'
+    rig2 = copy.deepcopy(reg)
+    rig2.projects["example-project"]["agentic_tree"] = "MitosAgent"
+    try:
+        _validate(rig2)
+        raise AssertionError("expected RegistryError for agentic_tree")
+    except RegistryError as e:
+        assert "agentic_tree" in str(e) and "context_tree" in str(e)
+
+    # 3. agents-md in machine targets -> 'context-tree'
+    rig3 = copy.deepcopy(reg)
+    rig3.machines["example-linux"]["targets"] = ["mitos-agent", "agents-md"]
+    try:
+        _validate(rig3)
+        raise AssertionError("expected RegistryError for agents-md machine target")
+    except RegistryError as e:
+        assert "agents-md" in str(e) and "context-tree" in str(e)
+
+    # 4. agents-md in partial audience -> 'context-tree'
+    rig4 = copy.deepcopy(reg)
+    p = next(iter(rig4.partials.values()))
+    p.audience.append("agents-md")
+    try:
+        _validate(rig4)
+        raise AssertionError("expected RegistryError for agents-md in audience")
+    except RegistryError as e:
+        assert "agents-md" in str(e) and "context-tree" in str(e)
 
 def test_repo_branches_validates_against_checkout_basenames():
     import copy
@@ -669,7 +708,7 @@ def test_scaffold_machine_use_cases_gate_orgs_and_agents_md():
         assert reg2.machines["box"]["targets"] == expected_targets
         outputs = planner.plan_machine(reg2, "box")
         skill_paths = [o.deploy_path for o in outputs if "SKILL.md" in o.deploy_path]
-        agents_md_tree = [o for o in outputs if o.target == "agents-md"]
+        agents_md_tree = [o for o in outputs if o.target == "context-tree"]
         if use_case == "mitos-agent":
             assert any("org-software" in p for p in skill_paths)
             assert agents_md_tree
@@ -726,15 +765,15 @@ def test_scaffold_machine_accepts_any_coding_harness_subset():
             expected = {k for t in combo for k in initmod._TARGET_PATH_KEYS[t]}
             assert set(reg2.machines["box"]["paths"]) == expected, combo
             # a coding-harness machine never carries the agentic tree or an org skill
-            assert "agents-md" not in reg2.machines["box"]["targets"]
+            assert "context-tree" not in reg2.machines["box"]["targets"]
 
 def test_scaffold_machine_rejects_illegal_target_sets():
     from agentic import init as initmod
     bad = (
-        {"targets": ["mitos-agent", "claude-code"]},   # machine-role exclusivity (loader._validate)
-        {"targets": []},                          # nothing to deploy
+        {"targets": ["agents-md"]},                    # renamed target
+        {"targets": []},                               # nothing to deploy
         {"targets": ["no-such-tool"]},
-        {},                                       # neither use_case nor targets
+        {},                                            # neither use_case nor targets
         {"use_case": "coding", "targets": ["claude-code"]},   # both
     )
     for kwargs in bad:
@@ -746,8 +785,8 @@ def test_scaffold_machine_rejects_illegal_target_sets():
             pass
         assert not (tmp / "registry/local/machines/box.yaml").exists(), \
             f"{kwargs}: refused, but still wrote a profile"
-    # mitos-agent pulls agents-md in with it — the tree is the point of that target
-    assert initmod.resolve_targets(targets=["mitos-agent"]) == ["mitos-agent", "agents-md"]
+    # mitos-agent pulls context-tree in with it — the tree is the point of that target
+    assert initmod.resolve_targets(targets=["mitos-agent"]) == ["mitos-agent", "context-tree"]
 
 def test_scaffold_machine_document_store_is_asked_not_assumed():
     """`document_store:` is written only when the user names a store. Omitting it is the
@@ -787,7 +826,7 @@ def test_example_project_suppressed_when_overlay_projects_exist():
     assert any("apdict" in p for p in graph_paths)
     # agents-md assistant tree: "Example Project" folder must not be emitted
     assistant_paths = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")
-                       if o.target == "agents-md"]
+                       if o.target == "context-tree"]
     assert not any("Example Project" in p for p in assistant_paths), (
         "Example Project assistant-tree entry leaked despite overlay projects being present")
     # the suppression helper reports exactly the example slug
@@ -800,7 +839,7 @@ def test_example_project_rendered_on_fresh_clone():
     # no overlay projects → nothing suppressed
     assert treg.projects["example-project"].get("example") is True
     assert planner._suppressed_examples(treg) == set()
-    # the assistant tree (rig target = agents-md) still emits the Example Project entry
+    # the assistant tree (rig target = context-tree) still emits the Example Project entry
     assistant_paths = [o.deploy_path for o in planner.plan_machine(treg, "rig")]
     assert any("Example Project" in p for p in assistant_paths)
 
@@ -816,8 +855,8 @@ def test_overlay_machines_and_connections_precedence():
         "name: example-windows\nos: windows\ntargets: [claude-code]\n"
         'paths:\n  projects_root: "D:/Private"\n', encoding="utf-8")
     (local / "machines" / "home-server.yaml").write_text(
-        "name: home-server\nos: linux\ntargets: [mitos-agent, agents-md]\n"
-        'paths:\n  assistant_root: "~/MitosAgent"\n',
+        "name: home-server\nos: linux\ntargets: [mitos-agent, context-tree]\n"
+        'paths:\n  context_root: "~/MitosAgent"\n',
         encoding="utf-8")
     # override the gws server URL with a private LAN address (synthetic, not real)
     (local / "connections").mkdir(parents=True, exist_ok=True)
@@ -926,7 +965,7 @@ def test_sync_config_capture_writes_a_valid_block_into_the_profile():
     md = tmp / "registry" / "local" / "machines"
     md.mkdir(parents=True)
     prof = md / "boxA.yaml"
-    prof.write_text("name: boxA\nos: linux\ntargets: [agents-md]\n", encoding="utf-8")
+    prof.write_text("name: boxA\nos: linux\ntargets: [context-tree]\n", encoding="utf-8")
 
     msg = ensure_profile_sync_block(tmp, "boxA", "ssh://h/mitos-local.git",
                                     branch="trunk", ssh_key="~/.ssh/k")
@@ -1543,7 +1582,7 @@ def test_dynamic_branch_discovered_and_deployed():
     rig.partials["context/family/notes.md"] = Partial(
         rel="context/family/notes.md", audience=None, body="Family notes.")
     outs = planner.plan_machine(rig, "example-linux")
-    paths = {o.deploy_path: o for o in outs if o.target == "agents-md"}
+    paths = {o.deploy_path: o for o in outs if o.target == "context-tree"}
     assert any(p.endswith("/family/AGENTS.md") for p in paths)
     assert any(p.endswith("/family/notes.md") for p in paths)
     root_out = next(o for p, o in paths.items() if p.endswith("/AGENTS.md")

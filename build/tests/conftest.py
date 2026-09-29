@@ -175,7 +175,7 @@ def _full_windows_rig():
     import copy
     r = copy.deepcopy(reg)
     r.machines["example-windows"]["targets"] = [
-        "claude-code", "antigravity", "agents-md", "claude-app"]
+        "claude-code", "antigravity", "context-tree", "claude-app"]
     # pin the canonical drive layout too — projects_root is per-PC config (drive letters
     # vary by machine); path-resolution tests assert against this fixed value
     r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
@@ -223,12 +223,12 @@ def _temp_registry():
     conn.write_text(conn.read_text(encoding="utf-8").replace(
         "hosted_on: []", "hosted_on: [rig]"), encoding="utf-8")
     profile = {
-        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "agents-md"],
+        "name": "rig", "os": _local_os(), "targets": ["mitos-agent", "context-tree"],
         # rig is the fully-wired rig: it hosts gws AND declares the connection, so
         # connection-gated output (mcp.json, the `requires_server: gws` skills) is
         # planned here. The shipped machines/example-*.yaml deliberately do not.
         "document_store": "gws",
-        "paths": {"assistant_root": f"{home}/MitosAgent",   # single install root
+        "paths": {"context_root": f"{home}/MitosAgent",   # single install root
                   "gws_env": f"{home}/gws/.env"},
     }
     (tmp / "machines" / "rig.yaml").write_text(_y.safe_dump(profile), encoding="utf-8")

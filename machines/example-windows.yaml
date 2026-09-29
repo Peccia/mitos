@@ -1,9 +1,9 @@
-# Example: Windows workstation with Antigravity, Claude, and agents-md.
+# Example: Windows workstation with Antigravity, Claude, and context-tree.
 # Copy to registry/local/machines/ and customize for your setup.
 name: example-windows
 example: true   # template — copy into registry/local/machines/ and rename; not a live machine
 os: windows
-targets: [antigravity, claude-app, claude-code, agents-md]
+targets: [antigravity, claude-app, claude-code, context-tree]
 # The connections this box actually has. Everything connection-bound is gated on this
 # list: the MCP wiring spliced into each harness's config AND any skill declaring
 # `requires_server:` (registry/skills/gws). Leave it unset — as the three use-case

@@ -3,11 +3,11 @@
 name: example-linux
 example: true   # template — copy into registry/local/machines/ and rename; not a live machine
 os: linux
-targets: [mitos-agent, agents-md]
+targets: [mitos-agent, context-tree]
 paths:
   # ONE install root — SOUL.md, mcp.json, skills/ AND the operating tree (AGENTS.md,
   # Assistant/, Projects/) all live here. Runtime memory lands in <root>/.local-memory/.
-  assistant_root: "~/MitosAgent"
+  context_root: "~/MitosAgent"
 
 # Per-target skill curation (optional) — narrow a target's compatible skill set to just
 # what THIS machine wants, without editing the skill's own `targets:` frontmatter (which

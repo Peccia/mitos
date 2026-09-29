@@ -697,7 +697,7 @@ def test_graph_tree_emits_single_self_contained_agents_md():
         "document_store": "gws",
     }
     rig.partials["context/projects/sampledict.md"] = Partial(
-        rel="context/projects/sampledict.md", audience=["agents-md"],
+        rel="context/projects/sampledict.md", audience=["context-tree"],
         body="# Sampledict\n\nSampledict prose context"
     )
     from agentic.graph import ProjectGraph

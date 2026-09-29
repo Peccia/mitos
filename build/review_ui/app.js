@@ -4098,7 +4098,7 @@ function truncate(s, n) {
 // `project-update`) are left to `deploys_here` — the pre-existing scope chip already answers
 // "would any machine of mine receive this", and that is not the flag's question.
 const hasMitosAgent = () => !!STATE.mitos_agent;
-const isTargetVisible = (t) => t !== "agents-md" && (hasMitosAgent() || t !== "mitos-agent");
+const isTargetVisible = (t) => t !== "context-tree" && (hasMitosAgent() || t !== "mitos-agent");
 const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
 
 let skillShowingAgents = false;
@@ -4121,11 +4121,12 @@ function renderSkills() {
 
   // The create forms replace the grid entirely — the drawer must not hang over them.
   // (These return early, before the drawer-sync tail at the end of this function.)
-  if (newSkillOpen || newOrgDomainOpen || newAgentOpen || editingAgentName) closeSkillDrawer();
+  if (newSkillOpen || newOrgDomainOpen || newAgentOpen || editingAgentName || contextTreeOpen) closeSkillDrawer();
   if (newSkillOpen)     { box.replaceChildren(newSkillForm());      return; }
   if (newOrgDomainOpen) { box.replaceChildren(newOrgDomainForm()); return; }
   if (newAgentOpen)     { box.replaceChildren(newAgentForm());      return; }
   if (editingAgentName) { box.replaceChildren(editAgentForm(editingAgentName)); return; }
+  if (contextTreeOpen)  { box.replaceChildren(renderContextTreeSection()); return; }
 
   // ── build domain-by-skill lookup from orgData ────────────────────────────
   // orgData is keyed by domain ("software"), each entry has .skill ("org-software").
@@ -4199,6 +4200,10 @@ function renderSkills() {
       btnGroup.append(newOrgBtn);
     }
   }
+  const treeBtn = el("button", "", "Context Tree");
+  treeBtn.title = "View planned Context Tree";
+  treeBtn.onclick = () => { contextTreeOpen = true; renderSkills(); };
+  btnGroup.append(treeBtn);
 
   chipRow.replaceChildren();
 
@@ -4228,7 +4233,7 @@ function renderSkills() {
   // Target filter chips — in the scoped view they come from the targets this registry's
   // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `mitos-agent` as
   // a filter on a coding-harness box is a control that can only ever empty the list.
-  // Note: agents-md never deploys skills, so it is always filtered out of skill target
+  // Note: context-tree never deploys skills, so it is always filtered out of skill target
   // filters — that, plus the mitos-agent gate, is what isTargetVisible holds.
   const targetOpts = (skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []))
     .filter(isTargetVisible);
@@ -4651,22 +4656,22 @@ function renderSkillScopeSection(s) {
   return section;
 }
 
-// ── renderSkillOrgSection: org role tree / Agent-MD folder view ──────────────
+// ── renderSkillOrgSection: org role tree / Context Tree folder view ──────────────
 // Embedded within the expanded body of an org-domain skill row. Uses the same
-// renderDomainSummary / renderAgentsMdPicker / renderAgentsMdTree functions the old
-// Org tab used — they are unchanged; only the container changes.
+// renderDomainSummary / renderContextTreePicker / renderContextTree functions — they
+// are unchanged; only the container changes.
 function renderSkillOrgSection(skillName, domain) {
   const section = el("div", "skill-org-section");
   section.append(el("h4", "skill-org-heading", "Organization — " + domain));
 
   const mode = orgSkillViewMode[skillName] || "role";
   const viewToggle = el("div", "pool-toggle");
-  for (const [id, label] of [["role", "Role Tree"], ["agentsmd", "Agent-MD Folder"]]) {
+  for (const [id, label] of [["role", "Role Tree"], ["contexttree", "Context Tree"]]) {
     const b = el("button", "pool-opt" + (mode === id ? " active" : ""), label);
     b.setAttribute("aria-pressed", String(mode === id));
     b.onclick = () => {
       orgSkillViewMode[skillName] = id;
-      if (id === "agentsmd" && orgMachine && !orgTreeCache[orgMachine]) {
+      if (id === "contexttree" && orgMachine && !orgTreeCache[orgMachine]) {
         loadOrgTree(orgMachine);   // async; calls renderSkills() on completion
       } else {
         renderSkills();
@@ -4679,8 +4684,8 @@ function renderSkillOrgSection(skillName, domain) {
   if (mode === "role") {
     section.append(renderDomainSummary(orgData[domain]));
   } else {
-    section.append(renderAgentsMdPicker());
-    section.append(renderAgentsMdTree());
+    section.append(renderContextTreePicker());
+    section.append(renderContextTree());
   }
   return section;
 }
@@ -4746,7 +4751,7 @@ function newSkillForm() {
   targetsWrap.append(el("label", "", "Targets"));
   const targetsRow = el("div", "target-checks");
   const targetBoxes = {};
-  // agents-md deploys no skills, and mitos-agent is gated behind the flag —
+  // context-tree deploys no skills, and mitos-agent is gated behind the flag —
   // isTargetVisible holds both rules. Only the NEW-skill form filters: the
   // metadata editor for an existing skill must keep showing what it declares,
   // or saving it would quietly drop the target.
@@ -4831,7 +4836,8 @@ function newSkillForm() {
 // ───────────────────────────────────────────────────────────────────────────────────
 let orgData = null;          // /api/org response, fetched once and cached
 let orgTreeCache = {};       // machine -> /api/org/tree response, cached per machine
-let orgMachine = null;       // selected machine for the Agent-MD folder view
+let orgMachine = null;       // selected machine for the Context Tree folder view
+let contextTreeOpen = false; // Context Tree standalone view toggle
 let newOrgDomainOpen = false; // "+ ORG" inline dialog toggle
 
 async function loadOrgTree(machine) {
@@ -5313,9 +5319,9 @@ function renderDomainSummary(data) {
 }
 
 
-function renderAgentsMdPicker() {
-  const machines = STATE.agents_md_machines || [];
-  if (!machines.length) return el("div", "empty-state", "No machine profile deploys agents-md.");
+function renderContextTreePicker() {
+  const machines = STATE.context_tree_machines || [];
+  if (!machines.length) return el("div", "empty-state", "No machine profile deploys context-tree.");
   if (!orgMachine || !machines.includes(orgMachine)) orgMachine = machines[0];
   const wrap = el("div", "org-machine-picker");
   wrap.append(el("label", "", "Machine "));
@@ -5331,16 +5337,29 @@ function renderAgentsMdPicker() {
   return wrap;
 }
 
-function renderAgentsMdTree() {
-  if (!orgMachine) orgMachine = (STATE.agents_md_machines || [])[0];
+function renderContextTree() {
+  if (!orgMachine) orgMachine = (STATE.context_tree_machines || [])[0];
   if (!orgMachine) return el("div", "empty-state", "No machine available.");
   const data = orgTreeCache[orgMachine];
   if (!data) { loadOrgTree(orgMachine); return el("div", "empty-state", "Loading…"); }
   if (!data.ok) return el("div", "empty-state", `Error: ${data.error}`);
-  if (!data.tree.length) return el("div", "empty-state", "No Agent-MD tree planned for this machine.");
+  if (!data.tree.length) return el("div", "empty-state", "No Context Tree planned for this machine.");
   const root = el("div", "org-tree");
   for (const node of data.tree) root.append(orgTreeNode(node));
   return root;
+}
+
+function renderContextTreeSection() {
+  const wrap = el("div", "context-tree-section");
+  const head = el("div", "skill-actions-bar");
+  const backBtn = el("button", "ghost", "← Back to skills");
+  backBtn.onclick = () => { contextTreeOpen = false; renderSkills(); };
+  head.append(backBtn);
+  wrap.append(head);
+  wrap.append(el("h3", "", "Context Tree"));
+  wrap.append(renderContextTreePicker());
+  wrap.append(renderContextTree());
+  return wrap;
 }
 
 function orgTreeNode(node) {

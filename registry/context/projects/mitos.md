@@ -1,5 +1,5 @@
 ---
-audience: [claude-code, agents-md]
+audience: [claude-code, context-tree]
 ---
 # Mitos
 

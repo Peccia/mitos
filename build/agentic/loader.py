@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-KNOWN_TARGETS = {"mitos-agent", "claude-code", "antigravity", "agents-md", "claude-app"}
+KNOWN_TARGETS = {"mitos-agent", "claude-code", "antigravity", "context-tree", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 VALID_SKILL_SCOPES = {"global", "project"}
 # Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
@@ -871,16 +871,23 @@ def _validate(reg: Registry) -> None:
     # audiences reference known targets
     for p in reg.partials.values():
         if p.audience:
+            if "agents-md" in p.audience:
+                raise RegistryError(f"{p.rel}: audience 'agents-md' is retired — use 'context-tree'")
             bad = set(p.audience) - reg.target_names
             if bad:
                 raise RegistryError(f"{p.rel}: unknown audience(s) {sorted(bad)}")
     # skills reference known targets
     for s in reg.skills.values():
+        if "agents-md" in s.targets:
+            raise RegistryError(f"{s.rel}: target 'agents-md' is retired — use 'context-tree'")
         if not s.targets:
             raise RegistryError(f"{s.rel}: skill has no 'targets'")
         bad = set(s.targets) - reg.target_names
         if bad:
             raise RegistryError(f"{s.rel}: unknown target(s) {sorted(bad)}")
+    for pr in reg.prompts.values():
+        if "agents-md" in pr.targets:
+            raise RegistryError(f"{pr.rel}: target 'agents-md' is retired — use 'context-tree'")
     # scope: global (default) | project — see validate_skill_scope / Skill.scope
     for s in reg.skills.values():
         err = validate_skill_scope(s.name, s.frontmatter)
@@ -898,6 +905,8 @@ def _validate(reg: Registry) -> None:
                 f"connections/servers.yaml; known: {', '.join(sorted(known_servers))}")
     # agents: valid slug, non-empty description, valid targets, skills must deploy to each target
     for agent in reg.agents.values():
+        if "agents-md" in agent.targets:
+            raise RegistryError(f"{agent.rel}: target 'agents-md' is retired — use 'context-tree'")
         if not re.fullmatch(r"[a-z0-9-]+", agent.name):
             raise RegistryError(f"agent {agent.name!r} is not a valid slug (lowercase [a-z0-9-]+)")
         if not agent.description or not agent.description.strip():
@@ -1134,22 +1143,24 @@ def _validate(reg: Registry) -> None:
         # harness. A single relative subdirectory name, not a path — must not collide
         # with a repo checkout basename landing in the same local_path (both mounts
         # share that directory).
-        at = proj.get("agentic_tree")
-        if at is not None:
-            if not isinstance(at, str) or not at.strip():
+        if "agentic_tree" in proj:
+            raise RegistryError(f"project {slug}: 'agentic_tree' is retired — use 'context_tree'")
+        ct = proj.get("context_tree")
+        if ct is not None:
+            if not isinstance(ct, str) or not ct.strip():
                 raise RegistryError(
-                    f"project {slug}: 'agentic_tree' must be a non-empty string "
+                    f"project {slug}: 'context_tree' must be a non-empty string "
                     f"(a subdirectory name under local_path, e.g. 'MitosAgent')")
-            at = at.strip()
-            if at in (".", "..") or "/" in at or "\\" in at:
+            ct = ct.strip()
+            if ct in (".", "..") or "/" in ct or "\\" in ct:
                 raise RegistryError(
-                    f"project {slug}: 'agentic_tree' must be a single directory name, "
-                    f"not a path — got {at!r}")
+                    f"project {slug}: 'context_tree' must be a single directory name, "
+                    f"not a path — got {ct!r}")
             for url in repo_raw if isinstance(repo_raw, list) else (
                     [repo_raw] if isinstance(repo_raw, str) and repo_raw.strip() else []):
-                if _repo_basename(url.strip()) == at:
+                if _repo_basename(url.strip()) == ct:
                     raise RegistryError(
-                        f"project {slug}: 'agentic_tree' subdirectory {at!r} collides "
+                        f"project {slug}: 'context_tree' subdirectory {ct!r} collides "
                         f"with the checkout dir of repo {url.strip()!r} — choose a "
                         f"different subdirectory name")
         for label, rel in (proj.get("context") or {}).items():
@@ -1207,6 +1218,8 @@ def _validate(reg: Registry) -> None:
     # machines reference known targets
     for name, m in reg.machines.items():
         targets = set(m.get("targets", []))
+        if "agents-md" in targets:
+            raise RegistryError(f"machine {name}: target 'agents-md' is retired — use 'context-tree'")
         bad = targets - reg.target_names
         if bad:
             reg.skipped_machines[name] = sorted(bad)
@@ -1216,32 +1229,15 @@ def _validate(reg: Registry) -> None:
                     f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
                 )
             continue
-        # Machine roles are exclusive: an agentic-harness machine (mitos-agent) is dedicated
-        # to that purpose — it does not also run coding harnesses. This keeps every
-        # machine's operating-mount tree (assistant_root) unambiguous and lets the
-        # planner's role checks key off "mitos-agent in targets" alone. agents-md itself is
-        # NOT a harness (it's the context format both roles can consume — a reference
-        # mount via agentic_context_root, or an operating mount via assistant_root or a
-        # project's agentic_tree:), so it is never part of this exclusion. Kept, not retired:
-        # nothing needs a both-classes machine and the planner's role checks assume one class
-        # per machine (mitos-agent-platform.md §4.4).
-        _CODING_TARGETS = {"antigravity", "claude-app", "claude-code"}
         if "mitos-agent" in targets:
-            coding_present = targets & _CODING_TARGETS
-            if coding_present:
-                raise RegistryError(
-                    f"machine {name}: 'mitos-agent' (the agentic harness) cannot share a "
-                    f"machine with coding harness target(s) {sorted(coding_present)}. "
-                    f"An agentic machine is dedicated to that purpose — put coding "
-                    f"harnesses on a separate machine profile.")
-            # The harness traverses the operating AGENTS.md tree, which is the agents-md
-            # target's output — so mitos-agent REQUIRES agents-md on the same machine
-            # (both deploy into the one `assistant_root` install root). Without it the
+            # The harness traverses the operating AGENTS.md tree, which is the context-tree
+            # target's output — so mitos-agent REQUIRES context-tree on the same machine
+            # (both deploy into the one `context_root` install root). Without it the
             # harness would install SOUL.md/skills/mcp.json with no tree to read.
-            if "agents-md" not in targets:
+            if "context-tree" not in targets:
                 raise RegistryError(
-                    f"machine {name}: 'mitos-agent' requires 'agents-md' on the same machine "
-                    f"(it traverses the operating tree that target emits) — add 'agents-md' "
+                    f"machine {name}: 'mitos-agent' requires 'context-tree' on the same machine "
+                    f"(it traverses the operating tree that target emits) — add 'context-tree' "
                     f"to targets.")
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
@@ -1251,6 +1247,8 @@ def _validate(reg: Registry) -> None:
             known = set(reg.servers.get("servers") or {}) | {"none"}
             _check_document_store(f"machine {name}", ds, known)
         paths = m.get("paths") or {}
+        if "assistant_root" in paths:
+            raise RegistryError(f"machine {name}: path 'assistant_root' is retired — use 'context_root'")
         # 1. Detect invalid/control characters in machine path keys (escape sequence bugs)
         for key, pval in paths.items():
             if not pval:

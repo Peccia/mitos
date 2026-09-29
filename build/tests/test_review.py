@@ -58,7 +58,7 @@ def test_deploys_here_is_a_no_op_on_a_mitos_agent_machine():
     unchanged, since every core skill targets mitos-agent."""
     from agentic.review import prompt_index
 
-    rig = _one_machine_rig(targets=["mitos-agent", "agents-md"], document_store="gws")
+    rig = _one_machine_rig(targets=["mitos-agent", "context-tree"], document_store="gws")
     idx = prompt_index(rig)
     assert all(s["deploys_here"] for s in idx["skills"])
     # the agentic tree's own prose reads as deployable here, and the coding persona does not
@@ -1324,11 +1324,11 @@ def test_org_index_lists_every_domain_and_the_skill_carrying_it():
     assert set(result["software"]) == {"skill", "description"}
 
 
-def test_org_tree_reconstructs_agents_md_deploy_paths():
+def test_org_tree_reconstructs_context_tree_deploy_paths():
     from agentic.review import org_tree
 
     machine = next(m for m, cfg in reg.machines.items()
-                   if "agents-md" in cfg.get("targets", []))
+                   if "context-tree" in cfg.get("targets", []))
     result = org_tree(reg, machine)
     assert result["ok"]
     assert result["tree"], "expected a non-trivial tree"
@@ -1349,17 +1349,17 @@ def test_org_tree_unknown_machine():
     assert not result["ok"]
 
 
-def test_state_lists_only_agents_md_machines():
+def test_state_lists_only_context_tree_machines():
     from agentic.review import state
 
     result = state(reg)
-    assert "agents_md_machines" in result
-    for m in result["agents_md_machines"]:
-        assert "agents-md" in reg.machines[m].get("targets", [])
-    # every machine that DOES carry agents-md must be listed
+    assert "context_tree_machines" in result
+    for m in result["context_tree_machines"]:
+        assert "context-tree" in reg.machines[m].get("targets", [])
+    # every machine that DOES carry context-tree must be listed
     for m, cfg in reg.machines.items():
-        if "agents-md" in cfg.get("targets", []):
-            assert m in result["agents_md_machines"]
+        if "context-tree" in cfg.get("targets", []):
+            assert m in result["context_tree_machines"]
 
 
 def test_prompt_index_prompts_key_shape():
@@ -2448,18 +2448,18 @@ def test_api_project_new_endpoint():
         server.server_close()
 
 
-def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
+def test_skills_tab_filters_exclude_context_tree_and_support_hiding_targets():
     """Regression test: within the Skills & Org tab, the target filter chips must
-    not display 'agents-md' (as it never deploys skills), and operators must be able
+    not display 'context-tree' (as it never deploys skills), and operators must be able
     to hide skills associated with a target via the hide mode."""
     from agentic import review
     app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
     css = (review.UI_DIR / "style.css").read_text(encoding="utf-8")
 
-    # agents-md must be excluded from targetOpts in Skills & Org. The rule now lives in
+    # context-tree must be excluded from targetOpts in Skills & Org. The rule now lives in
     # the shared isTargetVisible predicate (which also carries the mitos_agent gate), so
     # the chips read it rather than spelling the exclusion out a second time.
-    assert 'const isTargetVisible = (t) => t !== "agents-md"' in app
+    assert 'const isTargetVisible = (t) => t !== "context-tree"' in app
     assert ".filter(isTargetVisible)" in app
 
     # Target filter mode (show vs hide) and hidden targets tracking must exist
@@ -2469,6 +2469,18 @@ def test_skills_tab_filters_exclude_agents_md_and_support_hiding_targets():
 
     # CSS styling for active hidden chips must exist
     assert ".pool-opt.active.hide-active" in css
+
+
+def test_app_js_console_source_scan_no_agents_md_and_viewer_reachable():
+    """Console source scan test ensuring no 'agents-md' or 'Agent-MD' in app.js
+    and that the Context Tree viewer is reachable outside the org drawer."""
+    from agentic import review
+    app = (review.UI_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "agents-md" not in app
+    assert "Agent-MD" not in app
+    assert "renderContextTreeSection" in app
+    assert "contextTreeOpen" in app
 
 
 def test_app_js_propose_graph_draft_includes_hidden():

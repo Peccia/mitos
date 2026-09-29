@@ -226,18 +226,21 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     if key == "project_root":
         if "project_root" in paths:
             return str(paths["project_root"]).rstrip("/")
-        for k in ("assistant_root", "agentic_context_root", "projects_root"):
+        for k in ("context_root", "assistant_root", "agentic_context_root", "projects_root"):
             val = paths.get(k)
             if val:
                 return str(val).rstrip("/")
     if key == "skills_root":
         if paths.get("skills_root"):
             return str(paths["skills_root"]).rstrip("/")
-        home = paths.get("assistant_root")
+        home = paths.get("context_root") or paths.get("assistant_root")
         return f"{str(home).rstrip('/')}/skills" if home else None
     if key == "returns_root":
         if paths.get("returns_root"):
             return str(paths["returns_root"]).rstrip("/")
+        home = paths.get("context_root")
+        if home:
+            return f"{str(home).rstrip('/')}/.local-memory/returns"
         projects = paths.get("projects_root")
         return f"{str(projects).rstrip('/')}/.mitos-returns" if projects else None
     if key in paths:
@@ -446,9 +449,9 @@ def navigation_block(repos: list[tuple[str, str]], *, emit_heading: bool = True)
     return "\n".join(lines) + "\n"
 
 
-def agentic_tree_note_block(subdir: str) -> str:
+def context_tree_note_block(subdir: str) -> str:
     """The `<generated>` cross-reference appended to a project's own root AGENTS.md when
-    that project ALSO has an agentic_tree: mount — the "project within a project" note:
+    that project ALSO has a context_tree: mount — the "project within a project" note:
     two AGENTS.md-shaped files legitimately coexist (this one is the project's own
     document/repo index; the mount is a full operating tree), so name the split
     explicitly rather than leaving a reader to wonder which one is authoritative."""
@@ -460,6 +463,9 @@ def agentic_tree_note_block(subdir: str) -> str:
         f"See [`{subdir}/AGENTS.md`]({subdir}/AGENTS.md) for that context; this file is "
         f"this project's own document/repo index, generated separately.\n"
     )
+
+
+agentic_tree_note_block = context_tree_note_block
 
 
 def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:

@@ -178,9 +178,16 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     use_case, targets = (None, None)
     if is_agent:
         use_case = "mitos-agent"
-        print("Mitos Agent selected — this profile will target [mitos-agent, agents-md].")
+        print("Mitos Agent selected — this profile will target [mitos-agent, context-tree].")
     else:
         targets = _ask_coding_targets(initmod)
+        print("\nA personal context tree provides a unified directory of projects,")
+        print("documentation, and identity context readable by any harness. See docs/context-tree.md.")
+        context_root_val = initmod._PATH_VALUES.get("context_root", "~/MitosAgent")
+        print(f"Deploy location (context_root): {context_root_val}")
+        ans = _ask("Deploy a personal context tree? [y/N]: ").strip().lower()
+        if ans in ("y", "yes"):
+            targets.append("context-tree")
     default_name = "my-machine"
     machine_name = _ask(f"A short name for this machine [{default_name}]: ") or default_name
     default_os = _local_os()

@@ -34,7 +34,7 @@ OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 MACHINE_USE_CASES: dict[str, list[str]] = {
     "workstation": ["claude-code"],
     "coding": ["antigravity", "claude-app", "claude-code"],
-    "mitos-agent": ["mitos-agent", "agents-md"],
+    "mitos-agent": ["mitos-agent", "context-tree"],
 }
 
 # The coding harnesses a user picks from independently, with the label the wizard shows.
@@ -52,14 +52,14 @@ _TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "antigravity": ("projects_root", "antigravity_config", "antigravity_skills"),
     "claude-app": ("claude_skills_staging",),
     "claude-code": ("projects_root", "claude_code_skills", "claude_code_agents"),
-    # ONE install root — SOUL/skills/mcp.json AND the agents-md tree share `assistant_root`.
-    "mitos-agent": ("assistant_root",),
-    "agents-md": (),          # a context FORMAT, not a harness — owns no path of its own
+    # ONE install root — SOUL/skills/mcp.json AND the context tree share `context_root`.
+    "mitos-agent": ("context_root",),
+    "context-tree": ("context_root",),
 }
 
 # Stable emit order, so two profiles with overlapping targets read the same way.
 _PATH_ORDER = ("projects_root", "antigravity_config", "antigravity_skills",
-               "claude_code_skills", "claude_code_agents", "claude_skills_staging", "assistant_root")
+               "claude_code_skills", "claude_code_agents", "claude_skills_staging", "context_root")
 
 _PATH_VALUES: dict[str, str] = {
     "antigravity_config": "~/.gemini/config",
@@ -67,7 +67,7 @@ _PATH_VALUES: dict[str, str] = {
     "claude_code_skills": "~/.claude/skills",
     "claude_code_agents": "~/.claude/agents",
     "claude_skills_staging": "~/ClaudeSkills",
-    "assistant_root": "~/MitosAgent",
+    "context_root": "~/MitosAgent",
 }
 
 
@@ -184,7 +184,7 @@ def _who_md(given_name: str, family_name: str, address: str) -> str:
     who = full or addr or "the owner"
     # Match the core who-i-am.md audience so the name/address reach every tool, not just
     # Mitos Agent — this overlay partial replaces the neutral core one by last-layer-wins.
-    return (f"---\naudience: [mitos-agent, claude-code, antigravity, agents-md]\n---\n## About Me\n\n"
+    return (f"---\naudience: [mitos-agent, claude-code, antigravity, context-tree]\n---\n## About Me\n\n"
             f"You are {who}'s personal assistant, focused on truth, clarity, and usefulness "
             f"over politeness. Address me as \"{addr}\".\n")
 
@@ -247,11 +247,8 @@ def resolve_targets(*, use_case: str | None = None,
                     targets: list[str] | None = None) -> list[str]:
     """The `targets:` list for a machine, from either a named preset or an explicit set.
     Exactly one of the two must be given. An explicit set is normalized (deduped, emitted
-    in `_TARGET_PATH_KEYS` order) and `mitos-agent` pulls in `agents-md`, since the operating
-    tree is the whole point of that target. Raises ValueError on an unknown name, an empty
-    set, or a mitos-agent+coding mix — the last one mirrors `loader._validate`'s machine-role
-    exclusivity check (KEPT, not retired), so the wizard refuses before writing a profile
-    that cannot compile."""
+    in `_TARGET_PATH_KEYS` order) and `mitos-agent` pulls in `context-tree`, since the operating
+    tree is the whole point of that target. Raises ValueError on an unknown name or an empty set."""
     if (use_case is None) == (targets is None):
         raise ValueError("pass exactly one of use_case= or targets=")
     if use_case is not None:
@@ -268,12 +265,7 @@ def resolve_targets(*, use_case: str | None = None,
         raise ValueError(f"unknown target(s) {unknown}; available: "
                          f"{sorted(_TARGET_PATH_KEYS)}")
     if "mitos-agent" in chosen:
-        clash = sorted(chosen & set(CODING_TARGETS))
-        if clash:
-            raise ValueError(
-                f"'mitos-agent' cannot share a machine with {clash} — an agentic machine is "
-                f"dedicated to that purpose. Use a project's `agentic_tree:` instead.")
-        chosen.add("agents-md")
+        chosen.add("context-tree")
     return [t for t in _TARGET_PATH_KEYS if t in chosen]
 
 

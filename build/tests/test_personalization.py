@@ -291,14 +291,16 @@ def test_every_delivers_skill_names_the_store_through_the_token():
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    paths = {"assistant_root": "~/MitosAgent/", "agentic_context_root": "C:/MitosAgent",
+    paths = {"context_root": "~/MitosAgent/", "agentic_context_root": "C:/MitosAgent",
              "projects_root": "C:/Projects"}
     out = render.expand_placeholders(_FakeReg(user), "cd {{project_root}}", paths)
-    assert out == "cd ~/MitosAgent"   # trailing slash normalized, assistant_root wins
+    assert out == "cd ~/MitosAgent"   # trailing slash normalized, context_root wins
 
 def test_expand_project_root_fallback_chain():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
+    assert render.expand_placeholders(
+        r, "{{project_root}}", {"assistant_root": "~/LegacyAgent"}) == "~/LegacyAgent"
     assert render.expand_placeholders(
         r, "{{project_root}}", {"agentic_context_root": "C:/MitosAgent"}) == "C:/MitosAgent"
     assert render.expand_placeholders(
@@ -314,11 +316,13 @@ def test_expand_skills_root_from_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     r = _FakeReg(user)
     assert render.expand_placeholders(
+        r, "ls {{skills_root}}", {"context_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
+    assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"assistant_root": "~/MitosAgent/"}) == "ls ~/MitosAgent/skills"
     # explicit skills_root also expands
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"skills_root": "~/CustomAgent/skills"}) == "ls ~/CustomAgent/skills"
-    # no assistant_root on this machine → literal
+    # no context_root on this machine → literal
     assert render.expand_placeholders(
         r, "ls {{skills_root}}", {"projects_root": "C:/Projects"}) == "ls {{skills_root}}"
 

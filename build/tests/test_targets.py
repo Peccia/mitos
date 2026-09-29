@@ -14,7 +14,7 @@ from conftest import (
 def _lint(path, content):
     from agentic.planner import Output, lint_node_markdown
     return lint_node_markdown(Output(
-        target="agents-md", kind="text", deploy_path=path, dist_rel="x",
+        target="context-tree", kind="text", deploy_path=path, dist_rel="x",
         content=content, drift_policy="protect"))
 
 
@@ -80,16 +80,16 @@ def test_mitos_agent_mcp_config_shape():
     assert set(cfg2["mcpServers"]) == {"gws", "notion"}
 
 def test_non_assistant_machine_coproduces_agents_md():
-    """Claude-code machines without agents-md emit a co-located AGENTS.md (full graph
+    """Claude-code machines without context-tree emit a co-located AGENTS.md (full graph
     context + prose) and a stub CLAUDE.md at each graph project's local_path.
-    Mitos Agent machines (with agents-md) are unaffected — the existing path applies."""
+    Mitos Agent machines (with context-tree) are unaffected — the existing path applies."""
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
         rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
-    # configure example-windows as a pure workstation: remove agents-md and the
+    # configure example-windows as a pure workstation: remove context-tree and the
     # agentic_context_root (that's the separate Mitos Agent tree, not needed here)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
@@ -120,7 +120,7 @@ def test_non_assistant_machine_coproduces_agents_md():
         rig_agent.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig_agent.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
-    rig_agent.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig_agent.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig_agent.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     agent_paths = [o.deploy_path for o in planner.plan_machine(rig_agent, "example-windows")
                     if o.target == "claude-code"]
@@ -131,10 +131,10 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     """A stub_import project (mitos) on a claude-code-only machine must never emit a
     dangling CLAUDE.md → @AGENTS.md when no AGENTS.md is generated. The planner inlines
     the project's builder context into a self-contained CLAUDE.md instead, so AGENTS and
-    CLAUDE never split. With agents-md present the stub is valid and stays a stub."""
+    CLAUDE never split. With context-tree present the stub is valid and stays a stub."""
     import copy
 
-    # claude-code-only machine: agents-md (which generates AGENTS.md) is NOT a target.
+    # claude-code-only machine: context-tree (which generates AGENTS.md) is NOT a target.
     rig = copy.deepcopy(reg)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
@@ -151,15 +151,15 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     assert "agentic SDLC loop" in out.content, "self-contained CLAUDE.md inlines the builder prose"
     assert out.section_bodies, "an inlined multi-source CLAUDE.md records its per-section base"
 
-    # Counterpart — with agents-md present, the AGENTS.md co-deploys, so the stub is valid.
+    # Counterpart — with context-tree present, the AGENTS.md co-deploys, so the stub is valid.
     rig2 = copy.deepcopy(reg)
-    rig2.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig2.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig2.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
     by_path2 = {o.deploy_path: o for o in planner.plan_machine(rig2, "example-windows")}
     assert by_path2[claude_path].content.strip() == "@AGENTS.md", \
-        "with agents-md present, mitos CLAUDE.md stays a thin stub"
+        "with context-tree present, mitos CLAUDE.md stays a thin stub"
     assert "C:/Projects/Mitos/AGENTS.md" in by_path2, \
-        "agents-md must co-deploy the AGENTS.md that the stub imports"
+        "context-tree must co-deploy the AGENTS.md that the stub imports"
 
 
 def test_project_node_does_not_repeat_repo_builder_context():
@@ -199,7 +199,7 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     import copy
     from agentic import graph as graphmod
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
     rig.projects["mitos"]["document_store"] = "gws"
     rig.graphs["mitos"] = graphmod.ProjectGraph(
@@ -215,7 +215,7 @@ def test_builder_context_project_agents_md_includes_graph_docs():
     assert details_path in by_path, "AGENTS_DETAILS.md must be emitted alongside, like other projects"
     out = by_path[agents_path]
     det = by_path[details_path]
-    assert out.target == "agents-md" and det.target == "agents-md"
+    assert out.target == "context-tree" and det.target == "context-tree"
     assert det.drift_policy == "generated"
 
     # persona/builder prose survives, plus the connection heading + doc title (index only)
@@ -251,14 +251,14 @@ def _builder_rig(targets, repos=True):
         efforts=[], path=None)
     outs = planner.plan_machine(rig, "example-windows")
     return next(o for o in outs if o.deploy_path == "C:/Projects/Mitos/AGENTS.md"
-                and o.target == "agents-md")
+                and o.target == "context-tree")
 
 
 def test_builder_lane_renders_repo_roster_on_assistant_host():
     """On a machine that hosts the assistant tree, plan_clones puts the project's checkouts
     beside the builder-context node, so the node lists them as the generated `## Navigation`
     roster. Without it the agent host grounded on a node that named no checkout."""
-    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"])
+    out = _builder_rig(["claude-code", "context-tree", "mitos-agent"])
     assert "## Navigation" in out.content
     assert "- `mitos/` — the compiler" in out.content
     assert "- `mitos-agent/`" in out.content
@@ -268,14 +268,14 @@ def test_builder_lane_renders_repo_roster_on_assistant_host():
 
 
 def test_builder_lane_no_roster_without_assistant_tree():
-    """Only where the checkouts sit beside the node: an agents-md-only machine gets none."""
-    out = _builder_rig(["claude-code", "agents-md"])
+    """Only where the checkouts sit beside the node: an context-tree-only machine gets none."""
+    out = _builder_rig(["claude-code", "context-tree"])
     assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
     assert "- `mitos/`" not in out.content
 
 
 def test_builder_lane_no_roster_without_repos():
-    out = _builder_rig(["claude-code", "agents-md", "mitos-agent"], repos=False)
+    out = _builder_rig(["claude-code", "context-tree", "mitos-agent"], repos=False)
     assert render.GENERATED_NAV not in [s for s, _ in out.section_bodies]
 
 
@@ -287,7 +287,7 @@ def test_multi_store_project_renders_one_connection_section_per_store():
     import copy
     from agentic import graph as graphmod
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
     rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
     rig.projects["mitos"]["document_store"] = ["gws", "fake2"]
@@ -334,50 +334,56 @@ def test_multi_store_machine_connections_block_emits_one_section_per_store():
     assert block.count("## Google Workspace suite") == 1
     assert block.count("## Fake Store") == 1
 
-def test_project_agents_md_drops_identity_on_assistant_machines():
-    """On a machine that also deploys mitos-agent, SOUL.md already carries the identity
-    partials on every request — the project-root AGENTS.md (project_agents) must not
-    repeat them. An agents-md machine WITHOUT mitos-agent has no SOUL.md, so it keeps the
-    full persona header (the persona has to live somewhere)."""
+def test_two_context_files_in_one_root_drops_identity():
+    """When another target on the machine writes a context_file into the same root directory,
+    context-tree drops identity partials from project_agents at that root so identity is not
+    duplicated across multiple context files."""
     import copy
 
-    def _rig(targets):
+    def _rig(with_other_target):
         rig = copy.deepcopy(reg)
-        rig.machines["example-windows"]["targets"] = targets
-        # the mitos-agent install root — a distinct dir from this machine's existing
-        # agentic_context_root (C:/MitosAgent) so the operating tree and the reference
-        # graph mount don't collide; irrelevant to the identity-drop assertion itself
-        rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/AssistantHome"
+        rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
         rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
+        if with_other_target:
+            # Add a target that writes a context_file to the same root (C:/Projects/Mitos)
+            rig.targets["other-harness"] = {
+                "target": "other-harness",
+                "context_file": {
+                    "filename": "PROMPT.md",
+                    "sources": ["identity/who-i-am.md"],
+                    "deploy_to_key": "other_root",
+                },
+            }
+            rig.machines["example-windows"]["targets"].append("other-harness")
+            rig.machines["example-windows"]["paths"]["other_root"] = "C:/Projects/Mitos"
         return rig
 
     agents_path = "C:/Projects/Mitos/AGENTS.md"
 
-    # mitos-agent co-deployed → identity dropped, builder prose kept
-    outs = planner.plan_machine(_rig(["claude-code", "agents-md", "mitos-agent"]),
-                                "example-windows")
-    out = next(o for o in outs if o.deploy_path == agents_path and o.target == "agents-md")
-    assert "About Me" not in out.content, "identity must not duplicate SOUL.md"
+    # Other target writes context_file into the same root -> identity dropped
+    outs = planner.plan_machine(_rig(True), "example-windows")
+    out = next(o for o in outs if o.deploy_path == agents_path and o.target == "context-tree")
+    assert "About Me" not in out.content, "identity must not duplicate other target's context file"
     assert not any(s.startswith("identity/") for s in out.sources)
     assert "agentic SDLC loop" in out.content
 
-    # no mitos-agent → full persona header stays
-    outs2 = planner.plan_machine(_rig(["claude-code", "agents-md"]), "example-windows")
-    out2 = next(o for o in outs2 if o.deploy_path == agents_path and o.target == "agents-md")
+    # No other target writing context_file into same root -> full persona header stays
+    outs2 = planner.plan_machine(_rig(False), "example-windows")
+    out2 = next(o for o in outs2 if o.deploy_path == agents_path and o.target == "context-tree")
     assert "About Me" in out2.content
     assert any(s.startswith("identity/") for s in out2.sources)
 
-def test_agentic_tree_project_mount_emits_full_tree():
-    """A workstation project with agentic_tree: gets the full operating tree (the same
-    Navigation/Workflows/Skills/roster shape a Mitos Agent machine gets at its assistant_root)
+def test_context_tree_project_mount_emits_full_tree():
+    """A workstation project with context_tree: gets the full operating tree (the same
+    Navigation/Workflows/Skills/roster shape a Mitos Agent machine gets at its context_root)
     at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
     import copy
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
-    rig.machines["example-windows"]["paths"].pop("assistant_root", None)
+    rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
+    rig.machines["example-windows"]["paths"].pop("context_root", None)
     proj = rig.projects["example-project"]
     proj.pop("example", None)  # don't let the shipped-sample guard suppress it
-    proj["agentic_tree"] = "MitosAgent"
+    proj["context_tree"] = "MitosAgent"
     proj["local_path"]["example-windows"] = "example-project"
 
     outs = planner.plan_machine(rig, "example-windows")
@@ -386,7 +392,7 @@ def test_agentic_tree_project_mount_emits_full_tree():
 
     root_agents = by_path.get(f"{mount_root}/AGENTS.md")
     assert root_agents is not None, "project mount must emit its own root AGENTS.md"
-    assert root_agents.target == "agents-md"
+    assert root_agents.target == "context-tree"
     assert root_agents.drift_policy == "protect"
 
     projects_agents = by_path.get(f"{mount_root}/Projects/AGENTS.md")
@@ -396,8 +402,8 @@ def test_agentic_tree_project_mount_emits_full_tree():
     per_project = by_path.get(f"{mount_root}/Projects/Example Project/AGENTS.md")
     assert per_project is not None, "the ctx_key dynamic entry must also render at the mount root"
 
-def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
-    """A workstation project with BOTH a knowledge graph and agentic_tree: gets a
+def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
+    """A workstation project with BOTH a knowledge graph and context_tree: gets a
     generated cross-reference note in its normal doc-index AGENTS.md pointing at the
     separate operating-tree mount — two AGENTS.md-shaped files legitimately coexist, so
     the split is named rather than left for a reader to guess at."""
@@ -407,7 +413,7 @@ def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
     rig.machines["example-windows"]["targets"] = ["claude-code"]
     proj = rig.projects["example-project"]
     proj.pop("example", None)
-    proj["agentic_tree"] = "MitosAgent"
+    proj["context_tree"] = "MitosAgent"
     proj["local_path"]["example-windows"] = "example-project"
     rig.graphs["example-project"] = graphmod.ProjectGraph(
         slug="example-project", name="Example Project", description="",
@@ -421,17 +427,17 @@ def test_agentic_tree_cross_reference_note_on_claude_code_graph_lane():
     assert "Operating Tree" in out.content
     assert "MitosAgent/AGENTS.md" in out.content
 
-def test_agentic_tree_cross_reference_note_on_project_agents_lane():
+def test_context_tree_cross_reference_note_on_project_agents_lane():
     """The Mitos Agent-style project_agents lane (context.builder projects) gets the same
-    cross-reference note when agentic_tree: is set — consistent with the claude-code
+    cross-reference note when context_tree: is set — consistent with the claude-code
     graph lane above."""
     import copy
     from agentic import graph as graphmod
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
     rig.projects["mitos"]["document_store"] = "gws"
-    rig.projects["mitos"]["agentic_tree"] = "MitosAgent"
+    rig.projects["mitos"]["context_tree"] = "MitosAgent"
     rig.graphs["mitos"] = graphmod.ProjectGraph(
         slug="mitos", name="Mitos", description="test description",
         documents=[_doc("MITOS_DOC_1", "Design Review", "a design review", "2026-06-27")],
@@ -443,27 +449,27 @@ def test_agentic_tree_cross_reference_note_on_project_agents_lane():
     assert "Operating Tree" in out.content
     assert "MitosAgent/AGENTS.md" in out.content
 
-def test_agentic_tree_no_effect_on_agentic_machine():
-    """agentic_tree is a workstation-only concept — an agentic (mitos-agent) machine already
-    hosts the tree at its assistant_root, so a project's agentic_tree must not produce a
+def test_context_tree_no_effect_on_agentic_machine():
+    """context_tree is a workstation-only concept — an agentic (mitos-agent) machine already
+    hosts the tree at its context_root, so a project's context_tree must not produce a
     second, redundant mount there."""
     import copy
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["targets"] = ["mitos-agent", "agents-md"]
-    rig.machines["example-windows"]["paths"]["assistant_root"] = "C:/MitosAgent"
+    rig.machines["example-windows"]["targets"] = ["mitos-agent", "context-tree"]
+    rig.machines["example-windows"]["paths"]["context_root"] = "C:/MitosAgent"
     proj = rig.projects["example-project"]
     proj.pop("example", None)
-    proj["agentic_tree"] = "MitosAgent"
+    proj["context_tree"] = "MitosAgent"
     proj["local_path"]["example-windows"] = "example-project"
 
     outs = planner.plan_machine(rig, "example-windows")
     mount_root = "C:/Projects/example-project/MitosAgent"
     paths = {o.deploy_path for o in outs}
     assert f"{mount_root}/AGENTS.md" not in paths, \
-        "agentic_tree must be a no-op on an agentic machine"
+        "context_tree must be a no-op on an agentic machine"
 
 def test_workstation_produces_no_clones_and_context_root_produces_clones():
-    """Workstations (claude-code without agents-md) never auto-clone or pull checkouts.
+    """Workstations (claude-code without context-tree) never auto-clone or pull checkouts.
     agentic_context_root machines produce clones in the reference tree."""
     import copy
     rig = copy.deepcopy(reg)
@@ -477,11 +483,11 @@ def test_workstation_produces_no_clones_and_context_root_produces_clones():
     clones = planner.plan_clones(rig, "example-windows")
     assert clones == [], "workstations must never auto-clone into local_path"
 
-    # agentic_context_root lane fires when agentic_context_root + agents-md are present
+    # agentic_context_root lane fires when agentic_context_root + context-tree are present
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
         rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
-    rig2.machines["example-windows"]["targets"] = ["claude-code", "agents-md"]
+    rig2.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
     rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/MitosAgent"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     rig2.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
@@ -1121,8 +1127,8 @@ def test_assistant_root_agents_md_is_the_routing_entry_point():
     the Projects branch root must carry the dynamically generated org-domain organizations table."""
     treg, tmp = _temp_registry()
     outputs = planner.plan_machine(treg, "rig")
-    root = treg.machines["rig"]["paths"]["assistant_root"].rstrip("/")
-    # the root entry point exists at exactly assistant_root/AGENTS.md
+    root = (treg.machines["rig"]["paths"].get("context_root") or treg.machines["rig"]["paths"].get("assistant_root")).rstrip("/")
+    # the root entry point exists at exactly context_root/AGENTS.md
     root_agents = next((o for o in outputs if o.deploy_path == f"{root}/AGENTS.md"), None)
     assert root_agents is not None, "assistant_root/AGENTS.md (the entry point) must be planned"
     # routing content, no org/domain detail leaking into the lean root
