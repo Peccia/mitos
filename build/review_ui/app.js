@@ -86,9 +86,9 @@ let skillFilterTargetMode = "show"; // "show" (match target) | "hide" (hide targ
 let skillHiddenTargets = [];    // targets to hide when in hide mode
 let skillFilterOrg = false;     // filter to only org-domain skills
 // Default view = only what this registry's machines would actually deploy (the server's
-// per-item `deploys_here`). A coding-harness box therefore opens on its own skills instead
-// of the mitos-agent-only core ones it can never receive; the "All" chip reveals everything, so
-// org skills stay readable as reference. Not persisted — a fresh session starts scoped.
+// per-item `deploys_here`). A workstation therefore opens on its own skills instead
+// of unselected core ones it can never receive; the "All" chip reveals everything.
+// Not persisted — a fresh session starts scoped.
 let skillShowAll = false;
 let orgSkillViewMode = {};      // skill name -> "role" | "agentsmd" per-skill
 
@@ -236,9 +236,8 @@ async function refresh(pre) {
   // this: which skills the card grid shows is decided by static predicates
   // (isSkillVisible), never by a join against orgData — so a skipped or failed fetch can
   // never leak an org skill into view.
-  if (!orgData && hasMitosAgent()) {
-    try { orgData = await (await fetch("/api/org")).json(); }
-    catch (e) { orgData = {}; }
+  if (!orgData) {
+    orgData = {};
   }
   if (!agentsData) {
     try { agentsData = await (await fetch("/api/agents")).json(); }
@@ -853,13 +852,6 @@ function buildProjectPanel(container, g) {
       hidden: !!g.hidden,
       skills: (g.skills || []).slice(),
       repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
-      // An absent key inherits the registry-wide set; an EMPTY ARRAY means "this project
-      // inherits nothing". Two different answers, and the absent case must not collapse to [].
-      // The server sends the absent case as JSON `null` — there is no `undefined` on the wire —
-      // so a `=== undefined` test reads null as "an explicit empty set" and silently turns
-      // inherit into inherit-nothing on the next save. `== null` catches both.
-      defaultDeliverables: g.defaultDeliverablesOwn == null
-        ? undefined : g.defaultDeliverablesOwn.slice(),
     };
     projectEditOpen = true;
     renderGraph();
@@ -971,34 +963,6 @@ function projectEditorCard(g) {
   hiddenWrap.append(hiddenLbl); card.append(hiddenWrap);
   inputs.hidden = hiddenBox;
 
-  // Default deliverables — what a NEW effort under this project starts checked with. Three
-  // states, not two: inherit (key absent), an explicit set, or an explicit EMPTY set meaning
-  // "inherit nothing". The checkbox toggles between inherit and explicit; the group under it
-  // authors the explicit case, and leaving every box unticked is the empty-set answer.
-  const ddWrap = el("div", "graph-field");
-  ddWrap.append(el("label", "", "Default deliverables for new work"));
-  const ddInherit = el("input"); ddInherit.type = "checkbox";
-  ddInherit.checked = vals.defaultDeliverables === undefined;
-  const inheritLbl = el("label", "target-check");
-  const regDefault = (STATE.registry_default_deliverables || []);
-  inheritLbl.append(ddInherit, document.createTextNode(
-    " inherit from registry/user.yaml" + (regDefault.length ? ` (${regDefault.join(", ")})` : " (none set)")));
-  ddWrap.append(inheritLbl);
-  const ddGroup = el("div", "target-checks");
-  const ddChecked = new Set(vals.defaultDeliverables || []);
-  const ddBoxes = {};
-  for (const name of (STATE.known_deliverables || [])) {
-    const lbl = el("label", "target-check");
-    const box = el("input"); box.type = "checkbox"; box.checked = ddChecked.has(name);
-    ddBoxes[name] = box;
-    lbl.append(box, document.createTextNode(" " + name));
-    ddGroup.append(lbl);
-  }
-  const syncDd = () => { ddGroup.hidden = ddInherit.checked; };
-  ddInherit.addEventListener("change", syncDd);
-  syncDd();
-  ddWrap.append(ddGroup); card.append(ddWrap);
-  inputs.ddInherit = ddInherit; inputs.ddBoxes = ddBoxes;
 
   // Bound skills (this project's checkouts)
   const skillsWrap = el("div", "graph-field");
@@ -1094,13 +1058,6 @@ function projectEditorCard(g) {
       skills: Object.keys(inputs.skillBoxes).filter((n) => inputs.skillBoxes[n] && inputs.skillBoxes[n].checked),
       repo: repos.map((r) => r.url), repo_notes: repoNotes,
     };
-    if (inputs.ddInherit && !inputs.ddInherit.checked) {
-      fields.default_deliverables = (STATE.known_deliverables || [])
-        .filter((n) => inputs.ddBoxes[n] && inputs.ddBoxes[n].checked);
-    } else if (inputs.ddInherit) {
-      // null asks the server to REMOVE the key, restoring inheritance — distinct from sending []
-      fields.default_deliverables = null;
-    }
     save.disabled = true;
     try {
       const res = await fetch("/api/project/edit", {
@@ -2014,11 +1971,8 @@ function renderHiddenDrawer(g) {
             description: effort.description || "",
             keywords: effort.keywords || "",
             goal: effort.goal || "",
-            orgDomain: effort.orgDomain || "",
-            deliverables: (effort.deliverables || []).slice(),
             status: effort.status || "",
             evaluation: effort.evaluation || "",
-            requirementsCoverage: (effort.requirementsCoverage || []).slice(),
             hidden: !!effort.hidden,
           }
         };
@@ -2087,13 +2041,8 @@ function buildRegistryPane(container, g, open) {
   const addEffortBtn = el("button", "ghost tiny", "+ Work");
   addEffortBtn.title = "Add a new effort grouping to this project";
   addEffortBtn.onclick = () => {
-    // A NEW effort starts with the project's resolved default deliverables. The server does
-    // the resolving (project manifest, else registry/user.yaml) and hands back the answer as
-    // g.defaultDeliverables, so the client never reimplements the chain and can never drift
-    // from it. Prefilled, not forced: every box is still unticked by hand.
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "", keywords: "", hidden: false,
-                           deliverables: (g.defaultDeliverables || []).slice() } };
+                   vals: { id: "", name: "", description: "", keywords: "", hidden: false } };
     renderRegistryRows(g);
   };
   head.append(addDocBtn, addEffortBtn);
@@ -2261,25 +2210,6 @@ function renderRegistryRows(g) {
     head.append(caret);
 
     const nameSpan = el("span", "effort-name" + (status === "remove" ? " struck" : ""), effort.name);
-    if (effort.orgDomain) {
-      nameSpan.append(el("span", "effort-domain-tag", " · org: " + effort.orgDomain));
-    }
-    if ((effort.deliverables || []).length) {
-      const delivSpan = el("span", "effort-domain-tag", " · deliverables: " + effort.deliverables.join(", "));
-      const delivSkills = effort.deliverables.map((d) => {
-        const p = (STATE.deliverable_skills || {})[d] || [];
-        return p.length ? p.join(", ") : `${d} (no skill)`;
-      });
-      delivSpan.title = "Produced by: " + delivSkills.join(", ");
-      nameSpan.append(delivSpan);
-    }
-    // The COUNT, not the names: six dimensions would swamp the row. The names live in the editor.
-    if ((effort.requirementsCoverage || []).length) {
-      const covSpan = el("span", "effort-domain-tag",
-                         " · coverage: " + effort.requirementsCoverage.length);
-      covSpan.title = effort.requirementsCoverage.join(", ");
-      nameSpan.append(covSpan);
-    }
     head.append(nameSpan);
     if (effort.status === "done") {
       const done = el("span", "badge badge-done", "Done");
@@ -2323,11 +2253,6 @@ function renderRegistryRows(g) {
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
                                keywords: effort.keywords || "",
                                goal: effort.goal || "",
-                               orgDomain: effort.orgDomain || "",
-                               deliverables: (effort.deliverables || []).slice(),
-            status: effort.status || "",
-            evaluation: effort.evaluation || "",
-                               requirementsCoverage: (effort.requirementsCoverage || []).slice(),
                                hidden: !!effort.hidden,
                                status: effort.status || "",
                                evaluation: effort.evaluation || "" } };
@@ -2662,11 +2587,7 @@ function scrollCardIntoView(card) {
 // the inbox Reason field, which deliberately does NOT bind Enter to Accept).
 function bindEnterToApply(inputs, apply) {
   for (const inp of Object.values(inputs)) {
-    // A field entry is not always a single element: a checkbox GROUP (deliverables,
-    // requirements coverage) records itself as a plain {name: checkbox} map, which has no
-    // addEventListener. Calling it threw, and because this runs at the END of building the
-    // editor card the throw took the whole card with it — "+ Work" and Edit silently did
-    // nothing. Bind only real elements.
+    // Bind only real HTML elements, skipping groups or non-HTMLElement values.
     if (!(inp instanceof HTMLElement)) continue;
     if (inp.tagName === "SELECT" || inp.tagName === "TEXTAREA") continue;
     inp.addEventListener("keydown", (e) => {
@@ -2705,114 +2626,6 @@ function effortEditorCard(g) {
   goalArea.rows = 3;
   goalWrap.append(goalArea); card.append(goalWrap); inputs.goal = goalArea;
 
-  // Org domain — the routing tag: work in this effort loads the matching org-* skill.
-  // Optional; untagged efforts route by the nature of the request. Domains come from
-  // dynamic discovery (skills with org_domain frontmatter).
-  // Hidden entirely when the Mitos Agent flag is off — there are no org skills on screen
-  // to route to. `inputs.orgDomain` stays null and the save handler falls back to the
-  // effort's EXISTING tag, so hiding the control never wipes a value the owner set while
-  // it was on (see the save handler below).
-  inputs.orgDomain = null;
-  if (hasMitosAgent()) {
-  const domWrap = el("div", "graph-field");
-  domWrap.append(el("label", "", "Org domain"));
-  const domSel = el("select", "graph-select");
-  const noDom = el("option", "", "(none — route by request)"); noDom.value = "";
-  domSel.append(noDom);
-  for (const dom of Object.keys(orgData || {}).sort()) {
-    const opt = el("option", "", dom); opt.value = dom;
-    domSel.append(opt);
-  }
-  // Round-trip safety: an existing tag whose domain skill has since been removed must
-  // survive an unrelated edit rather than being silently wiped.
-  if (vals.orgDomain && !(orgData || {})[vals.orgDomain]) {
-    const opt = el("option", "", vals.orgDomain + " (unknown domain)");
-    opt.value = vals.orgDomain;
-    domSel.append(opt);
-  }
-  domSel.value = vals.orgDomain || "";
-  domWrap.append(domSel); card.append(domWrap); inputs.orgDomain = domSel;
-  }
-
-  // Expected deliverables — the forward contract: the artifacts every implementation of this
-  // effort must yield. A checkbox group over the registry's controlled vocabulary (a free-text
-  // field could only produce values the server would reject). Optional; untagged efforts render
-  // no deliverables line and the plan falls through to its honest-empty filler.
-  const delivWrap = el("div", "graph-field");
-  delivWrap.append(el("label", "", "Expected deliverables"));
-  const delivGroup = el("div", "target-checks");
-  const delivChecked = new Set(vals.deliverables || []);
-  const delivBoxes = {};
-  for (const name of (STATE.known_deliverables || [])) {
-    const lbl = el("label", "target-check");
-    const box = el("input"); box.type = "checkbox"; box.checked = delivChecked.has(name);
-    delivBoxes[name] = box;
-    lbl.append(box, document.createTextNode(" " + name));
-    // Does anything actually PRODUCE this? A declared deliverable no skill delivers is a contract
-    // nothing answers. Registry-wide on purpose: `deploy --dry-run` reports the exact per-machine
-    // gap, and a badge that changed with the machine selector would be read as that check without
-    // being it.
-    const producers = (STATE.deliverable_skills || {})[name] || [];
-    if (!producers.length) {
-      const warn = el("span", "muted", " (no skill)");
-      warn.title = "No skill declares `delivers: " + name + "` — nothing knows how to produce it.";
-      lbl.append(warn);
-    } else {
-      lbl.title = "Produced by: " + producers.join(", ");
-    }
-    delivGroup.append(lbl);
-  }
-  delivWrap.append(delivGroup); card.append(delivWrap); inputs.deliverables = delivBoxes;
-
-  // Requirements coverage — the INTERVIEW contract: the dimensions a requirements-gathering
-  // session must close before this effort's requirements are exportable. Same checkbox-group
-  // shape and same reasoning as deliverables above; optional, and an effort naming none renders
-  // no coverage line at all.
-  const coverWrap = el("div", "graph-field");
-  coverWrap.append(el("label", "", "Requirements coverage"));
-  const coverGroup = el("div", "target-checks");
-  const coverChecked = new Set(vals.requirementsCoverage || []);
-  const coverBoxes = {};
-  for (const name of (STATE.known_coverage || [])) {
-    const lbl = el("label", "target-check");
-    const box = el("input"); box.type = "checkbox"; box.checked = coverChecked.has(name);
-    coverBoxes[name] = box;
-    lbl.append(box, document.createTextNode(" " + name));
-    coverGroup.append(lbl);
-  }
-  coverWrap.append(coverGroup); card.append(coverWrap); inputs.requirementsCoverage = coverBoxes;
-
-  // The half-closed-loop warning. An effort that declares requirements coverage runs a
-  // requirements interview, and its results come back as a `requirements-receipt` — the record
-  // carrying per-requirement outcomes keyed by the ids an export minted. Declare the interview
-  // but not the receipt and the gathering half of the loop closes quietly: work happens, and
-  // nothing reports on which requirements it actually met.
-  //
-  // Mitos cannot see settled requirements (they live in the agent's dossier, across the
-  // boundary), so declared COVERAGE is the checkable proxy for "this effort gathers
-  // requirements". It is a warning, never a block: the owner may have a reason, and the
-  // registry-wide default deliberately omits the receipt.
-  // .accept-note carries the theme-aware --warn colour the console already uses for
-  // advisory copy; no new class, so light/dark stay correct for free.
-  const receiptWarn = el("div", "accept-note");
-  const syncReceiptWarn = () => {
-    const wantsInterview = Object.values(coverBoxes).some((b) => b.checked);
-    const hasReceipt = !!(delivBoxes["requirements-receipt"]
-                          && delivBoxes["requirements-receipt"].checked);
-    const show = wantsInterview && !hasReceipt;
-    receiptWarn.textContent = show
-      ? "This effort gathers requirements but declares no requirements-receipt — nothing will "
-        + "report which of them the implementation actually met."
-      : "";
-    receiptWarn.hidden = !show;
-  };
-  for (const b of Object.values(coverBoxes)) b.addEventListener("change", syncReceiptWarn);
-  if (delivBoxes["requirements-receipt"]) {
-    delivBoxes["requirements-receipt"].addEventListener("change", syncReceiptWarn);
-  }
-  syncReceiptWarn();
-  card.append(receiptWarn);
-
   // Hidden — keeps this effort and its documents out of deployed context (AGENTS.md,
   // CLAUDE.md) without touching the graph, which still loads and queries fine.
   const hiddenWrap = el("div", "graph-field");
@@ -2849,18 +2662,9 @@ function effortEditorCard(g) {
                      description: inputs.description.value.trim(),
                      keywords: inputs.keywords ? inputs.keywords.value.trim() : (vals.keywords || ""),
                      goal: inputs.goal.value.trim(),
-                     // null when the field was not rendered — carry the stored tag
-                     // forward rather than proposing it away
-                     orgDomain: inputs.orgDomain ? inputs.orgDomain.value
-                                                 : (vals.orgDomain || ""),
                      hidden: inputs.hidden.checked,
                      status: inputs.status.checked ? "done" : "",
-                     evaluation: inputs.status.checked ? inputs.evaluation.value.trim() : "",
-                     deliverables: (STATE.known_deliverables || [])
-                       .filter((n) => inputs.deliverables[n] && inputs.deliverables[n].checked),
-                     requirementsCoverage: (STATE.known_coverage || [])
-                       .filter((n) => inputs.requirementsCoverage[n]
-                                      && inputs.requirementsCoverage[n].checked) };
+                     evaluation: inputs.status.checked ? inputs.evaluation.value.trim() : "" };
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
       toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
@@ -2962,10 +2766,7 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
     const item = {
       id: x.id, name: x.name, description: x.description || "",
       goal: x.goal || "",
-      orgDomain: x.orgDomain || "",
       hidden: !!x.hidden,
-      deliverables: x.deliverables || [],
-      requirementsCoverage: x.requirementsCoverage || [],
     };
     if ("keywords" in x) item.keywords = x.keywords ?? "";
     // Absent keys mean "leave as is" server-side (preserve-when-absent), so a draft that never
@@ -4067,39 +3868,14 @@ async function saveDraft(p, body, reason) {
 //                           for a machine you have not built yet.
 //   STATE.machine_targets — only what this registry's machines declare. Used by the FILTER
 //                           chips, which exist to narrow what you actually have.
-// Mixing them is what put a `mitos-agent` filter chip on a coding-harness box.
+// Mixing them is what put an unconfigured filter chip on a coding-harness box.
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n).trimEnd() + "…" : s;
 }
 
-// ── The Mitos Agent presentation gate ───────────────────────────────────────────
-// registry/user.yaml's `mitos_agent` (surfaced by review.state()) decides whether the
-// console shows the incubating planning harness at all: org-domain skills, the
-// `mitos-agent` target chip, the effort editor's Org domain field, "+ New org".
-// DISPLAY ONLY — a machine whose profile names `mitos-agent` still compiles and deploys
-// it byte-for-byte. That is why isTargetVisible drops the chip even though
-// STATE.machine_targets legitimately contains it on a fresh clone (example-linux.yaml).
-//
-// The two item predicates are deliberately STATIC — they read properties every skill
-// already carries in /api/state. The obvious alternative, joining against orgData, is
-// asynchronous: skipped or failed, the join comes back empty and every org skill leaks
-// into the grid. A predicate that fails open is not a gate.
-//
-// The org test is `org_domain` (a read-only field on every skill in /api/state) and ONLY
-// that. Two near-miss tests were tried and are wrong:
-//   - the `org-` name PREFIX: core org skills happen to carry it, but the converse does not
-//     hold, and a user skill named `org-software-implementation-plan` is an ordinary
-//     coding-harness skill whose card its author needs.
-//   - `targets` containing `mitos-agent`: the seven `delivers:` skills and `gws` list it
-//     ALONGSIDE the coding harnesses, so that test hides exactly the skills a coding
-//     workstation is told it gets on its first deploy.
-// Skills that target the harness and nothing else (`new-session`, `graph-bootstrap`,
-// `project-update`) are left to `deploys_here` — the pre-existing scope chip already answers
-// "would any machine of mine receive this", and that is not the flag's question.
-const hasMitosAgent = () => !!STATE.mitos_agent;
-const isTargetVisible = (t) => t !== "context-tree" && (hasMitosAgent() || t !== "mitos-agent");
-const isSkillVisible = (s) => hasMitosAgent() || !s.org_domain;
+const isTargetVisible = (t) => t !== "context-tree";
+const isSkillVisible = (s) => true;
 
 let skillShowingAgents = false;
 let agentsData = null;
@@ -4121,9 +3897,8 @@ function renderSkills() {
 
   // The create forms replace the grid entirely — the drawer must not hang over them.
   // (These return early, before the drawer-sync tail at the end of this function.)
-  if (newSkillOpen || newOrgDomainOpen || newAgentOpen || editingAgentName || contextTreeOpen) closeSkillDrawer();
+  if (newSkillOpen || newAgentOpen || editingAgentName || contextTreeOpen) closeSkillDrawer();
   if (newSkillOpen)     { box.replaceChildren(newSkillForm());      return; }
-  if (newOrgDomainOpen) { box.replaceChildren(newOrgDomainForm()); return; }
   if (newAgentOpen)     { box.replaceChildren(newAgentForm());      return; }
   if (editingAgentName) { box.replaceChildren(editAgentForm(editingAgentName)); return; }
   if (contextTreeOpen)  { box.replaceChildren(renderContextTreeSection()); return; }
@@ -4192,14 +3967,6 @@ function renderSkills() {
     newSkillBtn.onclick = () => { newSkillOpen = true; renderSkills(); };
     btnGroup.append(newSkillBtn);
   }
-  if (hasMitosAgent()) {
-    const newOrgBtn = el("button", "", "+ New org");
-    newOrgBtn.title = "Scaffold a new org domain skill";
-    newOrgBtn.onclick = () => { newOrgDomainOpen = true; renderSkills(); };
-    if (!skillShowingAgents) {
-      btnGroup.append(newOrgBtn);
-    }
-  }
   const treeBtn = el("button", "", "Context Tree");
   treeBtn.title = "View planned Context Tree";
   treeBtn.onclick = () => { contextTreeOpen = true; renderSkills(); };
@@ -4208,10 +3975,7 @@ function renderSkills() {
   chipRow.replaceChildren();
 
   // Scope toggle: what this registry's machines deploy (default) vs. everything. Shown only
-  // when something is actually withheld — on a fleet that includes a mitos-agent box every core
-  // skill deploys somewhere, so the pair would be a control with no effect (matches the
-  // Prompt Library's renderChips). A stuck `skillShowAll` is reset so the default view is
-  // honest once nothing is withheld.
+  // when something is actually withheld. Rendered only when something is actually being withheld.
   const anyWithheld = (STATE.prompts.skills || []).some((s) => s.deploys_here === false);
   if (anyWithheld) {
     for (const [label, all, title] of [
@@ -4231,15 +3995,14 @@ function renderSkills() {
   }
 
   // Target filter chips — in the scoped view they come from the targets this registry's
-  // machines DECLARE (STATE.machine_targets), not the full adapter set: offering `mitos-agent` as
+  // machines DECLARE (STATE.machine_targets), not the full adapter set: offering an unused target as
   // a filter on a coding-harness box is a control that can only ever empty the list.
   // Note: context-tree never deploys skills, so it is always filtered out of skill target
-  // filters — that, plus the mitos-agent gate, is what isTargetVisible holds.
+  // filters — isTargetVisible holds that rule.
   const targetOpts = (skillShowAll ? (STATE.known_targets || []) : (STATE.machine_targets || []))
     .filter(isTargetVisible);
-  // Drop a narrow left over from the other scope BEFORE rendering — e.g. `mitos-agent` picked
-  // under All, then back to My machines. Without this the list empties with no active chip
-  // on screen to explain why, which reads as a bug rather than a filter.
+  // Drop a narrow left over from the other scope BEFORE rendering. Without this the list empties
+  // with no active chip on screen to explain why, which reads as a bug rather than a filter.
   if (skillFilterTarget && !targetOpts.includes(skillFilterTarget)) skillFilterTarget = "";
   skillHiddenTargets = skillHiddenTargets.filter((t) => targetOpts.includes(t));
   if (targetOpts.length > 1) {          // nothing to narrow between when there's only one
@@ -4293,16 +4056,7 @@ function renderSkills() {
     }
     chipRow.append(el("span", "chip-sep"));
   }
-  // Same rule for "Orgs only": omit it when the active scope holds no org-domain skill, so
-  // it can't sit there as the one chip guaranteed to yield nothing on a coding-harness box.
-  const scopedSkills = (STATE.prompts.skills || [])
-    .filter((s) => isSkillVisible(s) && (skillShowAll || s.deploys_here !== false));
-  if (hasMitosAgent() && scopedSkills.some((s) => orgDomainBySkill[s.name])) {
-    const orgChip = el("button", "pool-opt" + (skillFilterOrg ? " active" : ""), "Orgs only");
-    orgChip.setAttribute("aria-pressed", String(skillFilterOrg));
-    orgChip.onclick = () => { skillFilterOrg = !skillFilterOrg; renderSkills(); };
-    chipRow.append(orgChip);
-  } else if (skillFilterOrg) {
+  if (skillFilterOrg) {
     skillFilterOrg = false;
   }
 
@@ -4479,11 +4233,6 @@ function renderSkillDrawer(s, domain) {
   body.append(renderSkillFilesSection(s));
   body.append(renderSkillScopeSection(s));
 
-  // Org structure panel — only for org-domain skills, and only when the harness is on
-  // (with it off orgData is never fetched, but the gate is stated rather than inferred)
-  if (hasMitosAgent() && domain && orgData && orgData[domain]) {
-    body.append(renderSkillOrgSection(s.name, domain));
-  }
 
   drawer.hidden = false;
   // Next frame, so the transform transition has a start state to animate from.
@@ -4551,7 +4300,7 @@ function renderSkillFilesSection(s) {
 // both and Prompt Library's "Revert" still discards it as part of a full reset. ────
 // ── skill-row scope assignment: global (default, deploys to every shared/global
 // directory a target offers — the antigravity_skills dir, the personal
-// claude_code_skills dir, mitos-agent, claude-app) vs project (deploys ONLY to the
+// claude_code_skills dir, claude-app) vs project (deploys ONLY to the
 // projects that name this skill in their manifest's `skills:` list, on whichever of
 // claude-code/antigravity it targets). Mirrors the Supporting Files panel's pattern —
 // same metaDrafts/saveDraft plumbing, same skill:<name> key. The list of bound
@@ -4569,8 +4318,8 @@ function renderSkillScopeSection(s) {
   section.append(header);
   section.append(el("div", "muted resources-hint",
     "Global (default): deploys to every shared directory this skill's targets offer. "
-    + "Project: deploys only to the projects below, on claude-code/antigravity — mitos-agent and "
-    + "claude-app ignore this and always stay global."));
+    + "Project: deploys only to the projects below, on claude-code/antigravity — targets "
+    + "without project scope ignore this and always stay global."));
   section.append(el("div", "muted resources-hint",
     "Change which projects bind this skill from each project's Knowledge Graph → Edit properties."));
 
@@ -4656,39 +4405,6 @@ function renderSkillScopeSection(s) {
   return section;
 }
 
-// ── renderSkillOrgSection: org role tree / Context Tree folder view ──────────────
-// Embedded within the expanded body of an org-domain skill row. Uses the same
-// renderDomainSummary / renderContextTreePicker / renderContextTree functions — they
-// are unchanged; only the container changes.
-function renderSkillOrgSection(skillName, domain) {
-  const section = el("div", "skill-org-section");
-  section.append(el("h4", "skill-org-heading", "Organization — " + domain));
-
-  const mode = orgSkillViewMode[skillName] || "role";
-  const viewToggle = el("div", "pool-toggle");
-  for (const [id, label] of [["role", "Role Tree"], ["contexttree", "Context Tree"]]) {
-    const b = el("button", "pool-opt" + (mode === id ? " active" : ""), label);
-    b.setAttribute("aria-pressed", String(mode === id));
-    b.onclick = () => {
-      orgSkillViewMode[skillName] = id;
-      if (id === "contexttree" && orgMachine && !orgTreeCache[orgMachine]) {
-        loadOrgTree(orgMachine);   // async; calls renderSkills() on completion
-      } else {
-        renderSkills();
-      }
-    };
-    viewToggle.append(b);
-  }
-  section.append(viewToggle);
-
-  if (mode === "role") {
-    section.append(renderDomainSummary(orgData[domain]));
-  } else {
-    section.append(renderContextTreePicker());
-    section.append(renderContextTree());
-  }
-  return section;
-}
 
 // ── New skill form ────────────────────────────────────────────────────────────
 // Feeds POST /api/skills/new. Nothing writes registry/ directly (invariant #3);
@@ -4751,8 +4467,8 @@ function newSkillForm() {
   targetsWrap.append(el("label", "", "Targets"));
   const targetsRow = el("div", "target-checks");
   const targetBoxes = {};
-  // context-tree deploys no skills, and mitos-agent is gated behind the flag —
-  // isTargetVisible holds both rules. Only the NEW-skill form filters: the
+  // context-tree deploys no skills — isTargetVisible holds that rule.
+  // Only the NEW-skill form filters: the
   // metadata editor for an existing skill must keep showing what it declares,
   // or saving it would quietly drop the target.
   for (const t of (STATE.known_targets || []).filter(isTargetVisible)) {
@@ -4826,67 +4542,15 @@ function newSkillForm() {
   return wrap;
 }
 
-// ── Org tab: READ-ONLY visualization of the existing hand-authored org prose (parsed
-// server-side, org_index()/org_tree() in review.py) — role TITLES and playbooks
-// (lens/team/vocabulary/trigger) live in the org-*/SKILL.md domain skills,
-// hand-authored, never generated or edited here. Orgs are GLOBAL domain skills and are
-// never attached to a project — the only org edge in the graph is an effort's orgDomain
-// tag, edited in the Knowledge Graph tab's effort editor. The one write path here is
-// "+ ORG" (propose a brand-new domain skill as a kind:new inbox candidate).
-// ───────────────────────────────────────────────────────────────────────────────────
 let orgData = null;          // /api/org response, fetched once and cached
 let orgTreeCache = {};       // machine -> /api/org/tree response, cached per machine
 let orgMachine = null;       // selected machine for the Context Tree folder view
 let contextTreeOpen = false; // Context Tree standalone view toggle
-let newOrgDomainOpen = false; // "+ ORG" inline dialog toggle
 
 async function loadOrgTree(machine) {
   const res = await fetch(`/api/org/tree?machine=${encodeURIComponent(machine)}`);
   orgTreeCache[machine] = await res.json();
   renderSkills();
-}
-
-// "+ ORG": scaffolds a new domain-template skill (org-<domain>) via /api/org/new-domain —
-// a single kind:new candidate, immediately valid as an effort's org-domain tag once accepted.
-function newOrgDomainForm() {
-  const wrap = el("div", "inline-editor new-skill-form");
-  wrap.append(el("h3", "", "New org domain"));
-  wrap.append(el("div", "muted",
-    "Scaffolds a domain-template skill (org-<domain>) with a CEO/VP/Assistant structure. "
-    + "Accept it in the Inbox tab to make the domain selectable here and in the Knowledge "
-    + "Graph tab's effort editor (Org domain)."));
-  const f = el("div", "graph-field");
-  f.append(el("label", "", "Domain (slug)"));
-  const inp = el("input");
-  inp.type = "text";
-  inp.placeholder = "finance";
-  f.append(inp);
-  wrap.append(f);
-
-  const actions = el("div", "detail-actions");
-  const create = el("button", "accept", "Create domain");
-  create.onclick = async () => {
-    const domain = inp.value.trim().toLowerCase();
-    if (!domain) { toast("Domain is required."); return; }
-    const res = await fetch("/api/org/new-domain", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domain }),
-    });
-    const out = await res.json();
-    if (out.ok) {
-      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
-      newOrgDomainOpen = false;
-      await refresh();
-    } else {
-      toast(`Error: ${out.error}`, 5000);
-    }
-  };
-  const cancel = el("button", "ghost", "Cancel");
-  cancel.onclick = () => { newOrgDomainOpen = false; renderSkills(); };
-
-  actions.append(create, cancel);
-  wrap.append(actions);
-  return wrap;
 }
 
 // ── Agents View & Forms ───────────────────────────────────────────────────────
@@ -5916,11 +5580,4 @@ $("compose-rebuild").onclick = () => {
 };
 
 showTab("inbox");  // set initial active nav + title before data loads
-refresh().then(() => {
-  // The nav ships labelled "Skills" — the honest name with the harness off. Orgs only
-  // appear on that tab when mitos_agent is on, so the label follows the flag.
-  if (hasMitosAgent()) {
-    const nav = $("nav-skills");
-    if (nav) { nav.title = "Skills & Orgs"; nav.setAttribute("aria-label", "Skills & Orgs"); }
-  }
-}).catch((e) => toast(`Failed to load state: ${e}`, 6000));
+refresh().catch((e) => toast(`Failed to load state: ${e}`, 6000));

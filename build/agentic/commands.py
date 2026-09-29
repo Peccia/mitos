@@ -524,7 +524,7 @@ def compute_deploy_plan(reg: Registry, machine: str, root: Path | None = None,
     blocked = [s for s in statuses
                if s.state in ("drift", "conflict") and s.output.drift_policy == "protect"]
     # skill diagnostics: compatible-but-not-deployed (machine curation) and scope-ignoring
-    # targets (mitos-agent/claude-app) receiving a scope: project skill. Warn-only — nothing
+    # targets receiving a scope: project skill. Warn-only — nothing
     # here changes what deploys, it just makes a previously silent filter visible.
     skill_warnings = (skill_deploy_warnings(reg, machine)
                        if target is None and lane in ("all", "content") else [])
@@ -788,8 +788,34 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
     return result(0)
 
 
+def cmd_graph_strip_retired(reg: Registry, project: str | None = None,
+                            all_graphs: bool = False) -> int:
+    """Propose stripping retired predicates (peccia:orgDomain, peccia:deliverable,
+    peccia:requirementsCoverage) as kind: graph inbox candidates (ARB-02).
+    """
+    from . import review
+    if not all_graphs and not project:
+        print("error: specify --project <slug> or --all")
+        return 2
+    slugs = sorted(reg.graphs) if all_graphs else [project]
+    count = 0
+    for slug in slugs:
+        res = review.propose_strip_retired(reg, slug)
+        if not res.get("ok"):
+            print(f"error ({slug}): {res.get('error')}")
+            return 2
+        if res.get("proposed"):
+            count += 1
+            print(f"proposed strip-retired candidate for {slug} -> {res.get('id')}")
+    if count == 0:
+        print("no graphs contain retired predicates")
+    return 0
+
+
 # ── graph ────────────────────────────────────────────────────────────────────
-def cmd_graph(reg: Registry, project: str | None, query: str, *,
+def cmd_graph(reg: Registry, project: str | None = None, query: str = "documents", *,
+              action: str | None = None,
+              all_graphs: bool = False,
               complete_effort: str | None = None,
               evaluation_doc: str | None = None) -> int:
     """Inspect/validate the knowledge graph and run a saved SPARQL query.
@@ -802,6 +828,8 @@ def cmd_graph(reg: Registry, project: str | None, query: str, *,
     Inbox candidate and never writes the graph (invariant #3) — accept it in the console.
     """
     from . import graph as graphmod
+    if action == "strip-retired":
+        return cmd_graph_strip_retired(reg, project=project, all_graphs=all_graphs)
     if evaluation_doc and not complete_effort:
         print("error: --evaluation-doc requires --complete-effort")
         return 2
@@ -854,9 +882,7 @@ def _propose_complete_effort(reg: Registry, project: str | None, effort_id: str,
         return 2
     out = review.propose_graph_change(reg, project, documents=[], efforts=[{
         "id": effort.id, "name": effort.name, "description": effort.description,
-        "orgDomain": effort.org_domain, "goal": effort.goal,
-        "deliverables": list(effort.deliverables),
-        "requirementsCoverage": list(effort.requirements_coverage),
+        "goal": effort.goal,
         "keywords": effort.keywords, "hidden": effort.hidden,
         "status": "done", "evaluation": evaluation_doc}],
         reason=f"CLI complete-effort {effort_id}")

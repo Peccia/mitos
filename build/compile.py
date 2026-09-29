@@ -83,7 +83,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_graph = sub.add_parser("graph", help="inspect/validate a project knowledge graph "
                                            "and run a saved SPARQL query")
+    p_graph.add_argument("action", nargs="?", choices=["strip-retired"],
+                         help="action on the graph (e.g. strip-retired)")
     p_graph.add_argument("--project", help="project slug (omit to list all graphs)")
+    p_graph.add_argument("--all", action="store_true",
+                         help="apply to all project graphs (used with strip-retired)")
     p_graph.add_argument("--query", default="documents",
                          help="saved query name (default: documents)")
     p_graph.add_argument("--complete-effort", metavar="EFFORT_ID",
@@ -117,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         return review.cmd_review(reg, args.port, open_browser=not args.no_open)
     if args.cmd == "graph":
         return commands.cmd_graph(reg, args.project, args.query,
+                                  action=args.action,
+                                  all_graphs=args.all,
                                   complete_effort=args.complete_effort,
                                   evaluation_doc=args.evaluation_doc)
     return 1

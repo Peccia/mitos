@@ -24,28 +24,18 @@ from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_lo
 # assistant tree without forking targets/agents-md.yaml, which is not overlayable).
 _BRANCH_RE = re.compile(r"^context/([^/]+)/AGENTS\.md$")
 
-# The single assistant-harness target. Three predicates below all test it today, but they
-# ask genuinely different questions and must not be collapsed into one — see
-# docs/concepts/mitos-agent-platform.md §4.1. NOTE a FOURTH gate lives in _plan_claude_code
-# (`is_assistant_tree_machine = "agents-md" in targets`); it keys off `agents-md`, NOT this
-# target, decides graph-AGENTS.md vs CLAUDE.md-stub, and is deliberately kept separate.
-ASSISTANT_TARGET = "mitos-agent"
-
-
-def deploys_org_content(machine) -> bool:
-    """Question A — do org skills actually land on this machine? Gates the org-domain table
-    and every per-effort routing line. A machine can reach the tree without deploying org
-    skills, and must then render `orgDomain` as inert metadata rather than a routing line
-    pointing at a skill that was never deployed."""
-    return ASSISTANT_TARGET in machine.get("targets", [])
-
-
 def hosts_context_tree(machine) -> bool:
     """Does this machine deploy the context-tree target?"""
     return "context-tree" in machine.get("targets", [])
 
 
-hosts_assistant_tree = hosts_context_tree
+def hosts_assistant_tree(machine) -> bool:
+    """Does this machine host the personal assistant tree?"""
+    return "context-tree" in machine.get("targets", []) and bool(
+        (machine.get("paths") or {}).get("context_root") or (machine.get("paths") or {}).get("assistant_root")
+    )
+
+
 deploys_assistant_skills = lambda reg, machine: hosts_context_tree(machine)
 is_assistant_tree_machine = hosts_context_tree
 
@@ -114,8 +104,6 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
         spec = reg.targets[target]
         if target == "context-tree":
             outputs += _plan_context_tree(reg, machine_name, spec, paths)
-        elif target == "mitos-agent":
-            outputs += _plan_mitos_agent(reg, machine_name, spec, paths)
         elif target == "claude-code":
             outputs += _plan_claude_code(reg, machine_name, spec, paths)
         elif target == "antigravity":
@@ -398,17 +386,17 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     for the clone / fast-forward-only for the pull — never destructive.
 
     Two lanes:
-    - assistant_root (mitos-agent machines): clone into
-      <assistant_root>/Projects/<name>/<basename> — a SIBLING of the operating tree's
-      project node (_emit_tree uses the project NAME for that folder), so the planning
+    - context_root (context-tree machines): clone into
+      <context_root>/Projects/<name>/<basename> — a SIBLING of the operating tree's
+      project node (_emit_tree uses the project NAME for that folder), so the
       harness resolves a checkout structurally from the node's own directory.
-    - agentic_context_root (agents-md + claude-code machines): clone into
+    - agentic_context_root (context-tree + claude-code machines): clone into
       <agentic_context_root>/Projects/<slug>/<basename> — the reference context tree
       (_plan_graph_tree uses the SLUG for that folder).
 
     The deploy executor clones each only when its checkout is ABSENT, and fast-forwards an
     existing checkout (never resetting or deleting one — design rule #8). Machines that host
-    no project tree (no mitos-agent and no claude-code + agents-md reference tree) get nothing.
+    no project tree get nothing.
     """
     reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name) or {}
@@ -427,10 +415,10 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
 
     out: list[CloneSpec] = []
 
-    # assistant_root lane (mitos-agent operating tree — clones beside the project node,
+    # context_root lane (context-tree operating tree — clones beside the project node,
     # which _emit_tree names with the project NAME). Suppressed examples step aside, exactly
     # as the operating tree itself does when real overlay projects exist.
-    if "mitos-agent" in targets:
+    if hosts_context_tree(machine) and ("context_root" in paths or "assistant_root" in paths):
         aroot = paths.get("context_root") or paths.get("assistant_root")
         if aroot:
             aroot = str(aroot).rstrip("/")
@@ -443,7 +431,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     if "claude-code" not in targets or "context-tree" not in targets:
         return out
 
-    # agentic_context_root lane (agents-md machines that also run claude-code)
+    # agentic_context_root lane (context-tree machines that also run claude-code)
     root = paths.get("agentic_context_root")
     if root:
         root = str(root).rstrip("/")
@@ -489,11 +477,6 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
             dist_rel=f"agentic-graph/{safe_rel(deploy_path)}",
             content=content, drift_policy="generated", sources=[])
 
-    # This tree fires on ANY claude-code machine that sets agentic_context_root, whether
-    # or not agents-md/mitos-agent is also present (the gate above is claude-code + the path
-    # key alone — see the docstring). Org skills deploy only when `mitos-agent` is literally
-    # a target, so the org routing line must key off that, not off reaching this tree.
-    org_routing = deploys_org_content(machine)
     outputs: list[Output] = [
         _generated(f"{root}/AGENTS.md",
                    graphmod.roster_markdown(list(active_graphs.values())))]
@@ -507,8 +490,7 @@ def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Outp
         gen_body = _project_doc_block(
             reg, proj, pg, graphmod.project_full_markdown,
             level=2 if prose_src else 1,
-            emit_heading=_connection_emit(proj, prose),
-            org_routing=org_routing)
+            emit_heading=_connection_emit(proj, prose))
         regions = _project_node_regions(proj, prose_src, prose, gen_body)
         if prose_src:
             # prose (protected) interleaved with the generated nav + doc regions
@@ -710,30 +692,6 @@ def _project_prose(reg: Registry, proj: dict, audience: str) -> tuple[str | None
     return None, ""
 
 
-# Targets that deploy a `scope: project` skill GLOBALLY, defeating the confinement its scope
-# promises. `mitos-agent` is the only one: it writes real files, automatically, machine-wide.
-#
-# `claude-app` ignores scope too, but it is NOT here, because it deploys nothing — `deploy`
-# stages a zip and the last mile is a human uploading it (targets/claude-app.yaml). A staged
-# zip is inert, so there is no leak to warn about, and warning anyway left the operator no
-# quiet correct state: excluding the skill warned that it was excluded, keeping it warned that
-# it leaked, and the only silent configuration was to drop the target from the skill's
-# frontmatter — i.e. to give the capability up. See is_manual_skill_target.
-SCOPE_IGNORING_SKILL_TARGETS = {"mitos-agent"}
-
-
-def _declared_deliverables(reg: Registry) -> set[str]:
-    """Demand for the return lane: every deliverable term some effort actually asks for.
-
-    Example graphs step aside once real projects exist — the same rule the graph roster
-    applies (_suppressed_examples), and for the same reason: a shipped sample must not
-    switch the return lane on for a fleet that never opted into it.
-    """
-    suppressed = _suppressed_examples(reg)
-    return {d for slug, pg in (reg.graphs or {}).items() if slug not in suppressed
-            for e in pg.efforts for d in e.deliverables}
-
-
 def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) -> list:
     """Skills a target receives, for ONE machine. Two layers compose:
     - push: the skill's `targets:` frontmatter declares which tools it is FOR;
@@ -748,19 +706,6 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     tools is noise — or worse, a dangling instruction — on a box where that server was
     never wired, and a brand-new coding-harness user should not have to hand-write an
     `exclude:` list to keep the maintainer's workspace skills off their machine.
-
-    A fourth gate, non-curatable for the same reason: a skill declaring `delivers:` is
-    dropped unless some effort in the registry declares that deliverable
-    (_declared_deliverables). It is the exact inverse of _undelivered_warnings — that
-    reports demand with no supply, this stops shipping supply with no demand. A procedure
-    for an artifact nothing asks for is not inert: every harness pays for it in the skill
-    roster of every session, which is what put seven return-lane skills on a laptop that
-    runs one coding harness and nothing that reads a return record.
-
-    It keys off the REGISTRY, not this machine, and that distinction is load-bearing: a
-    coding-only box whose records a Mitos Agent elsewhere harvests still receives them
-    (render._machine_value's `returns_root` fallback exists for exactly that box). A gate
-    on `mitos-agent` being a target HERE would have deleted that configuration.
 
     **A MANUAL target takes no curation** (`is_manual_skill_target`): staging a zip is not
     deploying it, so the pile is a menu and the operator picks from it at upload time. Curating
@@ -777,11 +722,9 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     include = curation.get("include")
     exclude = set(curation.get("exclude") or [])
     stores = set(document_stores((machine or {}).get("document_store")))
-    declared = _declared_deliverables(reg)
     return [s for s in reg.skills.values()
             if tgt in s.targets
             and (s.requires_server is None or s.requires_server in stores)
-            and (s.delivers is None or s.delivers in declared)
             and (include is None or s.name in include)
             and s.name not in exclude]
 
@@ -790,15 +733,9 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     """Loud diagnostics for skills that are compatible with a target (their own
     `targets:` frontmatter says so) but don't end up deployed there for this machine —
     filtered out by this machine's curation, dropped because their `requires_server:`
-    connection isn't wired here, or landing on a scope-ignoring target while marked
-    `scope: project` (its confinement guarantee doesn't hold there). Warn-only: nothing
+    connection isn't wired here, or landing on a target with no project-scoped surface
+    while marked `scope: project`. Warn-only: nothing
     here changes what deploys, it only surfaces filters that were previously silent.
-
-    The `delivers:` gate (_declared_deliverables) is deliberately NOT reported: unlike the
-    three above it is the DEFAULT state — a fresh clone declares no deliverables — so a line
-    here would fire on every deploy of a correct configuration, and the only way to silence
-    it would be to declare work you do not do. The reverse direction stays loud in
-    _undelivered_warnings, where the gap is real.
 
     A MANUAL target (`is_manual_skill_target`) reaches only the `requires_server:` line: it
     takes no curation, and it deploys nothing to leak. Every diagnostic here has to leave the
@@ -807,11 +744,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
     machine = reg.machines.get(machine_name) or {}
     machine_targets = set(machine.get("targets", []))
     stores = set(document_stores(machine.get("document_store")))
-    declared = _declared_deliverables(reg)
     warnings: list[str] = []
-    # Every deliverable term this machine can actually satisfy, accumulated across targets:
-    # a term is covered if ANY target here deploys a skill declaring it.
-    delivered: set[str] = set()
     for tname, tspec in reg.targets.items():
         if tname not in machine_targets:
             continue
@@ -821,7 +754,6 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
         candidates = {s.name for s in reg.skills.values() if tname in s.targets}
         selected = _selected_skills(reg, sk_spec, machine)
         selected_names = {s.name for s in selected}
-        delivered.update(s.delivers for s in selected if s.delivers)
         for name in sorted(candidates - selected_names):
             sk = reg.skills[name]
             req = sk.requires_server
@@ -830,8 +762,6 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                     f"skill '{name}' targets '{tname}' but requires the '{req}' "
                     f"connection, which machines/{machine_name}.yaml does not declare "
                     f"(document_store:) — not deployed")
-            elif sk.delivers and sk.delivers not in declared:
-                continue        # the default state, not a filter — see the docstring
             else:
                 warnings.append(
                     f"skill '{name}' targets '{tname}' but is excluded by this machine's "
@@ -843,32 +773,7 @@ def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
                         f"skill '{skill.name}' is scope: project but targets "
                         f"'{tname}', which ignores scope and deploys it globally "
                         f"(account-wide/machine-wide, not confined to bound projects)")
-    warnings.extend(_undelivered_warnings(reg, machine_name, delivered))
     return warnings
-
-
-def _undelivered_warnings(reg: Registry, machine_name: str,
-                          delivered: set[str]) -> list[str]:
-    """An effort declares a deliverable that nothing on this machine knows how to produce.
-
-    The forward contract only means something if a procedure answers it. Without this, an
-    effort can declare `deploy-book`, every harness can read the compiled line asking for one,
-    and no skill anywhere describes how to write one — a gap discovered months later by the
-    deploy book's absence. Warn-only: an effort may legitimately be ahead of its skills, and a
-    machine that deploys no skills at all (an agents-md-only box) is not misconfigured.
-
-    Reported once per term with the efforts that want it, not once per effort, so adding one
-    missing skill retires exactly one line."""
-    wanted: dict[str, list[str]] = {}
-    for slug, pg in (reg.graphs or {}).items():
-        for e in pg.efforts:
-            for d in e.deliverables:
-                if d not in delivered:
-                    wanted.setdefault(d, []).append(f"{slug}/{e.id}")
-    return [f"deliverable '{term}' is declared by {', '.join(sorted(efforts))} but no skill "
-            f"deployed to {machine_name} declares 'delivers: {term}' — nothing here knows how "
-            f"to produce it"
-            for term, efforts in sorted(wanted.items())]
 
 
 def _skill_resource_outputs(skill, resources: dict, target: str, base_dir: str,
@@ -942,11 +847,11 @@ def _plan_context_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
     project opts into, not a harness a machine opts into, so one project's mount must not
     require a machine-wide target-list edit.
 
-    No-op on an agentic (mitos-agent) machine — it already hosts this tree at its machine
-    root; a project mount there would be a redundant second reconciliation surface over
+    No-op on a machine that already hosts this tree at its machine root;
+    a project mount there would be a redundant second reconciliation surface over
     the exact same content."""
     machine = reg.machines[machine_name]
-    if "mitos-agent" in machine.get("targets", []) or bool((machine.get("paths") or {}).get("context_root")):
+    if bool((machine.get("paths") or {}).get("context_root")) or bool((machine.get("paths") or {}).get("assistant_root")):
         return []
     spec = reg.targets.get("context-tree") or {}
     outputs: list[Output] = []
@@ -977,12 +882,6 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
     machine = reg.machines[machine_name]
     outputs: list[Output] = []
     policy = tree.get("drift_policy", "protect")
-    # This tree renders whenever agents-md is a target (the machine-wide assistant_root
-    # mount) or a project opts into agentic_tree: (workstation mount, independent of
-    # agents-md) — neither requires `mitos-agent`. Org skills deploy only when `mitos-agent`
-    # is literally a target, so both the org-domain table and every per-effort routing line
-    # below must key off that, not off reaching this tree.
-    org_routing = deploys_org_content(machine)
 
     # Dynamic branches (the dynamic-branches design): any partial matching
     # context/<branch>/AGENTS.md marks <branch> as a user-extensible branch — the
@@ -1027,18 +926,10 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
     for rel_file, srcs in tree["files"].items():
         sections = _sections(reg, srcs, "context-tree")
         deploy_path = f"{root.rstrip('/')}/{rel_file}"
-        # For Projects/AGENTS.md, append the org-domain table (the `## Skills` section)
-        # and then the generated Project Roster as ONE <generated> section — in that
-        # order so the file follows the reserved section order (Skills before rosters).
-        # The table replaces the retired static org-roles.md partial; the roster
-        # replaces the hand-written list that used to live in projects-index.md — both
-        # always reflect the active registry.
+        # For Projects/AGENTS.md, append the generated Project Roster as ONE <generated>
+        # section — always reflects the active registry.
         if rel_file == "Projects/AGENTS.md":
             gen_parts = []
-            org_block = (render.org_domain_table(list(reg.skills.values()))
-                        if org_routing else "")
-            if org_block:
-                gen_parts.append(org_block.rstrip("\n"))
             roster_block = render.project_roster_block(roster)
             if roster_block:
                 gen_parts.append(roster_block.rstrip("\n"))
@@ -1133,12 +1024,11 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
     if ctx_key:
         from . import graph as graphmod
         suppressed = _suppressed_examples(reg)
-        # On a mitos-agent operating tree, plan_clones drops each repo checkout beside this
+        # On a context-tree operating tree, plan_clones drops each repo checkout beside this
         # project node (<context_root>/Projects/<name>/<basename>), so the generated
         # `## Navigation` repo roster is real here — the harness resolves a checkout from the
-        # node's own directory. On an context_tree mount (a claude-code workstation, no
-        # mitos-agent target) the checkouts land beside the MOUNT, not inside it, so no roster.
-        clone_siblings = "mitos-agent" in machine.get("targets", [])
+        # node's own directory.
+        clone_siblings = hosts_context_tree(machine)
         for slug, proj in sorted(reg.projects.items()):
             if slug in suppressed:
                 continue
@@ -1158,8 +1048,7 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
             # companion AGENTS_DETAILS.md. Empty when the project has no graph.
             gen_body = _project_doc_block(
                 reg, proj, pg, graphmod.project_index_markdown, level=2,
-                emit_heading=_connection_emit(proj, prose_body),
-                org_routing=org_routing) if pg else ""
+                emit_heading=_connection_emit(proj, prose_body)) if pg else ""
             if clone_siblings and _project_repo_entries(proj):
                 # prose interleaved with the generated nav roster + doc index
                 regions = _project_node_regions(proj, src_rel, prose_body, gen_body)
@@ -1185,8 +1074,7 @@ def _emit_tree(reg, machine_name, tree, root, agent_selected_skills) -> list[Out
                     target="context-tree", kind="text", deploy_path=details_path,
                     dist_rel=f"context-tree/{safe_rel(details_path)}",
                     content=_project_doc_block(
-                        reg, proj, pg, graphmod.project_details_markdown, level=1,
-                        org_routing=org_routing),
+                        reg, proj, pg, graphmod.project_details_markdown, level=1),
                     drift_policy="generated", sources=[],
                 ))
     return outputs
@@ -1231,11 +1119,16 @@ def _other_context_file_in_root(reg: Registry, machine_name: str, slug: str, roo
 def _plan_context_tree(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
     machine = reg.machines[machine_name]
-    agent_sk_spec = (reg.targets.get("mitos-agent") or {}).get("skills") or {}
+    agent_sk_spec = {}
+    for t in machine.get("targets", []):
+        if t != "context-tree":
+            sk = (reg.targets.get(t) or {}).get("skills")
+            if sk:
+                agent_sk_spec = sk
+                break
     agent_selected_skills = (
         _selected_skills(reg, agent_sk_spec, machine)
-        if hosts_context_tree(machine) else [])
-    org_routing = deploys_org_content(machine)
+        if agent_sk_spec and hosts_context_tree(machine) else [])
     for tree_name, tree in (spec.get("trees") or {}).items():
         root_key = tree["root_key"]
         if root_key in paths:
@@ -1269,13 +1162,12 @@ def _plan_context_tree(reg, machine_name, spec, paths) -> list[Output]:
                 prose_body = render.plain_document(sections).rstrip("\n")
                 gen_body = _project_doc_block(
                     reg, proj, pg, graphmod.project_index_markdown, level=2,
-                    emit_heading=_connection_emit(proj, prose_body),
-                    org_routing=org_routing)
+                    emit_heading=_connection_emit(proj, prose_body))
                 if at_subdir:
                     gen_body = gen_body.rstrip("\n") + "\n\n" + render.context_tree_note_block(at_subdir)
                 combined_sections = list(sections) + [
                     (render.GENERATED_SECTION, gen_body.rstrip("\n"))]
-                if ("mitos-agent" in machine.get("targets", []) and _project_repo_entries(proj)
+                if (hosts_assistant_tree(machine) and _project_repo_entries(proj)
                         and sections):
                     b_src, b_body = sections[-1]
                     regions = list(sections[:-1]) + _project_node_regions(
@@ -1294,8 +1186,7 @@ def _plan_context_tree(reg, machine_name, spec, paths) -> list[Output]:
                     target="context-tree", kind="text", deploy_path=details_path,
                     dist_rel=f"context-tree/{safe_rel(details_path)}",
                     content=_project_doc_block(
-                        reg, proj, pg, graphmod.project_details_markdown, level=1,
-                        org_routing=org_routing),
+                        reg, proj, pg, graphmod.project_details_markdown, level=1),
                     drift_policy="generated", sources=[],
                 ))
                 continue
@@ -1424,76 +1315,6 @@ def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> 
     return outputs
 
 
-# ── mitos-agent ──────────────────────────────────────────────────────────────
-def _plan_mitos_agent(reg, machine_name, spec, paths) -> list[Output]:
-    outputs: list[Output] = []
-    home = paths.get("context_root") or paths.get("assistant_root")   # the single install root (SOUL/skills/mcp + the tree)
-    # SOUL.md
-    cf = spec["context_file"]
-    if home:
-        sections = _sections(reg, cf["sources"], "mitos-agent")
-        deploy_path = f"{home.rstrip('/')}/{cf['filename']}"
-        outputs.append(Output(
-            target="mitos-agent", kind="text", deploy_path=deploy_path,
-            dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
-            content=render.plain_document(sections),
-            drift_policy=cf.get("drift_policy", "protect"), sources=cf["sources"],
-            section_bodies=_multi(sections),
-        ))
-    # skills
-    sk = spec["skills"]
-    if home:
-        for skill in _selected_skills(reg, sk, reg.machines[machine_name]):
-            sub = sk["subdir"].format(category=skill.category, name=skill.name)
-            base_dir = f"{home.rstrip('/')}/{sub}"
-            policy = sk.get("drift_policy", "harvest")
-            body = skill.body
-            resources = render.compose_skill_resources(reg, skill)
-            deploy_path = f"{base_dir}/SKILL.md"
-            outputs.append(Output(
-                target="mitos-agent", kind="text", deploy_path=deploy_path,
-                dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
-                content=render.render_skill(skill, "mitos-agent", body=body),
-                drift_policy=policy, sources=[skill.rel],
-            ))
-            outputs += _skill_resource_outputs(skill, resources, "mitos-agent", base_dir, policy)
-    # agents
-    ag = spec.get("agents")
-    if home and ag:
-        agent_dir = f"{home.rstrip('/')}/{ag.get('subdir', 'agents')}"
-        policy = ag.get("drift_policy", "harvest")
-        supports_skills = ag.get("supports_skills", True)
-        for agent_name in selected_agents(reg, reg.machines[machine_name], target="mitos-agent"):
-            agent = reg.agents[agent_name]
-            deploy_path = f"{agent_dir}/{agent.name}.md"
-            try:
-                agent_rel = agent.source.relative_to(reg.root).as_posix()
-            except (ValueError, AttributeError):
-                agent_rel = str(agent.source)
-            outputs.append(Output(
-                target="mitos-agent", kind="text", deploy_path=deploy_path,
-                dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
-                content=render.render_agent(agent, target="mitos-agent",
-                                            supports_skills=supports_skills, has_goal=True),
-                drift_policy=policy, sources=[agent_rel],
-            ))
-    # mcp.json — a WHOLE file Mitos owns (invariant #7 does not apply to this lane), carrying
-    # every wired store keyed by server name so §5.4's resolve(id, store) can pick the right
-    # server for a multi-store project. No surgical merge, no owned_keys.
-    mcp = spec["mcp"]
-    servers = _agent_servers(reg, machine_name)
-    if home and servers:
-        deploy_path = f"{home.rstrip('/')}/{mcp['filename']}"
-        outputs.append(Output(
-            target="mitos-agent", kind="json", deploy_path=deploy_path,
-            dist_rel=f"mitos-agent/{safe_rel(deploy_path)}",
-            content=_json(render.mitos_agent_mcp_config(servers)),
-            drift_policy=mcp.get("drift_policy", "protect"), lane="connections",
-            sources=["connections/servers.yaml"],
-        ))
-    return outputs
-
-
 # ── claude-code ──────────────────────────────────────────────────────────────
 def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
     outputs: list[Output] = []
@@ -1517,18 +1338,14 @@ def _plan_claude_code(reg, machine_name, spec, paths) -> list[Output]:
             # Non-context-tree workstation + project has a knowledge graph: emit a self-contained
             # AGENTS.md (full doc context + prose header) and a stub CLAUDE.md → @AGENTS.md.
             # The prose is resolved under the context-tree audience so that shared context
-            # partials (audience: [mitos-agent, context-tree]) are visible without requiring a
+            # partials (audience: [context-tree]) are visible without requiring a
             # separate claude-code audience declaration on each partial.
             from . import graph as graphmod
             prose_src, prose = _project_prose(reg, proj, "context-tree")
             gen_body = _project_doc_block(
                 reg, proj, pg, graphmod.project_full_markdown,
                 level=2 if prose_src else 1,
-                emit_heading=_connection_emit(proj, prose),
-                # Org skills target mitos-agent only (never claude-code) — a non-mitos-agent
-                # workstation checkout must not tell the agent to load one that was
-                # never deployed here.
-                org_routing=False)
+                emit_heading=_connection_emit(proj, prose))
             # A project may ALSO have a context_tree mount — two AGENTS.md-shaped files
             # then legitimately coexist (this one: the doc/repo index; the mount: a full
             # operating tree). Name the split rather than leave a reader to guess.

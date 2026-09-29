@@ -277,101 +277,152 @@ def test_graph_doc_type_round_trip_and_rendering():
     assert det_line == full_line, "claude-code and mitos-agent doc lines must stay identical"
 
 
-def test_order_deliverables_canonical_order_dedup_and_unknown_last():
+def test_retired_predicates_warn_and_are_not_rendered():
+    """At load, peccia:deliverable, peccia:requirementsCoverage, and peccia:orgDomain
+    are ignored with a warning naming 'mitos graph strip-retired --all', and are never
+    rendered in output markdown."""
     from agentic import graph
-    # vocabulary order regardless of input order, deduplicated
-    assert graph.order_deliverables(["tests", "documentation", "tests"]) == \
-        ("documentation", "tests")
-    # an unknown name sorts last (alphabetically), and ordering never raises
-    assert graph.order_deliverables(["zebra", "tests", "apple"]) == \
-        ("tests", "apple", "zebra")
-    assert graph.order_deliverables([]) == ()
-
-
-def test_new_deliverable_terms_are_appended_never_inserted():
-    """The one way KNOWN_DELIVERABLES can break a repo nobody pointed it at.
-
-    _ordered walks the vocabulary in order and filters, so a term added at the END leaves every
-    existing effort's serialized bytes untouched. Inserting one mid-tuple silently reorders every
-    effort that already declares a later term, producing a graph diff on projects nobody edited.
-    This pins the four terms that shipped first, in their shipped order, at the FRONT."""
-    from agentic import graph
-    assert graph.KNOWN_DELIVERABLES[:4] == ("documentation", "tests", "changelog", "deploy-book")
-    # a term added later orders AFTER the originals, never among them
-    assert graph.order_deliverables(["requirements-receipt", "deploy-book", "tests"]) == \
-        ("tests", "deploy-book", "requirements-receipt")
-
-
-def test_the_three_return_lane_terms_are_known():
-    """runbook / migration-notes / requirements-receipt are real vocabulary, not free text — an
-    effort declaring one must survive validation, and it must order canonically like the rest."""
-    from agentic import graph
-    for term in ("runbook", "migration-notes", "requirements-receipt"):
-        assert term in graph.KNOWN_DELIVERABLES
-    assert graph.order_deliverables(["migration-notes", "runbook"]) == \
-        ("runbook", "migration-notes")
-
-
-def test_graph_deliverables_round_trip_and_ordering():
-    """A repeated peccia:deliverable predicate loads into a canonical-ordered tuple regardless of
-    the JSON array's order on disk, and canonical bytes are deterministic across a reload."""
     import json, tempfile
     from pathlib import Path
-    from agentic import graph
     SC = '{"@vocab":"https://schema.org/"}'
-    # authored with the deliverable array OUT of canonical order — the read path must canonicalize
     raw_in = ('{"@context":%s,"@graph":['
               '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
               '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
               '"name":"Effort One","description":"d",'
               '"isPartOf":{"@id":"http://peccia.net/project/p"},'
-              '"http://peccia.net/deliverable":["tests","documentation"]}]}' % SC)
+              '"http://peccia.net/goal":"test goal",'
+              '"http://peccia.net/deliverable":["tests"],'
+              '"http://peccia.net/requirementsCoverage":["security"],'
+              '"http://peccia.net/orgDomain":"software"}]}' % SC)
     p = Path(tempfile.mktemp(suffix=".jsonld"))
     p.write_text(raw_in, encoding="utf-8")
-    loaded = graph.load_project_graph(p)
-    # loaded back as a canonical-ordered tuple (vocabulary index, not disk order)
-    assert loaded.efforts[0].deliverables == ("documentation", "tests")
+    try:
+        loaded = graph.load_project_graph(p)
+        warnings = loaded.warnings
+        assert len(warnings) == 3
+        assert any("deliverable" in w and "strip-retired --all" in w for w in warnings)
+        assert any("requirementsCoverage" in w and "strip-retired --all" in w for w in warnings)
+        assert any("orgDomain" in w and "strip-retired --all" in w for w in warnings)
 
-    # canonical output is in vocabulary order and stable across a reload
-    canon = graph.canonical_jsonld(loaded)
-    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
-    assert node[graph.DELIVERABLE_PRED] == ["documentation", "tests"]
-    p.write_text(canon, encoding="utf-8")
-    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
-    p.unlink()
-
-
-def test_graph_no_deliverables_emits_no_key():
-    """An untagged effort emits NO deliverable key, so an existing graph round-trips byte-identically."""
-    from agentic import graph
-    proj_iri = graph.PROJECT_NS + "p"
-    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
-    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
-    raw = graph.canonical_jsonld(pg)
-    assert graph.DELIVERABLE_PRED not in raw
-    assert "deliverable" not in raw
+        for render_fn in (graph.project_index_markdown, graph.project_details_markdown, graph.project_full_markdown):
+            out = render_fn(loaded)
+            assert "_Expected deliverables:" not in out
+            assert "_Requirements coverage:" not in out
+            assert "runs under the" not in out
+            assert "org-software" not in out
+        assert "**Goal:** test goal" in graph.project_details_markdown(loaded)
+        assert "**Goal:** test goal" in graph.project_full_markdown(loaded)
+    finally:
+        p.unlink()
 
 
-def test_graph_deliverables_line_renders_in_all_three_views_ungated():
-    """The forward-contract line renders in project_index/details/full — and is NOT suppressed by
-    org_routing=False (unlike the org line), because it names no skill to load."""
-    from agentic import graph
-    proj_iri = graph.PROJECT_NS + "p"
-    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
-                                is_part_of=proj_iri,
-                                deliverables=("documentation", "tests"))
-    pg = graph.ProjectGraph(
-        slug="p", name="P", description="",
-        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
-        efforts=[effort])
-    line = "_Expected deliverables: documentation, tests._"
-    assert line in graph.project_index_markdown(pg)
-    assert line in graph.project_details_markdown(pg)
-    assert line in graph.project_full_markdown(pg)
-    # the claude-code workstation surface suppresses the ORG line but must still show deliverables
-    full_no_org = graph.project_full_markdown(pg, org_routing=False)
-    assert line in full_no_org
-    assert "load the `org-" not in full_no_org      # org line IS suppressed there
+def test_strip_retired_migrates_a_graph():
+    """TEST-01:
+    - plant all three predicates plus goal/keywords/status
+    - load warns
+    - strip-retired runs and files one kind: graph candidate that equals input minus exactly those triples
+    - accept
+    - load is clean
+    - a re-run files nothing
+    - --all covers every graph."""
+    from agentic import graph, commands, review
+    import json
+
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+
+    SC = '{"@vocab":"https://schema.org/"}'
+    raw_in = ('{"@context":%s,"@graph":['
+              '{"@id":"http://peccia.net/project/example-project","@type":"Project","name":"Example Project"},'
+              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+              '"name":"Effort One","description":"d",'
+              '"isPartOf":{"@id":"http://peccia.net/project/example-project"},'
+              '"http://peccia.net/goal":"deliver something",'
+              '"keywords":"key1, key2",'
+              '"creativeWorkStatus":"done",'
+              '"http://peccia.net/deliverable":["tests"],'
+              '"http://peccia.net/requirementsCoverage":["security"],'
+              '"http://peccia.net/orgDomain":"software"}]}' % SC)
+    (gdir / "example-project.jsonld").write_text(raw_in, encoding="utf-8")
+
+    # Load warns
+    loaded = loader.load(tmp)
+    assert any("strip-retired --all" in w for w in loaded.warnings)
+
+    # strip-retired runs and files one candidate
+    rc = commands.cmd_graph(loaded, project="example-project", action="strip-retired")
+    assert rc == 0
+
+    inbox_candidates = list((tmp / "registry" / "local" / "inbox").iterdir())
+    graph_cands = [c for c in inbox_candidates if c.is_dir() and "graph" in c.name]
+    assert len(graph_cands) == 1
+    cand_dir = graph_cands[0]
+    payload_file = next(f for f in cand_dir.iterdir() if f.name.endswith(".jsonld"))
+    payload = json.loads(payload_file.read_text(encoding="utf-8"))
+    cand_nodes = payload.get("@graph", [])
+    cw = next(n for n in cand_nodes if n.get("@type") == "CreativeWork")
+    # Triples removed
+    assert graph.DELIVERABLE_PRED not in cw
+    assert graph.REQ_COVERAGE_PRED not in cw
+    assert graph.ORG_DOMAIN_PRED not in cw
+    # Intact triples
+    assert cw.get(graph.GOAL_PRED) == "deliver something"
+    assert cw.get("keywords") == "key1, key2"
+    assert cw.get("creativeWorkStatus") == "done"
+
+    # Accept the candidate
+    res = review.decide(loaded, cand_dir.name, "accept", "")
+    assert res["ok"], res
+
+    # Load is clean
+    loaded_after = loader.load(tmp)
+    assert not any("strip-retired --all" in w for w in loaded_after.warnings)
+
+    # Re-run files nothing
+    rc2 = commands.cmd_graph(loaded_after, project="example-project", action="strip-retired")
+    assert rc2 == 0
+
+    # --all covers every graph
+    rc_all = commands.cmd_graph(loaded_after, all_graphs=True, action="strip-retired")
+    assert rc_all == 0
+
+
+def test_graph_write_refuses_retired_predicate():
+    """At write, a kind: graph candidate accept and any direct graph write refuses
+    a retired triple with GraphError."""
+    from agentic import graph, review
+    import tempfile
+    from pathlib import Path
+
+    treg, tmp = _temp_registry()
+    gdir = tmp / "registry" / "graph"
+    gdir.mkdir(parents=True, exist_ok=True)
+
+    SC = '{"@vocab":"https://schema.org/"}'
+    bad_payload = ('{"@context":%s,"@graph":['
+                   '{"@id":"http://peccia.net/project/example-project","@type":"Project","name":"Example Project"},'
+                   '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
+                   '"name":"Effort One","description":"d",'
+                   '"isPartOf":{"@id":"http://peccia.net/project/example-project"},'
+                   '"http://peccia.net/deliverable":["tests"]}]}' % SC)
+
+    meta = {
+        "project": "example-project",
+        "registry_path": "graph/example-project.jsonld",
+        "kind": "graph",
+        "source": {"machine": "rig", "tool": "test"},
+        "base_hash": "",
+        "deploy_path": "",
+        "captured_at": "2026-09-28T00:00:00Z",
+        "note": "bad graph candidate",
+    }
+    _plant_candidate(tmp, "bad-graph-cand", meta, "example-project.jsonld", bad_payload)
+
+    loaded = loader.load(tmp)
+    res = review.decide(loaded, "bad-graph-cand", "accept", "")
+    assert not res["ok"]
+    assert "retired" in res["error"].lower() or "deliverable" in res["error"].lower()
 
 
 def test_graph_store_round_trip():
@@ -1003,111 +1054,7 @@ def test_graph_tree_round_trips_and_regenerates_without_capture():
     assert before == after, "a generated file must not capture an inbox candidate"
 
 
-# ── Track B: Organization stubs + Document.publisher ───────────────────────────
-def test_effort_org_domain_round_trips_through_canonical_jsonld(tmp_path=None):
-    """A tagged effort survives serialize → parse; an untagged effort omits the
-    predicate entirely (byte-compat with pre-orgDomain graphs)."""
-    import tempfile
-    from pathlib import Path
-
-    from agentic import graph
-    pg = graph.ProjectGraph(slug="p", name="P", description="")
-    tagged = graph.CreativeWork(id="launch", name="Launch", description="d",
-                                is_part_of=pg.iri, org_domain="marketing")
-    plain = graph.CreativeWork(id="build", name="Build", description="",
-                               is_part_of=pg.iri)
-    pg = graph.upsert_effort(graph.upsert_effort(pg, tagged), plain)
-    text = graph.canonical_jsonld(pg)
-    assert graph.ORG_DOMAIN_PRED in text
-    assert text.count(graph.ORG_DOMAIN_PRED) == 1     # only the tagged effort carries it
-    f = Path(tempfile.mktemp(suffix=".jsonld")); f.write_text(text, encoding="utf-8")
-    pg2 = graph.load_project_graph(f)
-    by_id = {e.id: e for e in pg2.efforts}
-    assert by_id["launch"].org_domain == "marketing"
-    assert by_id["build"].org_domain == ""
-    assert graph.is_canonical(f, pg2)
-    f.unlink()
-
-def test_effort_domain_line_renders_in_all_three_markdown_views():
-    """A tagged effort's heading carries the org routing line in the index, the details
-    file, and the self-contained full block; untagged efforts carry none."""
-    from agentic import graph
-    pg = graph.ProjectGraph(slug="p", name="P", description="")
-    eff = graph.CreativeWork(id="launch", name="Launch", description="",
-                             is_part_of=pg.iri, org_domain="marketing")
-    pg = graph.upsert_effort(pg, eff)
-    d = graph.Document(drive_id="D1", name="Doc One", description="x",
-                       date_modified="2026-01-01", is_part_of=eff.iri)
-    pg = graph.upsert_document(pg, d)
-    for out in (graph.project_index_markdown(pg), graph.project_details_markdown(pg),
-                graph.project_full_markdown(pg)):
-        assert "runs under the `marketing` org" in out
-        assert "`org-marketing`" in out
-
-def test_effort_domain_line_suppressed_when_org_routing_false():
-    """project_full_markdown's org_routing=False (the non-mitos-agent claude-code workstation
-    path, planner._plan_claude_code) omits the org routing line entirely — org skills
-    target mitos-agent only, so a claude-code-only checkout must never be told to load one
-    that was never deployed there. The goal line and everything else still renders."""
-    from agentic import graph
-    pg = graph.ProjectGraph(slug="p", name="P", description="")
-    eff = graph.CreativeWork(id="launch", name="Launch", description="",
-                             is_part_of=pg.iri, org_domain="marketing", goal="Ship it")
-    pg = graph.upsert_effort(pg, eff)
-    d = graph.Document(drive_id="D1", name="Doc One", description="x",
-                       date_modified="2026-01-01", is_part_of=eff.iri)
-    pg = graph.upsert_document(pg, d)
-    out = graph.project_full_markdown(pg, org_routing=False)
-    assert "org-marketing" not in out
-    assert "runs under" not in out
-    assert "**Goal:** Ship it" in out
-
-def test_propose_graph_change_round_trips_effort_org_domain():
-    """An effort's orgDomain survives propose → accept; editing an unrelated effort field
-    without resending orgDomain is the caller's responsibility (the console rounds it
-    trip), and an unknown domain is rejected at propose time — never written to disk
-    where it would break every subsequent loader.load()."""
-    from agentic import graph, review
-    treg, tmp = _temp_registry()
-    gdir = tmp / "registry" / "graph"
-
-    out = review.propose_graph_change(
-        treg, "example-project", [],
-        efforts=[{"id": "steam-launch", "name": "Steam Launch",
-                  "description": "launch push", "orgDomain": "marketing"}])
-    assert out["ok"], out
-    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
-    assert acc["ok"], acc
-    merged = graph.load_project_graph(gdir / "example-project.jsonld")
-    eff = next(e for e in merged.efforts if e.id == "steam-launch")
-    assert eff.org_domain == "marketing"
-
-    # unknown domain → rejected up front with the valid set named
-    treg2 = loader.load(tmp)
-    bad = review.propose_graph_change(
-        treg2, "example-project", [],
-        efforts=[{"id": "x", "name": "X", "orgDomain": "not-a-domain"}])
-    assert not bad["ok"]
-    assert "not-a-domain" in bad["error"]
-
-def test_merged_graph_preserves_org_domain_on_untouched_efforts():
-    """Accepting a candidate that touches only documents must not strip orgDomain from
-    efforts that ride along in the fragment (the round-trip-preservation discipline)."""
-    from agentic import graph, review
-    treg, tmp = _temp_registry()
-    gdir = tmp / "registry" / "graph"
-
-    out = review.propose_graph_change(
-        treg, "example-project",
-        [{"id": "D9", "name": "Rider Doc", "description": "d",
-          "dateModified": "2026-06-01"}])
-    assert out["ok"], out
-    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
-    assert acc["ok"], acc
-    merged = graph.load_project_graph(gdir / "example-project.jsonld")
-    # the core example graph ships launch-prep tagged marketing — it must survive
-    eff = next(e for e in merged.efforts if e.id == "launch-prep")
-    assert eff.org_domain == "marketing"
+# ── Effort goal and keywords ──────────────────────────────────────────────────
 
 def test_effort_goal_round_trips_and_renders():
     """An effort's goal survives serialize → parse (omit-when-absent, byte-compat with
@@ -1185,74 +1132,7 @@ def test_graph_rejects_organization_nodes():
         f.unlink()
 
 
-def test_order_coverage_canonical_order_dedup_and_unknown_last():
-    from agentic import graph
-    # vocabulary order regardless of input order, deduplicated
-    assert graph.order_coverage(["security", "performance", "security"]) == \
-        ("performance", "security")
-    # an unknown name sorts last (alphabetically), and ordering never raises — propose-time and
-    # candidate-parse paths both build a CreativeWork before validation runs
-    assert graph.order_coverage(["zebra", "scale", "apple"]) == ("scale", "apple", "zebra")
-    assert graph.order_coverage([]) == ()
 
-
-def test_graph_coverage_round_trip_and_ordering():
-    """A repeated peccia:requirementsCoverage predicate loads into a canonical-ordered tuple
-    regardless of the JSON array's order on disk, and canonical bytes survive a reload."""
-    import json, tempfile
-    from pathlib import Path
-    from agentic import graph
-    SC = '{"@vocab":"https://schema.org/"}'
-    raw_in = ('{"@context":%s,"@graph":['
-              '{"@id":"http://peccia.net/project/p","@type":"Project","name":"P"},'
-              '{"@id":"http://peccia.net/creativework/e1","@type":"CreativeWork",'
-              '"name":"Effort One","description":"d",'
-              '"isPartOf":{"@id":"http://peccia.net/project/p"},'
-              '"http://peccia.net/requirementsCoverage":["security","performance"]}]}' % SC)
-    p = Path(tempfile.mktemp(suffix=".jsonld"))
-    p.write_text(raw_in, encoding="utf-8")
-    loaded = graph.load_project_graph(p)
-    assert loaded.efforts[0].requirements_coverage == ("performance", "security")
-
-    canon = graph.canonical_jsonld(loaded)
-    node = next(n for n in json.loads(canon)["@graph"] if n.get("@type") == "CreativeWork")
-    assert node[graph.REQ_COVERAGE_PRED] == ["performance", "security"]
-    p.write_text(canon, encoding="utf-8")
-    assert graph.canonical_jsonld(graph.load_project_graph(p)) == canon
-    p.unlink()
-
-
-def test_graph_no_coverage_emits_no_key():
-    """An effort declaring no coverage emits NO key, so an existing graph round-trips
-    byte-identically — the same omit-when-absent contract deliverables/orgDomain hold."""
-    from agentic import graph
-    proj_iri = graph.PROJECT_NS + "p"
-    effort = graph.CreativeWork(id="e1", name="Effort One", description="d", is_part_of=proj_iri)
-    pg = graph.ProjectGraph(slug="p", name="P", description="", efforts=[effort])
-    raw = graph.canonical_jsonld(pg)
-    assert graph.REQ_COVERAGE_PRED not in raw
-    assert "requirementsCoverage" not in raw
-
-
-def test_graph_coverage_line_renders_in_all_three_views_ungated():
-    """The interview-contract line renders in project_index/details/full — and is NOT suppressed
-    by org_routing=False, because (like deliverables) it names no skill to load."""
-    from agentic import graph
-    proj_iri = graph.PROJECT_NS + "p"
-    effort = graph.CreativeWork(id="e1", name="Pipeline Effort", description="d",
-                                is_part_of=proj_iri,
-                                requirements_coverage=("performance", "security"))
-    pg = graph.ProjectGraph(
-        slug="p", name="P", description="",
-        documents=[graph.Document("D1", "Spec", "x", "2026-01-01", is_part_of=effort.iri)],
-        efforts=[effort])
-    line = "_Requirements coverage: performance, security._"
-    assert line in graph.project_index_markdown(pg)
-    assert line in graph.project_details_markdown(pg)
-    assert line in graph.project_full_markdown(pg)
-    full_no_org = graph.project_full_markdown(pg, org_routing=False)
-    assert line in full_no_org
-    assert "load the `org-" not in full_no_org
 
 
 def test_effort_heading_always_carries_its_id():
@@ -1286,36 +1166,7 @@ def test_effort_heading_id_is_the_last_parenthesised_group():
     assert heading[heading.rindex("(") + 1:-1] == "auth-rework"
 
 
-def test_propose_rejects_unknown_coverage_and_round_trips_valid_ones():
-    """Reject-at-propose-time for the interview contract: a clean error in the browser now, with
-    the accept-time loader check as the real gate. A valid set survives propose → accept."""
-    from agentic import graph, review
-    treg, tmp = _temp_registry()
-    gdir = tmp / "registry" / "graph"
-    gdir.mkdir(parents=True, exist_ok=True)
-    seed = graph.ProjectGraph(slug="example-project", name="Example Project", description="d")
-    (gdir / "example-project.jsonld").write_text(graph.canonical_jsonld(seed), encoding="utf-8")
-    treg = loader.load(tmp)
 
-    bad = review.propose_graph_change(
-        treg, "example-project", [],
-        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
-                  "requirementsCoverage": ["security", "not-a-dimension"]}])
-    assert not bad["ok"]
-    assert "not-a-dimension" in bad["error"]
-    assert "performance" in bad["error"]          # the valid set is named
-
-    out = review.propose_graph_change(
-        treg, "example-project", [],
-        efforts=[{"id": "sprint-a", "name": "Sprint A", "description": "",
-                  "requirementsCoverage": ["security", "performance"]}])
-    assert out["ok"]
-    acc = review.decide(loader.load(tmp), out["id"], "accept", "")
-    assert acc["ok"]
-    merged = graph.load_project_graph(gdir / "example-project.jsonld")
-    effort = next(e for e in merged.efforts if e.id == "sprint-a")
-    # canonical order, not the order it was proposed in
-    assert effort.requirements_coverage == ("performance", "security")
 
 
 def test_effort_keywords_roundtrips_and_renders():
@@ -1351,20 +1202,16 @@ def test_effort_keywords_roundtrips_and_renders():
     assert line in graph.project_full_markdown(pg)
 
 
-def test_an_effort_with_no_documents_still_renders_its_contract():
-    """An effort's goal, expected deliverables and requirements coverage are DECLARED in the
-    graph, not derived from its documents — and the deliverables line is documented as ungated,
-    in every generated view. Two guards used to hide them until somebody mapped a file to the
-    effort: `_doc_block` returned early on `not pg.documents`, and `_grouped`'s `has_efforts`
-    asked whether any effort HELD one. A project could therefore declare its whole forward
-    contract and have no harness ever read it."""
+def test_an_effort_with_no_documents_still_renders():
+    """An effort's goal is DECLARED in the graph, not derived from its documents.
+    Two guards used to hide them until somebody mapped a file to the effort:
+    `_doc_block` returned early on `not pg.documents`, and `_grouped`'s `has_efforts`
+    asked whether any effort HELD one."""
     from agentic import graph
     proj_iri = "http://peccia.net/project/p"
     effort = graph.CreativeWork(
         id="fnp", name="Financial Narrative Processing", description="d",
-        is_part_of=proj_iri, goal="ship the pipeline",
-        deliverables=("documentation", "tests"),
-        requirements_coverage=("security",), keywords="apdicts")
+        is_part_of=proj_iri, goal="ship the pipeline", keywords="apdicts")
     pg = graph.ProjectGraph(slug="p", name="P", description="",
                             documents=[], efforts=[effort])
     for render in (graph.project_index_markdown, graph.project_details_markdown,
@@ -1372,8 +1219,6 @@ def test_an_effort_with_no_documents_still_renders_its_contract():
         out = render(pg)
         assert "Financial Narrative Processing (fnp)" in out, render.__name__
         assert "ship the pipeline" in out, render.__name__
-        assert "documentation" in out and "tests" in out, render.__name__
-        assert "security" in out, render.__name__
         assert "_Also known as: apdicts._" in out, render.__name__
         assert "_No documents in this effort._" in out, render.__name__
 
@@ -1465,7 +1310,7 @@ def _done_graph(status="done", evaluation="EXAMPLEDOCID"):
     proj_iri = "http://peccia.net/project/p"
     done = graph.CreativeWork(id="shipped", name="Shipped Work", description="d",
                               is_part_of=proj_iri, goal="ship it",
-                              deliverables=("tests",), status=status, evaluation=evaluation)
+                              status=status, evaluation=evaluation)
     active = graph.CreativeWork(id="active", name="Active Work", description="a",
                                 is_part_of=proj_iri)
     doc = graph.Document(drive_id="EXAMPLEDOCID", name="Implemented", description="",
@@ -1515,10 +1360,8 @@ def test_effort_status_line_is_the_contract_grammar():
     for render in (graph.project_index_markdown, graph.project_details_markdown,
                    graph.project_full_markdown):
         out = render(_done_graph())
-        assert golden + "\n" in out
-        # placed after the goal, before deliverables; the active effort carries no line
-        assert out.index("**Goal:** ship it") < out.index(golden) < out.index(
-            "_Expected deliverables: tests._")
+        # placed after the goal; the active effort carries no line
+        assert out.index("**Goal:** ship it") < out.index(golden)
         assert out.count("_Status:") == 1
         assert "_Status: Done._\n" in render(_done_graph(evaluation=""))
 

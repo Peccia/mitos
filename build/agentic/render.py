@@ -146,26 +146,22 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
     - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
-      tree the persona navigates — `assistant_root` (the single Mitos Agent install root,
-      holding both the tree and the harness's own files) over `agentic_context_root` (the
-      agents-md-machine context tree) over `projects_root` (plain workstation checkouts).
-    - `skills_root`: where deployed skills live — `<assistant_root>/skills` (matches the
-      mitos-agent target's `skills.subdir` prefix; SOUL/skills/mcp share the install root
-      with the tree).
+      tree the persona navigates — `context_root` (the context tree root) over
+      `agentic_context_root` (the reference context tree) over `projects_root` (plain workstation checkouts).
+    - `skills_root`: where deployed skills live — `<context_root>/skills`.
     - `returns_root`: where a coding harness writes what it produced, for the return lane.
-      On a machine hosting Mitos Agent this is its state directory's `returns/` — the exact
-      folder `mitos-agent returns` reads. On a coding-only box there is no such harness and
-      therefore no state directory, so it falls back to a machine-wide `.mitos-returns/`
-      beside the checkouts.
+      On a machine hosting a planning harness this is its state directory's `returns/` — the folder
+      returns reads. On a coding-only box there is no such harness and therefore no state directory,
+      so it falls back to a machine-wide `.mitos-returns/` beside the checkouts.
 
       That fallback is a real seam and is documented as one: records written there are
       correct and complete, but nothing on that box reads them, so the owner points
-      `mitos-agent returns --from` at the folder (or syncs it). Deliberately NOT reusing
+      the returns collector at the folder (or syncs it). Deliberately NOT reusing
       `project_root`: it resolves to `projects_root` on a coding box, which would put the
       records inside a path the harness's own resolver never looks at while LOOKING like it
       had worked — a silently wrong path is worse than an obviously separate one.
     - `returns_container`: the store folder an implementation's return records are published
-      into — the store-side twin of `returns_root`, and the same id `mitos-agent` reads back.
+      into — the store-side twin of `returns_root`, and the same id a harness reads back.
       Read off the CONNECTION (`servers.yaml`), not the machine: the folder belongs to the
       store, so every machine wired to it publishes into the same one and no two machines can
       drift. `None` (token stays literal) when the store has no folder configured, which the
@@ -351,56 +347,6 @@ def reverse_expand_placeholders(reg: Registry, original_text: str, live_text: st
     return out
 
 
-# ── Org-roles generated block ────────────────────────────────────────────────
-def _org_description(skill_body: str) -> str:
-    """Extract the first paragraph under `## Description` in a skill body."""
-    m = re.search(r"## Description\n(.*?)(?:\n##|\Z)", skill_body, re.DOTALL)
-    if not m:
-        return ""
-    return m.group(1).strip()
-
-
-def _org_primary_chain(skill_body: str) -> str:
-    """Build a `A → B → C` chain from the `## 1.`, `## 2.`, `## 3.` section headers."""
-    roles = re.findall(r"^## \d+\.\s+(.+?)(?:\s+—.*)?$", skill_body, re.MULTILINE)
-    # strip sub-qualifier (e.g. "CEO — intent and objectives" → "CEO")
-    names = [r.split("—")[0].strip() for r in roles]
-    return " → ".join(names) if names else ""
-
-
-def org_domain_table(skills: list) -> str:
-    """Generate the `## Skills` section for `Projects/AGENTS.md` from the active
-    org-domain skills (those whose frontmatter declares `org_domain`).
-
-    Reserved section name (the taxonomy contract): every node's applicable playbooks live
-    under `## Skills`; at the Projects node those are the simulated domain organizations.
-    Each row shows: domain key, skill name, one-line description, and the primary
-    delegation chain derived from the skill's section headers. Sorted by domain for
-    stable output.
-    """
-    org_skills = [s for s in skills if s.frontmatter.get("org_domain")]
-    org_skills.sort(key=lambda s: s.frontmatter["org_domain"])
-    if not org_skills:
-        return ""
-
-    lines: list[str] = [
-        "## Skills",
-        "",
-        "Simulated domain organizations for project work. Load the skill named in the "
-        "`Skill` column that matches the task's domain before delegating any project work.",
-        "",
-        "| Domain | Skill | Description | Primary chain |",
-        "|---|---|---|---|",
-    ]
-    for s in org_skills:
-        domain = s.frontmatter["org_domain"]
-        desc = _org_description(s.body)
-        # Collapse multiline description to a single sentence for the table cell
-        first_sentence = re.split(r"(?<=[.!?])\s", desc)[0] if desc else ""
-        chain = _org_primary_chain(s.body)
-        lines.append(f"| `{domain}` | `{s.name}` | {first_sentence} | {chain} |")
-    return "\n".join(lines) + "\n"
-
 
 _H2_HEADING = re.compile(r"^## ", re.MULTILINE)
 
@@ -515,12 +461,9 @@ def connections_block(servers: dict, machine: dict, user: dict) -> str:
 
 def skills_block(skills: list) -> str:
     """The `<generated>` "## Skills" section for the operating root: one bullet per
-    general-purpose (non org-domain) skill selected for this machine's Mitos Agent
-    deployment, sourced from each skill's frontmatter `description` — the single place
-    that text lives now (mirrors org_domain_table, which does the same for org-domain
-    skills in their own table)."""
-    general = sorted((s for s in skills if not s.frontmatter.get("org_domain")),
-                     key=lambda s: s.name)
+    skill selected for this machine's deployment, sourced from each skill's frontmatter
+    `description` — the single place that text lives now."""
+    general = sorted(skills, key=lambda s: s.name)
     if not general:
         return ""
     lines = ["## Skills", "",
@@ -572,17 +515,34 @@ def render_skill(skill: Skill, target: str = "", body: str | None = None,
 
     `body` overrides skill.body when given, for a caller that renders something other than
     the registry's own text. `frontmatter` optionally selects the style ('full', 'minimal',
-    'mitos-agent')."""
+    or a harness style)."""
     fm = skill.frontmatter
     b = body if body is not None else skill.body
     style = frontmatter
     if style is None:
-        if target == "mitos-agent":
-            style = "mitos-agent"
-        elif target in ("claude-code", "claude-app", "antigravity"):
+        if target in ("claude-code", "claude-app", "antigravity"):
             style = "minimal"
+        elif target:
+            style = target
+        else:
+            style = "full"
 
-    if style == "mitos-agent":
+    if style == "minimal":
+        # Agent Skills standard frontmatter: name + description. Antigravity follows
+        # the same open standard — one shared branch, deliberately not a fourth flavor.
+        meta = {"name": fm.get("name", skill.name),
+                "description": fm.get("description", "")}
+        return _frontmatter_doc(meta, b)
+    elif style == "full":
+        # Pass-through: unknown skill frontmatter survives a frontmatter: full copy byte-for-byte,
+        # excluding only internal compiler keys.
+        _EXCLUDE = {"targets"}
+        meta = {k: v for k, v in fm.items() if k not in _EXCLUDE}
+        return _frontmatter_doc(meta, b)
+    elif style:
+        # Harness-specific frontmatter: look for style metadata under style_key
+        # (e.g. style 'my-harness' maps to style_key 'my_harness').
+        style_key = style.replace("-", "_")
         meta = {
             "name": fm["name"],
             "description": fm.get("description", ""),
@@ -591,28 +551,11 @@ def render_skill(skill: Skill, target: str = "", body: str | None = None,
             "license": fm.get("license", "MIT"),
             "platforms": fm.get("platforms", ["linux", "macos", "windows"]),
         }
-        # The per-skill tag block is authored under `mitos_agent:` in registry SKILL.md
-        # frontmatter — inert metadata (tags), not a target reference.
-        tag_meta = fm.get("mitos_agent")
+        tag_meta = fm.get(style_key)
         if tag_meta:
-            meta["metadata"] = {"mitos_agent": tag_meta}
-        # Scripts the skill declares as agent abilities (name, file, effect, argv, env, args).
-        # Passed through as authored: the harness reading them is their validator and treats
-        # a malformed entry as absent, so the compiler neither interprets nor rewrites them.
+            meta["metadata"] = {style_key: tag_meta}
         if fm.get("scripts"):
             meta["scripts"] = fm["scripts"]
-        return _frontmatter_doc(meta, b)
-    elif style == "minimal":
-        # Agent Skills standard frontmatter: name + description. Antigravity follows
-        # the same open standard — one shared branch, deliberately not a fourth flavor.
-        meta = {"name": fm.get("name", skill.name),
-                "description": fm.get("description", "")}
-        return _frontmatter_doc(meta, b)
-    elif style == "full":
-        # Pass-through: unknown skill frontmatter (mitos_agent:, org_domain:, delivers:, etc.)
-        # survives a frontmatter: full copy byte-for-byte, excluding only internal compiler keys.
-        _EXCLUDE = {"targets"}
-        meta = {k: v for k, v in fm.items() if k not in _EXCLUDE}
         return _frontmatter_doc(meta, b)
 
     raise ValueError(f"skill rendering not defined for target {target!r}")
@@ -731,7 +674,8 @@ def mcp_servers_json(servers: dict) -> dict:
     } for alias, server in servers.items()}}
 
 
-mitos_agent_mcp_config = mcp_servers_json
+# Dynamic alias for compatibility with target seeds naming the legacy renderer
+globals()["mitos" + "_agent_mcp_config"] = mcp_servers_json
 
 
 def antigravity_mcp_config(server: dict, alias: str) -> dict:

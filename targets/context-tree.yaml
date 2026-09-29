@@ -44,7 +44,6 @@ project_agents:
   drift_policy: protect
   # filename at the project's local_path root:
   filename: AGENTS.md
-  # On machines that also deploy mitos-agent, the identity/* sources are dropped at plan
-  # time (planner._plan_agents_md): SOUL.md already carries the persona on every
-  # request, so repeating it here would only tax context.
+  # When another target writes a context_file into the same root, the identity/* sources
+  # are dropped at plan time: the other file already carries the persona.
   sources: [identity/who-i-am.md, identity/security.md, identity/comms-style.md, identity/operating-rules.md, "{project.context.builder}"]

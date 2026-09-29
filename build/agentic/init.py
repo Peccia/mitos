@@ -15,26 +15,15 @@ import yaml
 
 from .loader import LOCAL_OVERLAY
 
-ORG_TEMPLATES_DIR = "registry/templates/org"
 OVERLAY_SUBDIRS = ("identity", "context", "projects", "graph", "skills")
 
 # The named machine shapes (see machines/example-*.yaml for the shipped templates these
 # mirror) — each maps directly to a `targets:` list. These are PRESETS, not the full set
 # of legal profiles: `scaffold_machine` also takes an arbitrary `targets=` list, which is
-# how `mitos init` offers the coding harnesses as an independent multi-select (there is
-# nothing special about the claude-code-only shape — it was simply the only single-harness
-# preset anyone had written down). `mitos-agent` in a machine's targets excludes the
-# coding-harness targets on that same machine (loader._validate's machine-role exclusivity
-# check), so "coding harnesses" and "full agentic assistant" are mutually exclusive by
-# construction, not just by this wizard's framing. Org skills
-# (`org-software`/`org-design`/`org-marketing`) declare `targets: [mitos-agent]` only, and the
-# org-domain routing table/lines render solely on the agents-md/mitos-agent tree
-# (render.org_domain_table, graph._effort_domain_line) — so only a mitos-agent machine ever
-# deploys orgs; a coding-harness machine never does.
+# how `mitos init` offers the coding harnesses as an independent multi-select.
 MACHINE_USE_CASES: dict[str, list[str]] = {
     "workstation": ["claude-code"],
     "coding": ["antigravity", "claude-app", "claude-code"],
-    "mitos-agent": ["mitos-agent", "context-tree"],
 }
 
 # The coding harnesses a user picks from independently, with the label the wizard shows.
@@ -46,14 +35,12 @@ CODING_TARGETS: dict[str, str] = {
 
 # Which `paths:` keys each target actually needs, and the starter value to write for each.
 # A profile's paths block is the UNION over its targets (deduped, in _PATH_ORDER) — that
-# is what makes an arbitrary target subset scaffoldable instead of only the three presets.
+# is what makes an arbitrary target subset scaffoldable instead of only the presets.
 # Key order doubles as the emit order of `targets:`, matching machines/example-*.yaml.
 _TARGET_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "antigravity": ("projects_root", "antigravity_config", "antigravity_skills"),
     "claude-app": ("claude_skills_staging",),
     "claude-code": ("projects_root", "claude_code_skills", "claude_code_agents"),
-    # ONE install root — SOUL/skills/mcp.json AND the context tree share `context_root`.
-    "mitos-agent": ("context_root",),
     "context-tree": ("context_root",),
 }
 
@@ -91,42 +78,24 @@ def known_servers(root: Path) -> list[str]:
 
 
 def org_templates(root: Path) -> list[str]:
-    """The available org seeds (folder names under registry/templates/org/)."""
-    base = root / ORG_TEMPLATES_DIR
-    if not base.is_dir():
-        return []
-    return sorted(p.name for p in base.iterdir()
-                  if p.is_dir() and (p / "session-protocol.md").is_file())
+    return []
 
 
 def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
                      address: str = "", email: str = "", location: str = "",
-                     org_template: str | None = None,
-                     backend: str = "gws", mitos_agent: bool = False,
+                     backend: str = "gws",
                      overwrite: bool = False) -> list[str]:
-    """Create registry/local/ and seed it: the optional org template seed, a starter identity
+    """Create registry/local/ and seed it: a starter identity
     partial from the user's answers, and the empty trees the user fills in. **Non-destructive by
     default** — a seed file is skipped when the user already has one (so this can finish an
     install around existing custom data); pass overwrite=True to force a clean re-scaffold.
     Returns the list of registry-relative paths it *created* (files it kept are omitted). Pure
-    (no prompts), so it is testable. Raises ValueError on an unknown org template.
-
-    `org_template` is optional — pass None (the default) to skip seeding `session-protocol.md`
-    and use the core session protocol as-is. Domain org skills (`org-software`, `org-design`,
-    `org-marketing`) always ship in core; only the routing preference file is seeded here.
+    (no prompts), so it is testable.
 
     `address` is how the assistant should refer to the user (a given name like "Sam", a
     family form like "Dr. Lee", or any preferred handle); it defaults to the given name. It
     lands in the overlay identity so every tool addresses the user the same way — skills stay
-    neutral ("the owner") and read the name from this always-on identity partial.
-
-    `mitos_agent` records that the user chose the planning harness, so the console shows its
-    affordances. It is written ONLY when true: the core registry/user.yaml already ships
-    `mitos_agent: false`, and an overlay that restates a default is noise in a file the user
-    reads to see what is theirs."""
-    templates = org_templates(root)
-    if org_template is not None and org_template not in templates:
-        raise ValueError(f"unknown org template {org_template!r}; available: {templates}")
+    neutral ("the owner") and read the name from this always-on identity partial."""
     overlay = root / "registry" / LOCAL_OVERLAY
     written: list[str] = []
 
@@ -147,30 +116,23 @@ def scaffold_overlay(root: Path, *, given_name: str, family_name: str = "",
             dest.write_text(text or "", encoding="utf-8")
         written.append(f"{LOCAL_OVERLAY}/{relpath}")
 
-    # 1. Org template → overlay (optional). When provided, registry/local/identity/session-protocol.md
-    #    overrides the core session-protocol.md by key and flows into Mitos Agent's SOUL.md. When None,
-    #    the core session protocol is used as-is — domain skills ship in core regardless.
-    if org_template is not None:
-        tdir = root / ORG_TEMPLATES_DIR / org_template
-        _seed("identity/session-protocol.md", copy_from=tdir / "session-protocol.md")
-
-    # 2. Starter identity partial: style/address only. Facts (name, email, location) live
+    # 1. Starter identity partial: style/address only. Facts (name, email, location) live
     #    in user.yaml below — the single source of truth the core partials' placeholders
     #    ({{user_given_name}}, {{user_email}}, {{user_location}}, ...) expand from, so
     #    they're captured once, not duplicated into prose that can drift out of sync.
     _seed("identity/who-i-am.md", text=_who_md(given_name, family_name, address))
 
-    # 2b. user.yaml — the personalization config every tool's deployed context expands
+    # 1b. user.yaml — the personalization config every tool's deployed context expands
     #     placeholders from (render.expand_placeholders). Skipped (no file written) when
     #     the caller supplied no answers at all, exactly like the other conditional seeds.
-    user_yaml = _user_yaml(given_name, family_name, email, location, mitos_agent)
+    user_yaml = _user_yaml(given_name, family_name, email, location)
     if user_yaml:
         _seed("user.yaml", text=user_yaml)
 
-    # 3. A README marking the overlay private + recording the chosen backend. It lives at the
+    # 2. A README marking the overlay private + recording the chosen backend. It lives at the
     #    overlay root (not under identity/context/skills) so the loader never treats it as
     #    content.
-    _seed("README.md", text=_overlay_readme(backend, mitos_agent))
+    _seed("README.md", text=_overlay_readme(backend))
     return written
 
 
@@ -182,15 +144,14 @@ def _who_md(given_name: str, family_name: str, address: str) -> str:
     full = " ".join(p for p in (given_name.strip(), family_name.strip()) if p)
     addr = address.strip() or given_name.strip() or full
     who = full or addr or "the owner"
-    # Match the core who-i-am.md audience so the name/address reach every tool, not just
-    # Mitos Agent — this overlay partial replaces the neutral core one by last-layer-wins.
-    return (f"---\naudience: [mitos-agent, claude-code, antigravity, context-tree]\n---\n## About Me\n\n"
+    # Match the core who-i-am.md audience so the name/address reach every tool —
+    # this overlay partial replaces the neutral core one by last-layer-wins.
+    return (f"---\naudience: [claude-code, antigravity, context-tree]\n---\n## About Me\n\n"
             f"You are {who}'s personal assistant, focused on truth, clarity, and usefulness "
             f"over politeness. Address me as \"{addr}\".\n")
 
 
-def _user_yaml(given_name: str, family_name: str, email: str, location: str,
-               mitos_agent: bool = False) -> str:
+def _user_yaml(given_name: str, family_name: str, email: str, location: str) -> str:
     """The personalization config (registry/local/user.yaml) — every deployed context
     file's {{user_*}} placeholders expand from this. Only fields the user actually
     supplied are written; unset ones fall back to the core registry/user.yaml defaults."""
@@ -204,16 +165,12 @@ def _user_yaml(given_name: str, family_name: str, email: str, location: str,
         data["email"] = email.strip()
     if location.strip():
         data["location"] = location.strip()
-    # Omitted when false — the core file already says so, and an overlay key that only
-    # restates a default reads as a setting someone chose.
-    if mitos_agent:
-        data["mitos_agent"] = True
     if not data:
         return ""
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
-def _overlay_readme(backend: str, mitos_agent: bool = False) -> str:
+def _overlay_readme(backend: str) -> str:
     """`backend` is the document store chosen at init, or "none" — it is a NOTE here, not
     the wiring. The live setting is the machine profile's `document_store:`, which is what
     gates every connection-bound output; this file only records the answer for a reader."""
@@ -224,15 +181,6 @@ def _overlay_readme(backend: str, mitos_agent: bool = False) -> str:
         if backend in ("", "none") else
         f"Workspace connection: `{backend}` — see the connector docs to connect it, then "
         f"`python build/mitos.py connect --project <slug>`.\n")
-    # The flag is a file edit, deliberately — it is set once, if ever, and a settings dialog
-    # for one boolean is machinery the answer does not need.
-    agent_note = (
-        "Mitos Agent: on (`mitos_agent: true` in `user.yaml` here). The console shows the "
-        "planning harness — org skills, the `mitos-agent` target, an effort's Org domain.\n\n"
-        if mitos_agent else
-        "Mitos Agent: off. The planning harness is an incubating work in progress and its "
-        "console affordances are hidden. To see them, add `mitos_agent: true` to `user.yaml` "
-        "here and reload the console.\n\n")
     return ("# Personal overlay (private)\n\n"
             "This tree is your Mitos personalization. It is **gitignored** — never committed "
             "to the public repo. It overrides the core registry by last-layer-wins: a file "
@@ -240,15 +188,14 @@ def _overlay_readme(backend: str, mitos_agent: bool = False) -> str:
             "added; core-only files remain.\n\n"
             "Your own skills live in `skills/<name>/SKILL.md` here — author them by hand or "
             "from the console's Skills tab (`python build/compile.py review`).\n\n"
-            + agent_note + store_note)
+            + store_note)
 
 
 def resolve_targets(*, use_case: str | None = None,
                     targets: list[str] | None = None) -> list[str]:
     """The `targets:` list for a machine, from either a named preset or an explicit set.
     Exactly one of the two must be given. An explicit set is normalized (deduped, emitted
-    in `_TARGET_PATH_KEYS` order) and `mitos-agent` pulls in `context-tree`, since the operating
-    tree is the whole point of that target. Raises ValueError on an unknown name or an empty set."""
+    in `_TARGET_PATH_KEYS` order). Raises ValueError on an unknown name or an empty set."""
     if (use_case is None) == (targets is None):
         raise ValueError("pass exactly one of use_case= or targets=")
     if use_case is not None:
@@ -264,8 +211,6 @@ def resolve_targets(*, use_case: str | None = None,
     if unknown:
         raise ValueError(f"unknown target(s) {unknown}; available: "
                          f"{sorted(_TARGET_PATH_KEYS)}")
-    if "mitos-agent" in chosen:
-        chosen.add("context-tree")
     return [t for t in _TARGET_PATH_KEYS if t in chosen]
 
 

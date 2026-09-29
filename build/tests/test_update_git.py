@@ -40,6 +40,9 @@ def _rig(tmp_path):
     _run_git(root, "add", "-A")
     _run_git(root, "commit", "-m", "core")
     overlay = root / "registry" / "local"
+    if overlay.exists():
+        import shutil
+        shutil.rmtree(overlay)
     _run_git(tmp_path, "clone", str(hub), str(overlay))
     _run_git(overlay, "config", "user.email", "rig@example.com")
     _run_git(overlay, "config", "user.name", "rig")

@@ -21,48 +21,11 @@ class _FakeReg:
 
 # ── user.yaml: load, merge, validation ───────────────────────────────────────
 def test_user_defaults_when_no_user_yaml_overlay():
-    """user.yaml holds two groups now — IDENTITY (the placeholders render expands) and
-    DEFAULTS (what a project or effort inherits when it names none). Asserted separately, so
-    a change to one group cannot be waved through as a change to the other."""
+    """user.yaml holds neutral identity defaults (the placeholders render expands)."""
     treg, tmp = _temp_registry()
-    non_identity = {"default_deliverables", "mitos_agent"}
-    identity = {k: v for k, v in treg.user.items() if k not in non_identity}
-    assert identity == {"given_name": "User", "full_name": "Mitos User",
-                        "email": "user@example.com", "location": "Your City, State"}
-    # documentation + tests: the two every kind of work owes regardless of shape
-    assert treg.user["default_deliverables"] == ["documentation", "tests"]
-    # FEATURES: the planning harness is off until an overlay turns it on
-    assert treg.user["mitos_agent"] is False
+    assert treg.user == {"given_name": "User", "full_name": "Mitos User",
+                         "email": "user@example.com", "location": "Your City, State"}
 
-
-def test_user_yaml_mitos_agent_overlay_wins():
-    """The flag follows the same last-layer-wins merge as identity — the public core
-    ships it off, a maintainer's untracked overlay turns it on."""
-    _treg, tmp = _temp_registry()
-    local = tmp / "registry" / "local"
-    local.mkdir(parents=True, exist_ok=True)
-    (local / "user.yaml").write_text("mitos_agent: true\n", encoding="utf-8")
-    assert loader.load(tmp).user["mitos_agent"] is True
-
-
-def test_user_yaml_rejects_non_bool_mitos_agent():
-    """A typo must fail at load, not read as truthy and silently reveal the harness."""
-    _treg, tmp = _temp_registry()
-    for bad in ("'true'", "1", "0", "null", "[true]"):
-        (tmp / "registry" / "user.yaml").write_text(
-            f"mitos_agent: {bad}\n", encoding="utf-8")
-        try:
-            loader.load(tmp)
-            raise AssertionError(f"expected RegistryError for mitos_agent: {bad}")
-        except loader.RegistryError as e:
-            assert "mitos_agent" in str(e)
-
-
-def test_mitos_agent_is_not_a_placeholder_token():
-    """FEATURES keys never reach render's token map — {{user_mitos_agent}} must not be
-    a thing."""
-    toks = render.user_token_map(_FakeReg({"given_name": "X", "mitos_agent": True}))
-    assert not any("mitos_agent" in t for t in toks)
 
 def test_user_yaml_overlay_merges_field_level():
     treg, tmp = _temp_registry()
@@ -271,22 +234,6 @@ def test_connection_survives_a_registry_stand_in_with_no_servers():
     assert out == "Paul {{connection}}"
 
 
-def test_every_delivers_skill_names_the_store_through_the_token():
-    """A1's point: the seven return-lane skills must not depend on a connection section that
-    only renders into `agents-md` tree roots — that is precisely why a coding-only box
-    published nothing. Each must carry the token exactly once (a second occurrence would be
-    expanded too, turning the 'no store wired' branch into nonsense on a wired machine)."""
-    import pathlib
-    skills = pathlib.Path(__file__).resolve().parents[2] / "registry" / "skills"
-    delivers = [p for p in sorted(skills.glob("*/SKILL.md"))
-                if "\ndelivers:" in p.read_text(encoding="utf-8")]
-    assert len(delivers) >= 7, "expected the return-lane skills to be found"
-    for p in delivers:
-        body = p.read_text(encoding="utf-8")
-        assert body.count("{{connection}}") == 1, f"{p.parent.name}: token count"
-        assert "always-on context for a connection section" not in body, \
-            f"{p.parent.name}: still depends on a tree-root-only heading"
-
 
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
@@ -486,19 +433,18 @@ def test_root_agents_md_gets_one_combined_generated_section():
     gen = [s for s, _ in root.section_bodies if render.is_generated_source(s)]
     assert len(gen) == 1, "connections + skills + branches must merge into ONE <generated> section"
 
-def test_projects_agents_md_gets_generated_roster_and_org_table():
-    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster and the
-    # org-domain table merged into ONE <generated> section; the roster line comes from
-    # the manifest's name/slug/description, not hand-written prose.
+def test_projects_agents_md_gets_generated_roster():
+    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster in ONE
+    # <generated> section; the roster line comes from the manifest's name/slug/description,
+    # not hand-written prose.
     treg, tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
     pa = next(o for o in outs if o.deploy_path.endswith("Projects/AGENTS.md"))
     assert "## Project Roster" in pa.content
     assert "- `Projects/Example Project/` (example-project) — one-line summary" \
         in pa.content
-    assert "## Skills" in pa.content   # the org-domain table is the Projects node's Skills
     gen = [s for s, _ in pa.section_bodies if render.is_generated_source(s)]
-    assert len(gen) == 1, "roster + org table must merge into ONE <generated> section"
+    assert len(gen) == 1, "roster must be in ONE <generated> section"
 
 def test_root_agents_md_omits_connections_without_document_store():
     treg, tmp = _temp_registry()   # rig has no document_store set
@@ -585,35 +531,6 @@ def test_scaffold_overlay_skips_user_yaml_with_no_answers():
     assert "local/user.yaml" not in written
     assert not (tmp / "registry/local/user.yaml").exists()
 
-def test_scaffold_overlay_writes_mitos_agent_only_when_chosen():
-    """The flag is written ONLY for the user who picked the planning harness. An overlay
-    that restated the core default would read as a setting someone chose, in the one file
-    a user opens to see what is theirs."""
-    from agentic import init as initmod
-
-    _treg, tmp = _temp_registry()
-    initmod.scaffold_overlay(tmp, given_name="Sam", backend="mock", mitos_agent=True)
-    data = yaml.safe_load((tmp / "registry/local/user.yaml").read_text(encoding="utf-8"))
-    assert data["mitos_agent"] is True
-    assert loader.load(tmp).user["mitos_agent"] is True
-
-    _treg2, tmp2 = _temp_registry()
-    initmod.scaffold_overlay(tmp2, given_name="Sam", backend="mock")
-    data2 = yaml.safe_load((tmp2 / "registry/local/user.yaml").read_text(encoding="utf-8"))
-    assert "mitos_agent" not in data2
-    # …and the default still lands, from core
-    assert loader.load(tmp2).user["mitos_agent"] is False
-
-
-def test_overlay_readme_tells_the_owner_how_to_reveal_the_harness():
-    """The flag has no settings dialog on purpose — so the one file that explains the
-    overlay has to say where it lives and what turning it on does."""
-    from agentic import init as initmod
-
-    off = initmod._overlay_readme("none", False)
-    assert "mitos_agent: true" in off and "user.yaml" in off
-    on = initmod._overlay_readme("none", True)
-    assert "Mitos Agent: on" in on
 
 
 # ── {{returns_container}} (the store folder those records are published INTO) ─
@@ -687,14 +604,3 @@ def test_reverse_expand_round_trips_a_generic_path_token():
     expanded = "Data at /srv/store."
     assert render.reverse_expand_placeholders(r, original, expanded) == original
 
-
-def test_full_windows_rig_tests_skill_guards_mitos_returns_fallback():
-    from dataclasses import replace as _replace
-    from conftest import _full_windows_rig
-    from agentic import planner
-    rig = _full_windows_rig()
-    pg = rig.graphs["example-project"]
-    pg.efforts = [_replace(pg.efforts[0], deliverables=("tests",))] + list(pg.efforts[1:])
-    planned = planner.plan_machine(rig, "example-windows")
-    tests_skill = next(p for p in planned if p.deploy_path.replace("\\", "/").endswith("tests/SKILL.md"))
-    assert "C:/Projects/.mitos-returns" in tests_skill.content

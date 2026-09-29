@@ -1,15 +1,16 @@
 ---
 name: gws
-description: Standardized workflows, ID-resolution patterns, and guardrails for operating
-  your Google Workspace (Calendar, Drive, Docs, Sheets, Gmail, Tasks, Contacts, Forms,
-  Slides) through the `gws` MCP server.
+description: Standardized workflows, ID-resolution patterns, and guardrails for operating your Google Workspace (Calendar, Drive, Docs, Sheets, Gmail, Tasks, Contacts, Forms, Slides) through the `gws` MCP server.
 version: 2.2.0
 author: Paul Peccia
 license: MIT
-platforms:
-- linux
-- macos
-- windows
+platforms: [linux, macos, windows]
+targets: [mitos-agent, claude-code, claude-app, antigravity]
+requires_server: gws       # nothing but instructions for this server's tools — not
+                           # deployed to a machine whose document_store: omits it
+category: productivity
+mitos_agent:
+  tags: [gws, google-workspace, mcp, drive, docs, sheets, gmail, calendar, tasks, contacts]
 ---
 
 # GWS Operations (gws-ops)

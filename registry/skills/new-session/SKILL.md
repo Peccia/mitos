@@ -5,10 +5,8 @@ version: 3.0.1
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [mitos-agent]
+targets: [claude-code, antigravity, claude-app]
 category: productivity
-mitos_agent:
-  tags: [new, session, project, memory, routing]
 ---
 
 # New Session

@@ -5,11 +5,9 @@ version: 1.0.0
 author: Paul Peccia
 license: MIT
 platforms: [linux, macos, windows]
-targets: [mitos-agent]
+targets: [claude-code, antigravity, claude-app]
 requires_server: gws       # reaches Drive through the gws MCP server
 category: devops
-mitos_agent:
-  tags: [graph, drive, bootstrap, registry, gws]
 ---
 # Graph Bootstrap
 
@@ -49,7 +47,7 @@ touches Drive; this enumeration is your job.
      registry_path: graph/<slug>.jsonld
      kind: graph
      project: <slug>
-     source: {machine: <this-box>, tool: mitos-agent}
+     source: {machine: <this-box>, tool: agent}
      captured_at: <ISO-8601 UTC>
      note: <N> document mapping(s) discovered in Drive folder <folder>
      ```

@@ -48,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
-| `user.yaml` | Three groups, field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`), registry-wide defaults (`default_deliverables`), and the `mitos_agent` display flag | field key |
+| `user.yaml` | Field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) | field key |
 | `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
@@ -73,7 +73,7 @@ hard error, not a warning, so a malformed overlay never deploys silently.
 
 ### Personalization — `user.yaml`
 
-A flat mapping in **three groups** — identity, registry-wide defaults, and a display flag:
+A flat mapping of identity keys:
 
 ```yaml
 # IDENTITY — the personalization placeholders
@@ -81,37 +81,15 @@ given_name: Example
 full_name: Example User
 email: example@domain.com
 location: Your City, State
-
-# DEFAULTS — what a new effort inherits when it names none of its own
-default_deliverables: [documentation, tests]
-
-# DISPLAY — show the incubating Mitos Agent planning harness
-mitos_agent: true
 ```
 
 Every key is optional; an unset key falls back to the core `registry/user.yaml`
 default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
-`location: Your City, State`, `default_deliverables: [documentation, tests]`,
-`mitos_agent: false`). Any key
+`location: Your City, State`). Any key
 outside this exact set is a hard error at compile time — the schema is intentionally
 closed (`loader.KNOWN_USER_KEYS`).
 
-The four identity keys are **strings**. `default_deliverables` is a **list** — the one
-key here that is, validated against the closed deliverables vocabulary
-(`graph.KNOWN_DELIVERABLES`) exactly as a declared deliverable is, because a default is
-*copied* onto real efforts and a typo would otherwise mint invalid ones from a file
-nobody looks at twice. See [Default deliverables](#default-deliverables) below.
-
-`mitos_agent` is a **boolean**; only YAML `true`/`false` is accepted (`"true"` and `1` fail at
-load). On, the operator console shows the Mitos Agent surfaces — org-domain skills, the
-`mitos-agent` target chip, **+ New org**, the effort editor's **Org domain** field — and relabels
-the Skills tab **Skills & Orgs**; `mitos init` also lists the Mitos Agent setup option. It is
-display only: what a machine compiles and deploys is decided by its `targets:`. See
-[ADR-004](../docs/decisions/004-presentation-facade-mitos-agent-flag.md).
-
-**Only identity keys become template tokens.** `render.user_token_map` iterates a fixed
-token list rather than this file's keys, so a defaults key can never leak into placeholder
-expansion as `{{user_default_deliverables}}`.
+The four identity keys are **strings**.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
 context partial may use — `{{user_given_name}}`, `{{users_given_name}}` (possessive: `Example's`,
@@ -135,26 +113,15 @@ deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolve
   not a callable tool — models otherwise look for a tool named after the skill and
   declare it unavailable).
 - `{{returns_root}}` — where a coding harness writes what it produced, for the return
-  lane. On a machine hosting Mitos Agent: `<assistant_root>/.local-memory/returns`, the
-  exact folder `mitos-agent returns` reads. On a coding-only box there is no such harness
-  and no state directory, so it falls back to `<projects_root>/.mitos-returns`, read with
-  `mitos-agent returns --from`. It deliberately does **not** reuse `{{project_root}}`,
-  which falls back to `projects_root` there and would put records inside a path the
-  harness's own resolver never looks at *while looking like it had worked* — a silently
-  wrong path is worse than an obviously separate one. The seven shipped deliverable skills
-  write to `{{returns_root}}/<run>/<deliverable>.md`.
+  lane (`<projects_root>/.mitos-returns`).
 - `{{connection}}` — the machine's wired document store, named as the stable section label
   `<Name> (`key`)` that `render.connection_label` mints, so a skill naming the store and a
   tree node heading it can never drift apart. A multi-store machine expands to every label,
   comma-joined. Resolved from `document_store:`, **not** from `paths:` — a connection is not
-  a filesystem fact. The same seven deliverable skills use it to publish a copy of each
-  record to the store: `connections_block` renders a connection heading into tree roots
-  only, so a coding-only box (no `agents-md` target) had a live `mcp.json` and nothing in
-  its context naming it, and every publish step correctly refused to guess.
+  a filesystem fact.
 
 On a machine that defines no matching path — or, for `{{connection}}`, no document store —
-a machine token stays literal. That literal is load-bearing for the deliverable skills:
-their "no store wired, print it for the owner by hand" branch keys on it. Reversal on
+a machine token stays literal. Reversal on
 `adopt`/review-accept matches any machine's value, scoped as above to partials that
 actually carry the token.
 
@@ -201,42 +168,10 @@ context:                      # label → registry-relative partial (must resolv
 | `skills` | no | Skills bound to *this project's* checkout (deployed to `<checkout>/.claude/skills/` or `.agents/skills/`). Each must exist **and** list `claude-code` or `antigravity` in its own `targets:` — the manifest decides *which projects*, the skill decides *which tools*. |
 | `prompts` | no | Prompts bound to *this project's* Claude Code checkout (deployed to `<checkout>/.claude/commands/<name>.md`). Each must exist **and** list `claude-code` in its own `targets:`. |
 | `context` | no | Map of **label → partial path** (under `registry/…`). Each must resolve to a real partial; a dangling reference aborts compile. These prose files are what the agents actually read for the project. |
-| `default_deliverables` | no | The deliverables a **new effort under this project** starts with when it declares none of its own — the forward contract, prefilled in the console's `+ Work` editor. A list of terms from the closed deliverables vocabulary (`graph.KNOWN_DELIVERABLES`); an unknown one aborts compile. Omit the key to inherit the registry-wide default in `user.yaml`; set it to `[]` to inherit **nothing**, which is a real answer and deliberately distinct from omitting it. See [Default deliverables](#default-deliverables). |
 
 > **Overriding a core project.** Drop a file with the same `slug` into `registry/local/projects/` and
 > it replaces the core manifest wholesale (last-layer-wins) — useful for pointing a public example
 > project at your own repo without editing tracked files.
-
-### Default deliverables
-
-An effort's **expected deliverables** are the forward contract: the artifacts every
-implementation under it must yield. A new effort does not start empty — it starts with a
-set resolved down one chain, and every level of that chain is a file that already existed:
-
-```
-the effort's own deliverables         ->  wins, always
-  otherwise: the project's default        registry/projects/<slug>.yaml
-    otherwise: the registry-wide default  registry/user.yaml  ->  [documentation, tests]
-```
-
-This is the same resolution order the [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project)
-design uses — one rule to learn rather than two. `loader.resolve_default_deliverables`
-owns it, and the console resolves the chain server-side so no UI reimplements it.
-
-**`default_deliverables: []` inherits nothing**, and that is deliberately distinct from
-omitting the key. The resolver tests `is None`; a falsy test would collapse two different
-answers into one.
-
-Both levels validate against the same closed vocabulary a *declared* deliverable does,
-because a default is copied onto real efforts and a typo would otherwise mint invalid ones
-from a file nobody looks at twice.
-
-The registry-wide set ships as `[documentation, tests]` — the two every kind of work owes
-regardless of shape. Note what is deliberately **absent**: `requirements-receipt`. An
-effort that inherits this set files no receipt, so an effort declaring requirements
-coverage but no receipt gathers requirements that nothing will report on. The console
-surfaces that as a **warning**, never a block — see
-[the operator console](../docs/operator-console.md).
 
 ### Machine profile — `machines/<name>.yaml`
 
@@ -271,7 +206,7 @@ sync:                                   # optional — consumed only by `mitos s
 |---|---|---|
 | `name` | **yes** | Unique host identity and the `deploy --machine` selector. Two files claiming one name are refused (no silent shadowing). |
 | `os` | **yes (in practice)** | `windows` \| `linux` \| `macos` (matched against `sys.platform` — a Mac reports `macos`, not `darwin`). A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
-| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `agents-md`, `mitos-agent`); an unknown one aborts compile. `mitos-agent` (the agentic harness) is mutually exclusive with the coding harnesses on one machine (`loader._validate`). |
+| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `agents-md`, `context-tree`); an unknown one aborts compile. |
 | `paths` | **yes** | Map of named locations the targets write to (see the key list below). Values use **forward slashes** even on Windows — an unescaped `\` shows up as a control character and is rejected with a pointed error. |
 | `document_store` | no | The MCP connection(s) this box actually has — a server key from `connections/servers.yaml`, the literal `none`, or a list (same field and validation as a project's). It is the single switch every connection-bound output hangs off: with it unset (the default, and what all shipped templates do) the box gets **no** MCP server merged into any harness config, no generated connection section, and no skill declaring `requires_server:` — so a brand-new machine never receives instructions for tools nobody wired. `deploy` reports each skill it withheld and names this field as the fix. Add it once the server is really running (see [`docs/connectors/`](../docs/connectors/)). |
 | `example` | no | `true` marks a shipped *template* profile (skipped by compile once a real machine exists, refused by a real deploy). Must be a bool if present. Your own profiles omit it. |
@@ -288,7 +223,6 @@ sync:                                   # optional — consumed only by `mitos s
 | `claude_code_skills` | claude-code | Claude Code's personal/user-level skill dir (`~/.claude/skills/`, [confirmed](https://code.claude.com/docs/en/skills)). `scope: global` (default) skills targeting `claude-code` deploy here; `scope: project` skills deploy only to the projects that bind them instead. |
 | `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). claude-app has no project-scoped surface — it ignores a skill's `scope` and always stages every skill it targets. |
 | `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |
-| `assistant_root` | mitos-agent + agents-md | The ONE Mitos Agent install root — `SOUL.md`, the `skills/` tree, a whole-file `mcp.json`, AND the operating `AGENTS.md` tree all share it. The harness writes runtime state to `<assistant_root>/.local-memory/`. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
 
 #### Workstation vs Agentic: two claude-code deploy modes
@@ -302,11 +236,7 @@ The `claude-code` target behaves differently depending on whether `agents-md` is
 
 > [!NOTE]
 > "Agentic" in this table names the **deploy mode** (lightweight index vs. full inline
-> doc context) — it does not mean the `mitos-agent` target is present. A `claude-code +
-> agents-md` machine with no `mitos-agent` target (e.g. `machines/example-windows.yaml`) is
-> firmly in the "Agentic" row here, but never gets org content: the org skills, the
-> org-domain table, and per-effort org routing lines all require `mitos-agent` literally in
-> `targets:`. Don't infer "has orgs" from this table.
+> doc context).
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
@@ -315,7 +245,7 @@ On a **workstation machine**, for each project that has a knowledge graph (`regi
 
 A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.
 
-The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `agents-md` audience (the same one the agentic tree uses), so a partial with `audience: [mitos-agent, agents-md]` is visible in both places without any frontmatter change.
+The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `agents-md` audience (the same one the agentic tree uses), so a partial with `audience: [agents-md]` is visible in both places without any frontmatter change.
 
 ### MCP server definitions — `connections/servers.yaml`
 

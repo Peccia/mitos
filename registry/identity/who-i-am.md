@@ -1,5 +1,5 @@
 ---
-audience: [mitos-agent, context-tree]
+audience: [context-tree]
 ---
 ## About Me
 

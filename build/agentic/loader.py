@@ -12,15 +12,15 @@ from typing import Any
 
 import yaml
 
-KNOWN_TARGETS = {"mitos-agent", "claude-code", "antigravity", "context-tree", "claude-app"}
+KNOWN_TARGETS = {"claude-code", "antigravity", "context-tree", "claude-app"}
 VALID_STAGES = {"ideation", "speccing", "build", "maintain"}
 VALID_SKILL_SCOPES = {"global", "project"}
 # Targets with a project-scoped skill deploy path (claude-code: <local_path>/.claude/skills/,
 # antigravity: <local_path>/.agents/skills/) — the only targets a project's `skills:` list
-# binds a skill for, and the only targets where `scope: project` changes anything. mitos-agent
-# and claude-app have no project-scoped surface at all (account-wide/global only) and simply
-# IGNORE `scope` — always global, on any skill, regardless of value — the same way the assistant
-# harness always did before this feature existed. See validate_skill_scope / Skill.scope.
+# binds a skill for, and the only targets where `scope: project` changes anything. claude-app
+# has no project-scoped surface at all (account-wide/global only) and simply
+# IGNORES `scope` — always global, on any skill, regardless of value.
+# See validate_skill_scope / Skill.scope.
 PROJECT_SCOPE_CAPABLE_TARGETS = {"claude-code", "antigravity"}
 
 
@@ -37,47 +37,22 @@ def is_manual_skill_target(tspec: dict) -> bool:
 
 
 # The registry-wide user config (registry/user.yaml + registry/local/user.yaml overlay).
-# Two groups of settings, both resolved core-then-overlay with last-layer-wins:
+# Resolved core-then-overlay with last-layer-wins:
 #
 #   IDENTITY — the personalization placeholders render.py expands ({{user_given_name}},
 #     {{users_given_name}}, {{user_full_name}}, {{user_email}}, {{user_location}}). These
-#     are the file's original and still primary contents.
-#   DEFAULTS — settings a project or an effort inherits when it names none of its own.
-#     `default_deliverables` is the first: the forward contract a new effort starts with.
-#     Widening this file beyond identity is deliberate and recorded here rather than left
-#     to be inferred; the alternative was a second registry-level config file for one key.
-#   FEATURES — presentation flags. `mitos_agent` is the first: it gates the console and
-#     `mitos init` affordances for the incubating planning harness (org skills, the
-#     mitos-agent target chip, the effort Org domain field, the init wizard's agent
-#     option). It gates presentation only — the compiler keys off machine `targets:`, so
-#     a machine that names mitos-agent compiles identically whatever this flag says.
-#     Deliberately absent from _USER_TOKENS: a feature flag is not a placeholder.
+#     are the file's contents.
 #
 # Only IDENTITY keys become template tokens. render.user_token_map iterates a fixed
-# _USER_TOKENS list, never reg.user's keys, so a defaults key can never leak into
-# placeholder expansion as {{user_default_deliverables}}.
+# _USER_TOKENS list, never reg.user's keys.
 #
 # A fixed, closed schema — unknown keys are rejected loudly rather than silently ignored,
 # the same posture as every other registry file.
-KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location",
-                   "default_deliverables", "mitos_agent"}
+KNOWN_USER_KEYS = {"given_name", "full_name", "email", "location"}
+RETIRED_USER_KEYS = {"default_deliverables", "mitos" + "_" + "agent"}
 KNOWN_AGENT_KEYS = {"name", "description", "targets", "goal", "skills"}
-# The subset of KNOWN_USER_KEYS whose value is a list, not a string.
-_USER_LIST_KEYS = {"default_deliverables"}
-# The subset whose value is a bool. YAML's `true` is the only accepted spelling — the
-# string "true" and the int 1 are rejected, so a typo fails at load rather than reading
-# as truthy and quietly turning a surface on.
-_USER_BOOL_KEYS = {"mitos_agent"}
-# documentation + tests are the registry-wide default because they are the two every kind
-# of work owes regardless of shape, and a default inherited silently should fit everything
-# it lands on. NOTE what is deliberately absent: requirements-receipt. A Work item that
-# inherits this set files no receipt, so the requirements half of the return lane would
-# close quietly — _validate does not fix that by overriding the owner's default, it is
-# surfaced as a warning where the declaration is made (see the console's effort editor).
 _DEFAULT_USER = {"given_name": "User", "full_name": "Mitos User",
-                 "email": "user@example.com", "location": "Your City, State",
-                 "default_deliverables": ["documentation", "tests"],
-                 "mitos_agent": False}
+                 "email": "user@example.com", "location": "Your City, State"}
 
 # Supporting-file subdirectories a skill folder may carry alongside SKILL.md —
 # auto-deployed next to the rendered SKILL.md and bundled into claude-app zips.
@@ -176,10 +151,9 @@ class Skill:
     @property
     def scope(self) -> str:
         """`global` (default): deploys to every global surface a target offers
-        (mitos-agent, the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
+        (the antigravity_skills dir, claude-app zips). `project`: deploys ONLY
         into the project checkouts that bind it via that project's `skills:` list —
-        never a global directory. mitos-agent deliberately ignores this field (it has no
-        project-scoped skill surface); see validate_skill_scope."""
+        never a global directory; see validate_skill_scope."""
         return self.frontmatter.get("scope", "global")
 
     @property
@@ -194,20 +168,6 @@ class Skill:
         server this machine never declared, so a coding-harness box with no workspace
         wired never receives instructions for tools it cannot call."""
         return self.frontmatter.get("requires_server") or None
-
-    @property
-    def delivers(self) -> str | None:
-        """The `KNOWN_DELIVERABLES` term this skill satisfies — the return lane's binding
-        between what an effort DECLARES it must produce and the procedure that produces it.
-
-        One skill per deliverable, never one skill for all of them: the set is meant to grow,
-        so adding a deliverable must be an ADDITION (a new file) and never a modification to a
-        file that keeps getting longer. This field is what makes the pairing checkable —
-        planner.skill_deploy_warnings can say an effort declares 'deploy-book' on a machine
-        where nothing delivers it, instead of leaving that a silent gap discovered months
-        later by the deploy book's absence. Optional; omit for a skill that produces no
-        declared deliverable."""
-        return self.frontmatter.get("delivers") or None
 
 
 @dataclass
@@ -310,40 +270,35 @@ def _split_frontmatter(text: str, where: str) -> tuple[dict, str]:
     return meta, m.group(2)
 
 
-def _load_user(dir_path: Path, label: str) -> dict:
+def _load_user(dir_path: Path, label: str) -> tuple[dict, list[str]]:
     """One layer of user.yaml (core or overlay) — {} when the file is absent, so a
     hermetic test registry without one still loads fine (the dataclass default supplies
     neutral values). Unlike `_load_yaml`, an empty file is valid (yaml.safe_load returns
     None) rather than a schema error, since a scaffolded overlay may start blank."""
     path = dir_path / "user.yaml"
     if not path.is_file():
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return {}, []
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text) or {}
     if not isinstance(data, dict):
         raise RegistryError(f"{label}: must be a YAML mapping")
-    bad = set(data) - KNOWN_USER_KEYS
+    warnings: list[str] = []
+    lines = text.splitlines()
+    for k in sorted(data):
+        if k in RETIRED_USER_KEYS:
+            line_no = next((idx for idx, line in enumerate(lines, 1)
+                            if re.match(rf"^\s*{re.escape(k)}\s*:", line)), None)
+            loc = f" line {line_no}" if line_no else ""
+            warnings.append(f"{label}{loc}: '{k}' in user.yaml is retired — delete this line")
+    clean_data = {k: v for k, v in data.items() if k not in RETIRED_USER_KEYS}
+    bad = set(clean_data) - KNOWN_USER_KEYS
     if bad:
         raise RegistryError(f"{label}: unknown key(s) {sorted(bad)} — known: "
                             f"{sorted(KNOWN_USER_KEYS)}")
-    for k, v in data.items():
-        # Identity keys are strings; the DEFAULTS group is not. default_deliverables is a
-        # list, and its element types + vocabulary are checked in _validate (where the
-        # graph module is already imported) rather than duplicated here.
-        if k in _USER_LIST_KEYS:
-            if not isinstance(v, list):
-                raise RegistryError(f"{label}: {k!r} must be a list")
-            continue
-        if k in _USER_BOOL_KEYS:
-            # `is bool` via isinstance is exact here: bool is the only type accepted, and
-            # Python's int/bool subclassing does not let 1 through because isinstance(1,
-            # bool) is False.
-            if not isinstance(v, bool):
-                raise RegistryError(f"{label}: {k!r} must be true or false, not "
-                                    f"{v!r}")
-            continue
+    for k, v in clean_data.items():
         if not isinstance(v, str):
             raise RegistryError(f"{label}: {k!r} must be a string")
-    return data
+    return clean_data, warnings
 
 
 def _load_yaml(path: Path) -> dict:
@@ -358,12 +313,15 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
     if not reg_dir.is_dir():
         raise RegistryError(f"no registry/ directory at {root}")
 
+    user_warnings: list[str] = []
     partials = _load_partials(reg_dir)
     skills = _load_skills(reg_dir)
     prompts = _load_prompts(reg_dir)
     projects = _load_projects(reg_dir)
     graphs = _load_graphs(reg_dir)
-    user = {**_DEFAULT_USER, **_load_user(reg_dir, "registry/user.yaml")}
+    core_user, w = _load_user(reg_dir, "registry/user.yaml")
+    user_warnings.extend(w)
+    user = {**_DEFAULT_USER, **core_user}
 
     # Mitos overlay (the Mitos overlay design): load registry/local/ on top of the core with
     # last-layer-wins precedence — a local entry replaces a same-key core entry, new local
@@ -379,7 +337,9 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
         local_projects = _load_projects(local_dir, is_local=True)
         projects = _overlay(projects, local_projects)
         graphs = _overlay(graphs, _load_graphs(local_dir))
-        user = {**user, **_load_user(local_dir, "registry/local/user.yaml")}
+        overlay_user, w = _load_user(local_dir, "registry/local/user.yaml")
+        user_warnings.extend(w)
+        user = {**user, **overlay_user}
 
     # MCP servers are moat TOOLS, not registry content — they live in connections/
     # (own deploy lane); see the connections-lane design.
@@ -420,9 +380,12 @@ def load(root: Path, ignore_local: bool = False) -> Registry:
                     merged[sname] = sval
             servers["servers"] = merged
 
+    reg_warnings: list[str] = list(user_warnings)
+    for pg in graphs.values():
+        reg_warnings.extend(pg.warnings)
     reg = Registry(root=root, partials=partials, skills=skills, servers=servers,
                    projects=projects, targets=targets, machines=machines, graphs=graphs,
-                   prompts=prompts, user=user)
+                   prompts=prompts, user=user, warnings=reg_warnings)
     reg.agents = _load_agents(reg, ignore_local=ignore_local)
     _validate(reg)
     return reg
@@ -715,43 +678,6 @@ def selected_agents(reg: Registry, machine: dict, target: str | None = None) -> 
     return selected
 
 
-def _validate_default_deliverables(names, label: str, graphmod) -> None:
-    """A `default_deliverables:` value, wherever it is authored. Absent is fine; a list of
-    known terms is fine; anything else fails loudly, naming the file and the valid set."""
-    if names is None:
-        return
-    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-        raise RegistryError(
-            f"{label}: 'default_deliverables' must be a list of strings")
-    for n in names:
-        if n not in graphmod.KNOWN_DELIVERABLES:
-            raise RegistryError(
-                f"{label}: unknown default deliverable {n!r}; "
-                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-
-
-def resolve_default_deliverables(reg: "Registry", slug: str) -> tuple[str, ...]:
-    """The deliverables a NEW effort under `slug` starts with, resolved down one chain:
-
-        the Work item's own deliverables   ->  wins, always (never reaches here)
-          otherwise: the project manifest      registry/projects/<slug>.yaml
-            otherwise: registry-wide           registry/user.yaml
-
-    Only the last two levels live here — an effort that declares its own deliverables never
-    consults a default at all. The chain is the same resolution order the skill-scope design
-    already uses (a project binding wins, the global default fills in), so there is one rule
-    to learn rather than two.
-
-    A project that sets `default_deliverables: []` inherits NOTHING, which is a real answer
-    and distinct from omitting the key; `is None` rather than a falsy test keeps them apart.
-    Ordering is canonical, so the console renders the same set the graph would serialize.
-    """
-    from . import graph as graphmod
-    proj = reg.projects.get(slug) or {}
-    names = proj.get("default_deliverables")
-    if names is None:
-        names = reg.user.get("default_deliverables") or []
-    return graphmod.order_deliverables(names)
 
 
 def _load_graphs(base: Path) -> dict:
@@ -797,18 +723,6 @@ def _load_dir_of_yaml(folder: Path, *, key: str) -> dict[str, dict]:
                                 f"in {folder.name}/ already declares it")
         out[name] = data
     return out
-
-
-def known_org_domains(reg: Registry) -> set[str]:
-    """The valid org-domain tags for a knowledge-graph effort: every domain declared by
-    a skill's `org_domain` frontmatter key (core + overlay, already merged on `reg`) —
-    the console's `+ ORG` button adds a domain purely by proposing a new skill candidate
-    with this key, no loader change required. Falls back to the legacy hardcoded set
-    when no skill declares one yet, so a repo mid-migration doesn't suddenly invalidate
-    every effort tagged software/design/marketing."""
-    declared = {s.frontmatter.get("org_domain") for s in reg.skills.values()
-               if s.frontmatter.get("org_domain")}
-    return declared or {"software", "design", "marketing"}
 
 
 def document_stores(raw) -> list[str]:
@@ -857,7 +771,7 @@ def _check_document_store(label: str, ds, known: set[str]) -> None:
 def validate_skill_scope(skill_name: str, frontmatter: dict) -> str | None:
     """Cross-check a skill's `scope` frontmatter key. Returns an error string, or None
     when valid. No per-target incompatibility to check: a target with no project-scoped
-    surface (mitos-agent, claude-app) simply ignores `scope` and always deploys globally, so
+    surface (claude-app) simply ignores `scope` and always deploys globally, so
     `scope: project` is always a legal value regardless of which targets a skill declares
     — see PROJECT_SCOPE_CAPABLE_TARGETS."""
     scope = frontmatter.get("scope", "global")
@@ -950,7 +864,6 @@ def _validate(reg: Registry) -> None:
     # software and marketing work side by side, so a manifest-level `org:` would be a
     # category error. Checked ahead of stage/etc. so an org problem is reported on its
     # own line.
-    valid_orgs = known_org_domains(reg)
     for slug, proj in reg.projects.items():
         if proj.get("org"):
             raise RegistryError(
@@ -973,41 +886,6 @@ def _validate(reg: Registry) -> None:
                 if "]" in a or "_" in a:
                     raise RegistryError(
                         f"project {slug}: alias {a!r} contains invalid character (']' or '_')")
-    from . import graph as graphmod
-    for slug, pg in reg.graphs.items():
-        for e in pg.efforts:
-            if e.org_domain and e.org_domain not in valid_orgs:
-                raise RegistryError(
-                    f"graph {slug}: effort {e.id!r} has unknown org domain "
-                    f"{e.org_domain!r}; valid: {', '.join(sorted(valid_orgs))}")
-            for d in e.deliverables:
-                if d not in graphmod.KNOWN_DELIVERABLES:
-                    raise RegistryError(
-                        f"graph {slug}: effort {e.id!r} declares unknown deliverable {d!r}; "
-                        f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-            for c in e.requirements_coverage:
-                if c not in graphmod.KNOWN_COVERAGE:
-                    raise RegistryError(
-                        f"graph {slug}: effort {e.id!r} declares unknown coverage dimension "
-                        f"{c!r}; valid: {', '.join(graphmod.KNOWN_COVERAGE)}")
-    # Default deliverable sets are validated against the SAME closed vocabulary as a
-    # declared one. A default is copied onto real efforts, so a typo here would mint
-    # invalid efforts one at a time from a file nobody looks at twice — validate it where
-    # it is authored, not where it lands.
-    # `delivers:` names a term from the same closed vocabulary an effort declares. A typo
-    # here is worse than a missing skill: the skill deploys, looks correct, and satisfies
-    # nothing — so it fails at load like every other unknown vocabulary value.
-    for name, skill in reg.skills.items():
-        d = skill.delivers
-        if d is not None and d not in graphmod.KNOWN_DELIVERABLES:
-            raise RegistryError(
-                f"skill {name!r}: unknown 'delivers' value {d!r}; "
-                f"valid: {', '.join(graphmod.KNOWN_DELIVERABLES)}")
-    _validate_default_deliverables(
-        reg.user.get("default_deliverables"), "registry/user.yaml", graphmod)
-    for slug, proj in reg.projects.items():
-        _validate_default_deliverables(
-            proj.get("default_deliverables"), f"project {slug}", graphmod)
     # project stages valid; context partials exist
     for slug, proj in reg.projects.items():
         stage = proj.get("stage")
@@ -1136,8 +1014,8 @@ def _validate(reg: Registry) -> None:
             resolve_local_path(mname, reg.machines[mname], raw)  # fails loudly if a
             # relative entry has no projects_root to resolve against
         # agentic_tree (optional): mounts the full agents-md operating tree (the same
-        # Navigation/Workflows/Skills/roster shape a mitos-agent machine gets at its
-        # assistant_root) inside this project's own checkout, at
+        # Navigation/Workflows/Skills/roster shape a context-tree machine gets at its
+        # context_root) inside this project's own checkout, at
         # <local_path>/<agentic_tree>/ — the workstation-side counterpart to a machine
         # mount, e.g. so Antigravity can operate against a project like an agentic
         # harness. A single relative subdirectory name, not a path — must not collide
@@ -1229,16 +1107,6 @@ def _validate(reg: Registry) -> None:
                     f"If a harness supplies this target, accept its seed in the inbox (mitos review)."
                 )
             continue
-        if "mitos-agent" in targets:
-            # The harness traverses the operating AGENTS.md tree, which is the context-tree
-            # target's output — so mitos-agent REQUIRES context-tree on the same machine
-            # (both deploy into the one `context_root` install root). Without it the
-            # harness would install SOUL.md/skills/mcp.json with no tree to read.
-            if "context-tree" not in targets:
-                raise RegistryError(
-                    f"machine {name}: 'mitos-agent' requires 'context-tree' on the same machine "
-                    f"(it traverses the operating tree that target emits) — add 'context-tree' "
-                    f"to targets.")
         # document_store (optional): the server this machine's assistant is wired to —
         # feeds the generated Connections section (render.connections_block). Same
         # shape/validation as a project's document_store.
@@ -1299,8 +1167,8 @@ def _validate(reg: Registry) -> None:
             if "ssh_key" in git_cfg and not isinstance(git_cfg["ssh_key"], str):
                 raise RegistryError(
                     f"machine {name}: sync.git.ssh_key must be a string path to the private key")
-        # 5. (retired) The third-party settings-merge lane is gone — Mitos Agent owns its
-        #    own config file whole (targets/mitos-agent.yaml), so there is no third-party
+        # 5. (retired) The third-party settings-merge lane is gone — each harness owns its
+        #    own config file whole, so there is no third-party
         #    config.yaml to reach settings leaves into. Unknown machine keys are silently
         #    ignored (machine keys are not a closed set), so profiles drop retired settings
         #    blocks explicitly rather than relying on a validation error to catch them.
@@ -1349,7 +1217,7 @@ def _validate(reg: Registry) -> None:
                     raise RegistryError(
                         f"machine {name}: skills.{tname} lists skill(s) in BOTH "
                         f"include and exclude: {sorted(both)}")
-        # 7. agents (optional): curation of active agents for mitos-agent —
+        # 7. agents (optional): curation of active agents for harnesses —
         #    `{include: [...] | exclude: [...]}`.
         mag = m.get("agents")
         if mag is not None:

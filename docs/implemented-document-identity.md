@@ -1,8 +1,7 @@
 # The Implemented Document's identity fragment
 
 > This page documents a **cross-repo contract**, not a Mitos feature you configure. Mitos
-> Agent is a separate planning harness, still incubating; its console affordances in Mitos are
-> hidden behind `mitos_agent` in `registry/local/user.yaml`. What follows is the JSON-LD shape
+> Agent is a separate planning harness. What follows is the JSON-LD shape
 > both repos conform to, so that the side reading a document and the side writing it cannot
 > drift. Nothing here is required to use Mitos with a coding harness.
 
@@ -154,7 +153,7 @@ it only saves the operator from retyping what Mitos-Agent already knew.
 
 The same peek also shows a **Mark effort as Done with this Implemented Document** checkbox, which
 starts unticked. If the operator ticks it, the effort edit (`status: done`,
-`evaluation: <this document's id>`) goes into the same proposal as the mapping (see ADR-005).
+`evaluation: <this document's id>`) goes into the same proposal as the mapping.
 Mapping a document without ticking the box doesn't change the effort's status.
 
 ### The completion line (cross-repo contract)

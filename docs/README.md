@@ -47,13 +47,6 @@ Take control of your registry and author your own skills and prompts:
 
 ---
 
-## 🧭 Decision records
-
-Why the code is shaped the way it is, written when the choice was made:
-
-- **[ADR-004 — Presentation facade for the Mitos Agent flag](decisions/004-presentation-facade-mitos-agent-flag.md)** — why the incubating planning harness is hidden by one display flag rather than retired, and why the compiler never reads that flag.
-
----
 
 ## ⚡ Essential daily commands
 
