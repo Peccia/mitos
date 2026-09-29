@@ -3,7 +3,7 @@
 A **Context Tree** is a vendor-neutral, directory-based markdown tree containing project nodes,
 documentation maps, operating workflows, and identity context. Rather than authoring separate,
 redundant context files for each agentic harness (e.g., Claude Code, Antigravity, Cursor,
-Mitos Agent, or custom scripts), Mitos compiles a single canonical context tree that every
+or custom scripts), Mitos compiles a single canonical context tree that every
 tool on every machine can navigate and ground on.
 
 ---
@@ -40,12 +40,12 @@ A context tree can be deployed at two distinct scopes:
 Configured on a machine profile (`registry/local/machines/<name>.yaml` or `machines/<name>.yaml`):
 ```yaml
 targets:
-  - mitos-agent
   - context-tree
+  - claude-code
 paths:
-  context_root: "~/MitosAgent"
+  context_root: "~/context-tree"
 ```
-- Deploys the complete machine-wide operating tree at `context_root` (e.g., `~/MitosAgent`).
+- Deploys the complete machine-wide operating tree at `context_root` (e.g., `~/context-tree`).
 - Clones project repositories beside project nodes in `Projects/<Name>/<repo>`.
 - Deploys universal identity partials (`who-i-am.md`, `operating-rules.md`, `security.md`).
 
@@ -53,9 +53,9 @@ paths:
 Configured on an individual project (`registry/projects/<slug>.yaml`):
 ```yaml
 name: Family
-context_tree: MitosAgent
+context_tree: context
 ```
-- Mounts an operating tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/MitosAgent/`).
+- Mounts an operating tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/context/`).
 - Allows a project checkout to host its own self-contained operating tree without requiring a dedicated machine profile.
 - The project's root `AGENTS.md` automatically cross-references the operating tree.
 
@@ -63,7 +63,7 @@ context_tree: MitosAgent
 
 ## Header Taxonomy
 
-Every node in a context tree follows a strict header hierarchy (see [`agents-md-structure.md`](agents-md-structure.md)):
+Every node in a context tree follows a strict header hierarchy (see [`context-tree-structure.md`](context-tree-structure.md)):
 1. **`# <Title>` (H1):** The node's identity and primary description.
 2. **Reserved `##` Sections (in strict order):**
    - `## Navigation`: Local filesystem hierarchy and relative links to child nodes.
@@ -80,4 +80,5 @@ Every node in a context tree follows a strict header hierarchy (see [`agents-md-
 The Mitos Context Tree is completely open and vendor-neutral:
 - **Standard Markdown:** Authored in standard GitHub-Flavored Markdown.
 - **Tool Agnostic:** Works with Claude Code, Antigravity, custom agent runners, or human operators reading directly in a terminal or editor.
-- **Interoperable SDLC:** A planning harness (such as Mitos Agent) can plan work against the context tree, while a coding harness (such as Claude Code or Antigravity) executes the work against the exact same context.
+- **Interoperable SDLC:** A planning harness can plan work against the context tree, while a coding harness (such as Claude Code or Antigravity) executes the work against the exact same context.
+

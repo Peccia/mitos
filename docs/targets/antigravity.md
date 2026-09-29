@@ -17,7 +17,7 @@ Claude Code consumes), so Mitos treats it like the other harnesses — one skill
 
 | Surface | Support | Mechanism / Path |
 |---|---|---|
-| **Context** | ✅ Full | `AGENTS.md` files written to project/assistant roots (via `agents-md` target) |
+| **Context** | ✅ Full | `AGENTS.md` files written to project/context roots (via `context-tree` target) |
 | **Skills** | ✅ Full | Agent Skills standard folders (`<name>/SKILL.md` + supporting files), global or project scope — see [Skill scope](#skill-scope-global-vs-project) below |
 | **Prompts** | ❌ Retired | The flat `prompt-<name>.md` lane was removed — Antigravity's skill discovery only reads `<folder>/SKILL.md`, so those files were never visible to it. Discoverable content belongs in a skill; prompts stay console-only |
 | **MCP Config** | ✅ Confirmed | `mcp_config.json` under `antigravity_config` — confirmed shared across Antigravity 2.0/IDE/CLI |
@@ -41,14 +41,14 @@ Claude Code consumes), so Mitos treats it like the other harnesses — one skill
 
 ## ⚙️ Configuration & machine setup
 
-To deploy assets for Antigravity on a coding workstation, list the `antigravity` target (and optionally `agents-md` if deploying project-level agentic context trees) in your machine profile, and define the paths where Antigravity reads them.
+To deploy assets for Antigravity on a coding workstation, list the `antigravity` target (and optionally `context-tree` if deploying context trees) in your machine profile, and define the paths where Antigravity reads them.
 
 Add the following to your machine profile (`registry/local/machines/<name>.yaml`):
 
 ```yaml
 targets:
   - antigravity
-  # - agents-md       # optional: include if mounting an agentic tree (agentic_tree: in project manifests)
+  # - context-tree    # optional: include if mounting a context tree (context_tree: in project manifests)
 
 paths:
   # Antigravity's GLOBAL skills directory (all workspaces) — per the official
@@ -63,11 +63,9 @@ paths:
   antigravity_config: "~/.gemini/config"
 ```
 
-> **Note on `assistant_root`:** `assistant_root` is an agentic-machine path. The assistant tree
-> below is rendered there by the `agents-md` target, only on a machine that lists `agents-md` in
-> `targets:` **and** sets `assistant_root` (the `mitos-agent` target, when present, installs its
-> home there too). On coding workstations, Antigravity operates within project workspaces
-> (`projects_root`) and project-scoped agentic trees (`agentic_tree:`).
+> **Note on `context_root`:** A machine-wide context tree is rendered at `context_root` by the
+> `context-tree` target. On coding workstations, Antigravity operates within project workspaces
+> (`projects_root`) and project-scoped context trees (`context_tree:`).
 
 ---
 
@@ -75,8 +73,9 @@ paths:
 
 ### 1. Context delivery (`AGENTS.md`)
 Antigravity natively reads `AGENTS.md` files to understand identity and project background. Mitos writes context in two places:
-- **Assistant tree** (agentic machines only — see the note above): Deployed to `assistant_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster + org structure) with a `Projects/<project>/AGENTS.md` per project.
+- **Context tree** (machines deploying `context-tree`): Deployed to `context_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster) with a `Projects/<project>/AGENTS.md` per project.
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
+
 
 ### 2. Custom skills
 

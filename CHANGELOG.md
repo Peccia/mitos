@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Migration Guide: Mitos & Mitos Agent Separation
+
+Mitos Agent now lives in its own standalone repository outside Mitos and consumes the context, skills, and agents Mitos exports. Public Mitos is now a completely harness-neutral context compiler and registry.
+
+#### Renamed Keys
+- Machine profile path `assistant_root` is now **`context_root`**.
+- Target `agents-md` is now **`context-tree`**.
+- Project manifest key `agentic_tree` is now **`context_tree`**.
+*(Old key spellings will fail at load time with an informative message pointing to the new key).*
+
+#### Retired `user.yaml` Keys
+- `mitos_agent` and `default_deliverables` in `registry/user.yaml` (or `registry/local/user.yaml`) are retired.
+- The loader will issue a warning naming the line. Simply delete the line from your configuration.
+
+#### Knowledge Graph Migration
+- Retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, and `peccia:orgDomain`) are no longer part of Mitos graphs.
+- Run `python build/mitos.py graph strip-retired --all` to propose clean graph candidates stripping these triples, then review and accept them in the Inbox.
+
+#### Unknown Target Handling
+- Machine profiles targeting an unknown or unavailable target adapter now issue a plan-time warning and safely skip deploying that target for that machine, rather than aborting.
+
 ## [0.1.8] - 2026-09-27
 
 ### Added

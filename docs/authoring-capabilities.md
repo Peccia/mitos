@@ -37,7 +37,6 @@ targets:                     # List of compatible tools
 category: development        # Optional: organizational category (default: general)
 scope: global                # Optional: global (default) | project — see below
 requires_server: gws         # Optional: only deploy where this connection exists — see below
-delivers: deploy-book        # Optional: the expected deliverable this skill produces — see below
 ---
 
 # Instructions
@@ -51,12 +50,12 @@ directory available everywhere, and a per-project directory bound through the pr
 manifest. The `scope:` frontmatter key picks which one:
 
 - **`scope: global`** (default, or omitted): deploys to every shared directory the skill's
-  `targets:` declare — `mitos-agent`'s skills dir, `claude-app`'s account-wide zip staging,
-  antigravity's `antigravity_skills` (`~/.gemini/config/skills/`), and claude-code's personal
-  `claude_code_skills` (`~/.claude/skills/`). No project binding needed.
+  `targets:` declare — `claude-app`'s account-wide zip staging, antigravity's `antigravity_skills`
+  (`~/.gemini/config/skills/`), and claude-code's personal `claude_code_skills` (`~/.claude/skills/`).
+  No project binding needed.
 - **`scope: project`**: deploys ONLY to the projects that list this skill under their
-  manifest's `skills:` key, never the shared directory. `mitos-agent` and `claude-app` have no
-  project-scoped surface at all, so they ignore `scope` and stay global regardless.
+  manifest's `skills:` key, never the shared directory. Targets without a project-scoped surface
+  ignore `scope` and stay global regardless.
 
 **`claude-app` is the exception worth understanding**, because it is the one target that
 *deploys nothing*. `deploy` writes a zip to the machine's `claude_skills_staging` path and
@@ -66,61 +65,10 @@ not leaked anywhere — it is a file on disk until someone chooses it. That has 
 - **Manual targets take no curation.** `skills: {claude-app: {include:/exclude:}}` on a machine
   profile is refused at load. The staged set is a *menu*, and the choice already happens at
   upload time; filtering the menu only removes options you would then need a registry edit and
-  a redeploy to reach. Automated targets (`mitos-agent`, `claude-code`, `antigravity`) still
-  curate normally.
+  a redeploy to reach. Automated targets (`claude-code`, `antigravity`) still curate normally.
 - **`requires_server:` still applies.** Which MCP connections a machine has is a fact about the
   machine, not a preference — a skill that is nothing but instructions for a server you never
   wired is a dangling instruction whether a human uploaded it or the compiler wrote it.
-
-`mitos-agent` is therefore the only target `skill_deploy_warnings` reports a scope leak for: it
-writes the file itself, automatically, machine-wide.
-
-### Deliverable-producing skills: `delivers:`
-
-An effort in the knowledge graph declares its **expected deliverables** — the artifacts every
-implementation under it must yield. That declaration compiles into every harness's context as a
-line asking for them. `delivers:` names which of those terms a skill actually produces:
-
-```yaml
-delivers: deploy-book        # one term from the controlled deliverables vocabulary
-```
-
-This makes the pair checkable. `deploy --dry-run` warns when an effort declares a deliverable that
-**no skill on that machine knows how to produce** — otherwise an effort can ask for a deploy book,
-every harness can read the request, no skill anywhere describes how to write one, and the gap only
-surfaces months later as a missing deploy book.
-
-**One skill per deliverable**, never one skill for all of them. The vocabulary is meant to grow, so
-adding a deliverable should be an *addition* — a new file — rather than another edit to a file that
-keeps getting longer. Independent skills also mean a bad one produces a weak artifact instead of
-breaking the others.
-
-An unknown value fails the compile. A typo here is worse than a missing skill: the skill deploys,
-reads correctly, and satisfies nothing.
-
-The vocabulary itself is closed (`graph.KNOWN_DELIVERABLES`): `documentation`, `tests`, `changelog`,
-`deploy-book`, `runbook`, `migration-notes`, `requirements-receipt`. Three of those are easy to
-confuse, so the boundary is fixed:
-
-| Term | Answers | Lifespan |
-|---|---|---|
-| `deploy-book` | How do I ship **this change**? Steps, order, verification, rollback | One release |
-| `runbook` | How do I **operate and troubleshoot** the result afterward? | Outlives the release |
-| `migration-notes` | What changed for **existing data and consumers**, and what must they do? | One release, different audience |
-
-**A `delivers:` skill deploys only where the deliverable is declared.** If no effort in the
-registry asks for `runbook`, no machine receives the `runbook` skill — the same gate as
-`requires_server:` below, and not a preference either: a machine cannot `include:` its way to
-a procedure for an artifact nothing asks for. It is the exact inverse of the `--dry-run`
-warning above (that reports demand with no supply; this stops shipping supply with no demand),
-and it is why a fresh clone, which declares no deliverables anywhere, receives none of the
-return-lane skills instead of seven procedures for a lane it has not opted into.
-
-The gate reads the **registry**, not the machine. A coding-only box whose records a Mitos
-Agent elsewhere harvests still gets them — that box is what `{{returns_root}}`'s
-`.mitos-returns/` fallback is for. To turn the lane on, declare the deliverable on an effort
-(console effort editor, or `peccia:deliverable` in the graph) and redeploy; to clear copies a
-machine already has, `deploy --machine <name> --prune`.
 
 ### Connection-bound skills: `requires_server:`
 
@@ -212,7 +160,7 @@ The prompt compiles to `<project-root>/.claude/commands/bug-report.md`.
 
 ## 🤖 3. Authoring Agents
 
-An **Agent** is a customized persona for the Mitos Agent assistant harness. It bundles an intended goal, instructions, and a set of deployed skills to perform dedicated workflows (e.g. personal CRM, technical planning).
+An **Agent** is a customized persona or subagent that can be deployed across supporting AI harnesses (such as Claude Code or custom overlay targets). It bundles a description, an optional goal, specific instructions, and a set of deployed skills.
 
 ### File Location
 Agents are authored as individual Markdown files:
@@ -220,35 +168,42 @@ Agents are authored as individual Markdown files:
 - `registry/local/agents/<name>.md` (private local overlay)
 
 ### Agent File Schema
-The file must begin with YAML frontmatter containing `name`, `description`, `goal`, and `skills`:
+The file begins with YAML frontmatter containing `name` and `description`, with optional `goal`, `skills`, and harness-specific configuration blocks:
 
 ```markdown
 ---
-name: personal-crm
-description: "Manages contacts, follow-ups, and interaction notes"
-goal: "Help keep personal contacts and communication organized"
+name: researcher
+description: "Researches questions across code, documentation, and web"
+goal: "Provide thorough, factual research summaries with citations"
 skills: [gws]
+claude-code:
+  tools: [view_file, run_command]
+  model: sonnet
 ---
 
 # Instructions
-You are a digital assistant specializing in contact relationship management.
-Follow these guidelines to track conversations and record notes...
+You are an expert researcher. Given a question or topic, analyze available
+sources, synthesize key findings, and provide structured references...
 ```
 
-### Validation Rules
-- **Name**: Must be a valid slug (`[a-z0-9-]+`) and exactly match the filename stem (e.g. `personal-crm.md` must declare `name: personal-crm`).
-- **Fields**: `description` and `goal` must be non-empty strings. `skills` must be a non-empty list of skill names.
-- **Closed Schema**: Only `name`, `description`, `goal`, and `skills` are permitted in frontmatter.
-- **Skill Compatibility**: Each skill in `skills:` must exist in the registry and declare `mitos-agent` in its `targets:`.
-- **Machine Deployment**: Each required skill must actually be deployed to the machine running the agent (not excluded by skill curation).
+### Portable and Harness-Specific Options
+- **Portable fields**: `name` (required slug matching filename stem), `description` (required), `goal` (optional intent statement), and `skills` (optional list of required skill names).
+  - For harnesses without a native goal field (e.g. Claude Code), the `goal:` is automatically folded into the rendered body text.
+- **Named harness blocks**: Specific harnesses can be configured via a top-level block named after the target (e.g. `claude-code:`). These options are passed directly to that harness and ignored by other harnesses.
 
-### The 20-Agent Limit
-Mitos Agent enforces a hard limit of at most **20 active agents** per machine. If a machine selects more than 20 agents, compilation fails. You can curate which agents deploy to a machine using `agents:` in the machine profile (`machines/<name>.yaml` or `registry/local/machines/<name>.yaml`):
+### Validation Rules
+- **Name**: Must be a valid slug (`[a-z0-9-]+`) and exactly match the filename stem (e.g. `researcher.md` must declare `name: researcher`).
+- **Fields**: `description` must be a non-empty string.
+- **Skill Compatibility**: Each skill in `skills:` must exist in the registry and deploy to the target harness. If a target declares `supports_skills: false`, a plan-time warning is issued.
+- **Machine Deployment**: Each required skill must actually be deployed to the machine running the agent (not excluded by machine-level skill curation).
+
+### Machine Curation
+You can curate which agents deploy to a machine using `agents:` in the machine profile (`machines/<name>.yaml` or `registry/local/machines/<name>.yaml`):
 
 ```yaml
 agents:
-  include: [personal-crm, tech-lead]       # Deploy ONLY these agents
-  # exclude: [unwanted-agent]              # Deploy all EXCEPT these
+  include: [researcher, tech-lead]       # Deploy ONLY these agents
+  # exclude: [unwanted-agent]            # Deploy all EXCEPT these
 ```
 
 ### Removing Agents
@@ -257,6 +212,7 @@ When an agent is removed or deselected, its deployed file on the host machine be
 ```bash
 python build/compile.py deploy --machine <machine-name> --prune
 ```
+
 
 ---
 

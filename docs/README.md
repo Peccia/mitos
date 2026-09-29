@@ -11,8 +11,9 @@ Use this Documentation Map to navigate the guides and references:
 Understand how Mitos models your registry, handles tool configurations, and manages deployment states:
 
 - **[Overlay configuration reference](../registry/README.md)** — Detailed field-by-field reference for project manifests (`projects/<slug>.yaml`), machine profiles (`machines/<name>.yaml`), and server overrides (`connections/servers.yaml`).
+- **[Personal context tree](context-tree.md)** — One context, every harness: deploying personal knowledge trees across workstations and harnesses.
 - **[Managing state & drift](managing-state.md)** — How `deploy`, `adopt`, and `harvest` work under the hood, and how to resolve drift and conflicts.
-- **[The tree-node header taxonomy](agents-md-structure.md)** — The reserved-section contract (`## Navigation`, `## Tools`, `## Skills`, connection sections) every deployed `AGENTS.md` follows, and the plan-time lint that enforces it.
+- **[The tree-node header taxonomy](context-tree-structure.md)** — The reserved-section contract (`## Navigation`, `## Tools`, `## Skills`, connection sections) every deployed `AGENTS.md` follows, and the plan-time lint that enforces it.
 - **[Syncing across machines](lan-sync.md)** — Setting up `mitos sync` to carry your private context overlay across your fleet using git.
 
 ---

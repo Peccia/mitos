@@ -25,12 +25,11 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 │                               {{user_*}} placeholders every deployed context file uses
 │
 ├── identity/                ← who you are; overrides core personas by filename
-│   ├── who-i-am.md          ← from `mitos init` (your name + how to be addressed)
-│   └── session-protocol.md  ← from your chosen org template (session protocol + routing)
+│   └── who-i-am.md          ← from `mitos init` (your name + how to be addressed)
 ├── context/                 ← your domain / project prose (background the agents read)
 │   └── projects/<slug>.md
 ├── skills/                  ← your private or overriding skills
-│   └── org/SKILL.md
+│   └── <name>/SKILL.md
 ├── prompts/                 ← harness-agnostic reusable prompts
 │   └── <name>.md
 ├── projects/                ← project manifests (stage, repo, document_store)
@@ -49,7 +48,7 @@ registry/local/              ← repo root  (.git lives HERE, not at the project
 | Folder | Holds | Overrides the core by… |
 |---|---|---|
 | `user.yaml` | Field-level merged over the core's neutral defaults: identity (`given_name`/`full_name`/`email`/`location`) | field key |
-| `identity/` | Personas and your "about me" — name, form of address, session protocol | filename (e.g. `who-i-am.md`, `session-protocol.md`) |
+| `identity/` | Personas and your "about me" — name, form of address | filename (e.g. `who-i-am.md`) |
 | `context/` | Domain and project background prose the agents read | partial path |
 | `skills/<name>/SKILL.md` | Your own skills, or overrides of a core skill | skill name |
 | `prompts/<name>.md` | Harness-agnostic reusable prompts (the substrate every harness understands) | prompt name |
@@ -89,6 +88,9 @@ default (`given_name: User`, `full_name: Mitos User`, `email: user@example.com`,
 outside this exact set is a hard error at compile time — the schema is intentionally
 closed (`loader.KNOWN_USER_KEYS`).
 
+> [!WARNING]
+> **Retired keys:** Legacy agent flag and `default_deliverables` in `user.yaml` are retired. If present in an existing configuration, the loader emits a warning naming the line to delete. The planning harness now lives in a separate repository and consumes Mitos context exports, while deliverables contracts are managed outside Mitos.
+
 The four identity keys are **strings**.
 
 These values are the ONLY source of truth for five placeholders any core (or your own)
@@ -104,11 +106,10 @@ Four additional tokens are machine-scoped rather than user-scoped. Three resolve
 deploying machine's `paths:` in `machines/<name>.yaml`; `{{connection}}` resolves from its
 `document_store:` instead:
 
-- `{{project_root}}` — the agent tree root: `assistant_root`, else
-  `agentic_context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
+- `{{project_root}}` — the context tree root: `context_root`, else `projects_root`. Lets always-on prose (`SOUL.md`'s
   session routing, the `new-session` skill) name the concrete directory to navigate to
   (e.g. `~/MitosAgent`) instead of an abstract key name.
-- `{{skills_root}}` — where deployed skills live: `<assistant_root>/skills`. Lets `SOUL.md`
+- `{{skills_root}}` — where deployed skills live: `<context_root>/skills`. Lets `SOUL.md`
   explain the skill mechanism with a real path (a skill is an instruction file to read,
   not a callable tool — models otherwise look for a tool named after the skill and
   declare it unavailable).
@@ -161,7 +162,7 @@ context:                      # label → registry-relative partial (must resolv
 | `example` | no | Set `true` on shipped sample projects (e.g. `example-project.yaml`). Example projects step aside automatically once you add your own overlay projects. Must be a boolean if set. |
 | `stage` | **yes** | Lifecycle phase — must be exactly one of `ideation`, `speccing`, `build`, `maintain`. Anything else aborts compile. |
 | `hidden` | no | Set `true` to keep a finished or parked project out of every deployed tree — no tree node, no roster entry, no clone, no per-project `AGENTS.md`/`CLAUDE.md`, on any machine. Its manifest and `graph/<slug>.jsonld` still load and query fine (`mitos graph`, the console); only planning is blind to it. Deployed files a prior deploy left behind become ordinary orphans (invariant #9 — `deploy --prune` removes them). Must be a boolean if set. Deliberately separate from `stage`: a `maintain` project still needs its context deployed, so stage can't double as visibility. |
-| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `agents-md`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **agentic machines** (`agents-md` also in targets), it clones into `<agentic_context_root>/Projects/<slug>/<basename>` instead. |
+| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `context-tree`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **context-tree machines** (`context-tree` also in targets), it clones into `<context_root>/Projects/<slug>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
 | `exclude_folders` | no | List of folder **names or IDs** to skip during `mitos connect` staging. Merged with any `exclude_folders` defined on the server in `connections/servers.yaml` (server entries first, then project entries, deduped). |
@@ -183,16 +184,17 @@ but each box deploys only its own with `deploy --machine <name>`.
 ```yaml
 name: windows-main            # unique; this is the `deploy --machine` target
 os: windows                   # windows | linux | macos — deploy REFUSES on a host whose OS differs
-targets: [claude-code, antigravity, claude-app, agents-md]   # which adapters emit here
+targets: [claude-code, antigravity, claude-app, context-tree]   # which adapters emit here
 document_store: gws           # optional — the connection(s) THIS box has; gates all MCP wiring
 paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
-  agentic_context_root: "C:/Mitos"      # where the graph-derived AGENTS.md roster + Projects/<slug>/ land
+  context_root: "C:/Mitos"              # where the context tree (AGENTS.md roster + Projects/<slug>/) lands
   antigravity_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/config/skills"
   claude_skills_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
+  claude_code_skills: "~/.claude/skills"
+  claude_code_agents: "~/.claude/agents"
   gws_env: ".local/gws.env"             # <server>_env → where a merged MCP env file is written
-  assistant_root: "~/MitosAgent"        # the operating AGENTS.md tree (agents-md target)
 sync:                                   # optional — consumed only by `mitos sync`, never the compiler
   backend: git                          # git is the only backend (may be omitted)
   git:
@@ -206,7 +208,7 @@ sync:                                   # optional — consumed only by `mitos s
 |---|---|---|
 | `name` | **yes** | Unique host identity and the `deploy --machine` selector. Two files claiming one name are refused (no silent shadowing). |
 | `os` | **yes (in practice)** | `windows` \| `linux` \| `macos` (matched against `sys.platform` — a Mac reports `macos`, not `darwin`). A real `deploy` **refuses** when the host OS doesn't match — rehearse a cross-machine deploy with `--root <dir>` instead. |
-| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `agents-md`, `context-tree`); an unknown one aborts compile. |
+| `targets` | **yes** | Which tool adapters emit on this box. Every entry must be a known target (`claude-code`, `antigravity`, `claude-app`, `context-tree`); an unknown target warns and causes this machine to be skipped. |
 | `paths` | **yes** | Map of named locations the targets write to (see the key list below). Values use **forward slashes** even on Windows — an unescaped `\` shows up as a control character and is rejected with a pointed error. |
 | `document_store` | no | The MCP connection(s) this box actually has — a server key from `connections/servers.yaml`, the literal `none`, or a list (same field and validation as a project's). It is the single switch every connection-bound output hangs off: with it unset (the default, and what all shipped templates do) the box gets **no** MCP server merged into any harness config, no generated connection section, and no skill declaring `requires_server:` — so a brand-new machine never receives instructions for tools nobody wired. `deploy` reports each skill it withheld and names this field as the fix. Add it once the server is really running (see [`docs/connectors/`](../docs/connectors/)). |
 | `example` | no | `true` marks a shipped *template* profile (skipped by compile once a real machine exists, refused by a real deploy). Must be a bool if present. Your own profiles omit it. |
@@ -217,35 +219,32 @@ sync:                                   # optional — consumed only by `mitos s
 | Path key | Used by | Points at |
 |---|---|---|
 | `projects_root` | all | Base directory that relative project `local_path` entries resolve under. |
-| `agentic_context_root` | claude-code (agents-md machines) | Root of the Agentic Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on machines with **`agents-md`** in `targets`. On pure workstation machines (without `agents-md`), project AGENTS.md files deploy directly to each project's `local_path` instead — `agentic_context_root` is not required. |
+| `context_root` | claude-code (context-tree machines) | Root of the Context tree (graph-derived `AGENTS.md` roster + `Projects/<slug>/` indexes). Used only on machines with **`context-tree`** in `targets`. On pure workstation machines (without `context-tree`), project AGENTS.md files deploy directly to each project's `local_path` instead — `context_root` is not required. |
 | `antigravity_config` | antigravity | Antigravity config dir (`mcp_config.json` + `config.json`) — also shared with the classic Gemini CLI it succeeds, until that CLI retires 2026-06-18. |
 | `antigravity_skills` | antigravity | Antigravity's **global** skills dir (`~/.gemini/config/skills/`, per the official Antigravity 2.0 docs). Skills deploy as Agent Skills standard folders (`<name>/SKILL.md` + supporting files). `scope: global` (default) skills targeting `antigravity` deploy here; `scope: project` skills deploy to `<project>/.agents/skills/` (Antigravity's workspace-level location) instead — see [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project). |
 | `claude_code_skills` | claude-code | Claude Code's personal/user-level skill dir (`~/.claude/skills/`, [confirmed](https://code.claude.com/docs/en/skills)). `scope: global` (default) skills targeting `claude-code` deploy here; `scope: project` skills deploy only to the projects that bind them instead. |
+| `claude_code_agents` | claude-code | Claude Code's personal/user-level agents dir (`~/.claude/agents/`). Subagents author in `registry/agents/<name>.md` deploy here. |
 | `claude_skills_staging` | claude-app | Where skill `.zip` bundles are staged for **manual** upload to claude.ai (Customize > Skills; syncs to web + Desktop). claude-app has no project-scoped surface — it ignores a skill's `scope` and always stages every skill it targets. |
 | `claude_desktop_config` | claude-app | Full path to `claude_desktop_config.json`. Set ONLY when a LAN/HTTP MCP server must reach Desktop (the https-only Connectors UI can't add it). Writes an `npx mcp-remote` bridge — **requires Node.js/npx**. Use the `~` form; MSIX installs live under `~/AppData/Local/Packages/<family>/LocalCache/...`. |
 | `<server>_env` | deploy (connections lane) | Destination for a merged MCP env file, e.g. `gws_env: ".local/gws.env"`. Secrets are merged in here at deploy time, never committed. |
 
-#### Workstation vs Agentic: two claude-code deploy modes
+#### Workstation vs Context-tree: two claude-code deploy modes
 
-The `claude-code` target behaves differently depending on whether `agents-md` is also in the machine's `targets`:
+The `claude-code` target behaves differently depending on whether `context-tree` is also in the machine's `targets`:
 
 | Machine type | `targets` includes | Project AGENTS.md lands at | Repo clones into |
 |---|---|---|---|
-| **Workstation** | `claude-code` (no `agents-md`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
-| **Agentic** | `claude-code` + `agents-md` | `<agentic_context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<agentic_context_root>/Projects/<slug>/<repo_basename>/` |
-
-> [!NOTE]
-> "Agentic" in this table names the **deploy mode** (lightweight index vs. full inline
-> doc context).
+| **Workstation** | `claude-code` (no `context-tree`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
+| **Context-tree** | `claude-code` + `context-tree` | `<context_root>/Projects/<slug>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<context_root>/Projects/<slug>/<repo_basename>/` |
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 
-- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `agents-md` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
+- **`<local_path>/AGENTS.md`** — the project's context prose (from `context.assistant` in the manifest, resolved under the `context-tree` audience) followed by the document index. The index is headed by the bound document store's `description` (the `document_store` server in `connections/servers.yaml`; falls back to "<project name> — documents" when no store is set), then one concise line per document (title, document ID, modified date, plus description and tags when present), grouped by effort. No URLs — the document store resolves by ID. The prose section is `protect`-policy (hand-edits drift-capture to inbox); the generated doc block is silently regenerated every deploy.
 - **`<local_path>/CLAUDE.md`** — a thin `@AGENTS.md` stub so Claude Code auto-loads the full context above.
 
-A workstation machine does **not** need `agentic_context_root`. The `local_path` in the project manifest is what activates this for each project.
+A workstation machine does **not** need `context_root`. The `local_path` in the project manifest is what activates this for each project.
 
-The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `agents-md` audience (the same one the agentic tree uses), so a partial with `audience: [agents-md]` is visible in both places without any frontmatter change.
+The context partial's `audience` does **not** need to include `claude-code` — the workstation deploy reads the partial under the `context-tree` audience (the same one the context tree uses), so a partial with `audience: [context-tree]` is visible in both places without any frontmatter change.
 
 ### MCP server definitions — `connections/servers.yaml`
 
@@ -330,7 +329,7 @@ ever overwrite a file you already have**, so it's safe to run over existing data
 
 | You have… | Pick | What happens |
 |---|---|---|
-| Nothing yet | **[1] Scaffold a fresh one** | Seeds a starter overlay from your name + an org template. If some files already exist, only the *missing* pieces are added. |
+| Nothing yet | **[1] Scaffold a fresh one** | Seeds a starter overlay from your name. If some files already exist, only the *missing* pieces are added. |
 | An overlay on a **hub** (another machine's `mitos-local`) | **[2] Pull from a git hub** | Clones your real files into `registry/local/` (wraps `sync clone`), installs the auto-deploy hook, and captures this machine's sync config. **Your existing files come down as-is — nothing is generated.** |
 | Custom files **already in `registry/local/`** | **[3] Use them as-is** | Finishes the install around your files untouched, and optionally publishes them to a hub (wraps `sync init`). |
 
@@ -346,7 +345,7 @@ Nothing here is a black box: most updates are just edits to the files mapped in
 
 **Re-run `mitos init` — it's safe and idempotent.** Running it again over an existing overlay
 **never overwrites a file you already have**; it only fills in *missing* pieces. Use it to pick up a
-scaffold tree you skipped the first time, or to add an org template you didn't seed. It is the one
+scaffold tree you skipped the first time, or to configure a machine target you didn't add. It is the one
 "update" path that's a guided prompt rather than a file edit.
 
 **Dedicated verbs for the structured additions:**
