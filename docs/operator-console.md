@@ -73,8 +73,11 @@ When a self-improving tool refines its own copy of a skill, or when you edit a d
   - **Acceptable**: Plain Markdown prose edits (e.g. edits to a skill body or identity partial) can be accepted directly. Accepting updates your registry overlay (`registry/local/`) and marks the candidate as resolved.
   - **Unacceptable**: Generated configurations (like `mcp_config.json` or `config.json` permissions) or structural files (like project YAML manifests) must be merged manually in `connections/servers.yaml` or project manifests. The console will display a clear message indicating where the manual change must land.
 
+- **Supporting files**: A skill candidate that carries a replacement file set lists each added, changed or removed file with its own diff, beneath the `SKILL.md` diff.
+- **Machine candidates**: A `kind: machine` candidate (from the Permissions view) diffs the whole profile; accepting rewrites only its `skills:` block.
+
 ### 📜 Staleness & Decisions
-- **Stale Detection**: If you edit your registry directly while the console is open, it automatically flags inbox candidates as `stale` if they were captured against an older base hash.
+- **Stale Detection**: If you edit your registry directly while the console is open, it automatically flags inbox candidates as `stale` if they were captured against an older base hash. For a candidate's supporting files that means the files **on disk** at that moment — a script you edited by hand after proposing flags the candidate rather than being overwritten on Accept.
 - **Procedural Memory**: When you Accept or Reject a candidate, the decision (including an optional text explanation) is appended to `registry/local/inbox/decisions.jsonl`. This log serves as historical procedural metadata for future agent iterations.
 
 ---
@@ -213,14 +216,16 @@ provenance, so they sit there as a single compact line rather than a grid of car
 - **Edit prompt →** (card or drawer): Opens the skill's body and its authoring metadata —
   description, version, category, and target checkboxes — in the Contextual Editor (Prompt
   Library). Saving proposes a `kind: drift` candidate into the Inbox. A skill's *structural*
-  placement — its supporting files — is edited in the drawer (below), not here.
-- **Supporting Files**: In the drawer, a skill's `examples/` and `scripts/` files
-  (deployed alongside `SKILL.md` and bundled into claude.ai zips) are listed inline, each
-  editable or deletable, with an **Upload file(s)** button that reads one or more UTF-8 text
-  files and auto-routes each to `scripts/` (`.py`/`.js`/`.sh`/`.ps1`) or `examples/` (everything
-  else); binary files are rejected with a warning. This section proposes the **full replacement
-  set** on save — leave it untouched to propose no change to existing files; explicitly clear
-  every entry to delete them all on accept.
+  placement — its supporting files — is edited in the full-size editor (below), not here.
+- **Edit files →** (drawer): Opens the **full-size file editor** — a file list beside one editor,
+  listing `SKILL.md` (its body) and every supporting file (`examples/`, `scripts/`, … deployed
+  alongside `SKILL.md` and bundled into claude.ai zips). Switching files keeps what you typed.
+  **+ Add file** takes a path under one of those folders; **Upload…** reads UTF-8 text files and
+  auto-routes each to `scripts/` (`.py`/`.js`/`.sh`/`.ps1`) or `examples/` (everything else);
+  binary files are rejected with a warning. **Save to inbox** proposes `SKILL.md` and the **full
+  replacement set** of supporting files as one candidate — leave the files untouched to propose
+  no change to them; delete every one to remove them all on accept. **Revert** discards the
+  edits; **Close** goes back to the skill and keeps them.
 - **+ New skill**: A one-screen form — name (slug), description, category, target checkboxes,
   and a Supporting Files editor — feeding into the
   Contextual Editor for the body. Creating proposes a `kind: new` candidate; nothing is written to
@@ -237,13 +242,32 @@ On the Skills tab, the **Context Tree** button toggles a visual browser for mach
 - **Machine Selector**: Switch between machines configured with `context-tree` to see their planned directory trees.
 - **Tree Explorer**: Inspect directory branches (`AGENTS.md` root, `Projects/`, `Assistant/`), view rendered file contents, and verify navigation hierarchies before deploying.
 
+### 🔑 Permissions in the Console
+
+The **Permissions** button (beside **Context Tree**) shows what reaches each machine, and why. The
+left list switches between **Machines**, **Targets**, **Agents** and **Skills** (with counts, one
+filter); the right panel describes the selection. Reach and reason come from the same gate a deploy
+uses (`planner.skill_gate`), so the view cannot say something a deploy does not do — after a hand
+edit to `registry/local/`, use **Reload from disk**.
+
+- **Machine**: per target, every skill that targets it, with ✓/✗ and the reason (*excluded by this
+  machine's `skills:` exclude list*, *needs the `gws` connection…*), plus the machine's agents.
+- **Target / Agent / Skill**: who runs it, who targets it, and its scope, bound projects and required
+  connection — each with a link to the editor that owns it (**Edit agent**, **Edit targets**,
+  **Edit scope**, a project chip → its properties).
+- **Curating a machine**: on a machine with a profile under `registry/local/machines/`, each skill
+  row has a deploy checkbox. Changes are a draft — marked with a dot, kept when you leave the view,
+  discarded with **Revert** — and **Save to inbox** proposes a `kind: machine` candidate that
+  rewrites only the profile's `skills:` block. `claude-app` (you choose at upload time), skills gated
+  on a missing connection, and example machines have no checkbox.
+
 ### 🤖 Agents in the Console
 
 The Skills toolbar includes an **Agents** view toggle to manage subagent personas across supported harnesses:
 
 - **Agents View & Grid**: Clicking **Agents** swaps the grid from skills to agent cards, sharing the search input to filter agents by name, description, or goal.
 - **Agent Cards**: Each card displays the agent's name, description, **Goal** (intended outcome), assigned skills (each clickable to view that skill's card and drawer), and the machines where the agent is active.
-- **+ New agent / Edit agent**: Forms providing inputs for portable fields (`name`, `description`, `goal`, `skills`) and named harness blocks (e.g. `claude-code: {tools: [...], model: ...}`).
+- **+ New agent / Edit agent**: Forms providing inputs for portable fields (`name`, `description`, `goal`, `skills`) and named harness blocks (e.g. `claude-code: {tools: [...], model: ...}`). **Edit agent** hosts the same full-size editor as a skill's files, listing the agent's one `<name>.md`; **Save agent**, **Revert** (restores the registry copy) and **Cancel** (keeps your draft).
 - **Skill Compatibility Warning**: The skills picker checks whether selected skills deploy to all targeted harnesses and displays inline warnings if a chosen skill is missing from any target.
 - **Draft Preservation**: Like skill forms, agent forms maintain in-memory drafts that survive re-renders and tab switches until saved or cancelled.
 - **Inbox Proposal Flow**: Submitting writes a `kind: new` or `kind: drift` candidate to `registry/local/inbox/`. Once proposed, review the candidate's diff in the **Inbox** tab and click **Accept** to write or update `registry/local/agents/<name>.md`.
@@ -257,7 +281,7 @@ The **Prompt Library** acts as a scratchpad and library for one-shot chat sessio
 - **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Like the Skills tab, the Library opens **scoped to your machines** — a coding-harness box isn't handed context-tree partials (`agentic-root.md`, `projects-index.md`, `operating-rules.md`) if it doesn't deploy them; the **All** chip reveals them. The scope pair only appears when something is actually being withheld. Kind/category chips reflect what the active scope contains, so a chip never yields an empty list. A prompt with no `targets:` is console-only by design and always shows. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
 - **Find anything (Ctrl/⌘K)**: Opens a command palette that searches every skill, prompt, and partial at once, from any tab — pick a result to jump straight to it in the Prompt Library.
 - **Favorites**: Toggle the star icon to pin a skill or prompt to your favorites list (drag to reorder, or use **Manage** for batch-unpin). Pins persist to `registry/local/prompt-favorites.yaml` and sync across sessions/devices.
-- **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal.
+- **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal. Write **`{{#name}}`** instead of `{{name}}` for a **multi-line** field (Enter types a newline; copy with the button): both forms share one field and fill every occurrence. `{{#name}}` is console-only — a deploy never matches it, so a deployed prompt keeps it as written.
 - **Contextual Editor**: Select an item to edit it — a line-numbered textarea with a markdown toolbar (Bold/Italic/Code/Link/Heading/List) and a sanitized live preview toggle.
 - **+ New prompt**: Click the button above the prompt list to scaffold a brand-new prompt. Fill in its name, description, version, category, target checkboxes, and body. Creating it proposes a `kind: new` candidate; nothing is written to `registry/` until you Accept it in the Inbox, and it always lands in your private overlay (`registry/local/prompts/<name>.md`). This is for *brand-new* prompts, whereas **Save to inbox** edits an *existing* one.
 - **Save to inbox**: If you refine an existing prompt and want to save it as a permanent registry asset, type a short reasoning note and click **Save to inbox**. It will land in the **Inbox** tab as a new candidate for review.

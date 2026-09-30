@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Console: a full-size file editor for a skill's `SKILL.md` and supporting files (Skills → Properties → **Edit files →**), and for an agent's definition. Inbox cards show each supporting file's diff, and a candidate is flagged stale if a supporting file changed on disk after you proposed it.
+- Console: a **Permissions** view on the Skills tab showing, per machine, which skills and agents reach it and why. On a machine with a profile under `registry/local/machines/` you can curate its `skills:` per target; saving proposes a `kind: machine` candidate that rewrites only that block.
+- Console: `{{#name}}` in a prompt asks for a multi-line field when you copy it. A deploy leaves it as written.
+
+### Changed
+- The skill drawer's Supporting Files panel moved into **Edit files →**; the agent form now hosts the same full-size editor and gains **Revert**.
+
 ### Removed
 - Removed the `new-session` skill. Its steps were a copy of the Session Protocol that a planning harness supplies itself. The context-tree operating rules no longer tell the agent to run a skill at a topic shift. A coding-harness machine with no `document_store:` now deploys no core skills.
 - Removed the retired-key warning for `mitos_agent` in `user.yaml`. A leftover `mitos_agent:` line now stops the load with an "unknown key" error; delete the line.
