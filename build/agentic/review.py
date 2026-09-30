@@ -3039,7 +3039,15 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
             if self.path == "/api/agents":
                 return self._json(200, agents_index(holder["reg"]))
             if self.path == "/api/permissions":
-                return self._json(200, permissions_index(holder["reg"]))
+                # Derived from the loaded registry alone, and a registry is replaced (never
+                # mutated) on reload or after an accept that changed a file — so the answer
+                # is memoised against the registry object itself. The walk is machines x
+                # targets x skills: ~200 ms at 5x the current fleet, ~nothing once cached.
+                cached = holder.get("permissions")
+                if cached is None or cached[0] is not holder["reg"]:
+                    cached = (holder["reg"], permissions_index(holder["reg"]))
+                    holder["permissions"] = cached
+                return self._json(200, cached[1])
             if self.path.startswith("/api/org/tree"):
                 from urllib.parse import parse_qs, urlsplit
                 q = parse_qs(urlsplit(self.path).query)

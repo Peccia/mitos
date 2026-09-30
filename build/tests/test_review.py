@@ -3487,3 +3487,43 @@ def test_machine_curation_keeps_an_empty_include_list_because_it_means_deploy_no
     block, err = _machine_skills_block({"claude-code": {"include": [], "exclude": []}, "antigravity": {"exclude": []}})
     assert err is None
     assert block == {"claude-code": {"include": []}}               # empty exclude / empty block dropped
+
+
+def test_permissions_endpoint_round_trip_and_cache_follows_the_reloaded_registry():
+    """Over HTTP: GET /api/permissions, propose a curation, accept it, and the next GET
+    reflects it. The answer is memoised per registry object, so this only holds if an accept
+    that changed a file replaces the registry (the handler's reload) and so drops the cache."""
+    import json
+    import threading
+    import urllib.request
+    from agentic import review
+
+    treg, _tmp, _f = _machine_rig()
+    skill = _curation_skill(treg)
+    server = review.make_server(treg, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def call(path, body=None):
+            req = urllib.request.Request(
+                base + path, data=None if body is None else json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        def reach():
+            idx = call("/api/permissions")
+            return next(r for r in idx["skill_reach"] if r["machine"] == "ws-main"
+                        and r["target"] == "claude-code" and r["skill"] == skill)["reaches"]
+
+        assert reach() is True and reach() is True                      # second hit is the cached one
+        out = call("/api/machines/curation", {"machine": "ws-main",
+                                              "skills": {"claude-code": {"exclude": [skill]}}})
+        assert out["ok"], out
+        assert reach() is True                                          # proposing changes nothing
+        assert call("/api/decide", {"id": out["id"], "decision": "accept"})["ok"]
+        assert reach() is False                                         # accept -> reload -> fresh answer
+    finally:
+        server.shutdown()
+        server.server_close()
