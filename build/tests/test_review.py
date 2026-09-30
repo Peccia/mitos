@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 
+import yaml
+
 from conftest import loader, reg, _inbox, _plant_candidate, _temp_registry
 
 
@@ -3058,3 +3060,430 @@ def test_upgrade_path_unknown_target_then_accept_seed():
     outputs = planner.plan_machine(loaded_fixed, "rig")
     assert len(outputs) > 0
 
+
+
+# ── {{#name}}: multi-line one-shot prompt inputs ─────────────────────────────
+
+def test_app_js_prompt_token_regex_accepts_optional_hash_and_reports_multiline():
+    src = _ui_src("app.js")
+    assert r"const PROMPT_TOKEN_RE = /\{\{(#?)(\w+)\}\}/g;" in src
+    tokens = src[src.index("function promptTokens"):src.index("function fillPrompt")]
+    assert "multiline" in tokens and 'm[1] === "#"' in tokens
+    # both forms fill from ONE value, and a blank value leaves the token as written
+    fill = src[src.index("function fillPrompt"):src.index("function copyPrompt")]
+    assert "(whole, _hash, tok)" in fill and "return v ? v : whole;" in fill
+
+
+def test_app_js_multiline_prompt_input_has_no_enter_handler():
+    """Enter must type a newline in a multi-line field and copy from a single-line one."""
+    src = _ui_src("app.js")
+    fn = src[src.index("function openPromptInputs"):]
+    fn = fn[:fn.index("\n}\n")]
+    multi, single = fn.split("} else {", 1)
+    assert 'el("textarea", "prompt-input-field multiline")' in multi
+    assert "onkeydown" not in multi
+    assert 'e.key === "Enter"' in single and "go();" in single
+    assert "Ctrl" not in fn and "metaKey" not in fn     # no copy shortcut (ARB-09)
+    assert ".prompt-input-field.multiline" in _ui_src("style.css")
+
+
+# ── full-size file editor: supporting-file diffs, on-disk staleness, workspace scans ──
+
+def _edit_script_rig():
+    """A skill with two supporting files, accepted into a temp registry's overlay."""
+    from agentic.review import decide, propose_new_skill
+    treg, tmp = _temp_registry()
+    out = propose_new_skill(
+        treg, "ws-skill", {"targets": ["overlay-harness"], "description": "d"}, "body",
+        resources={"scripts/run.sh": "echo one\n", "examples/a.md": "a\n"})
+    assert out["ok"], out
+    assert decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    treg = loader.load(tmp)
+    script = tmp / "registry" / "local" / "skills" / "ws-skill" / "scripts" / "run.sh"
+    return treg, tmp, treg.skills["ws-skill"], script
+
+
+def test_skill_propose_with_edited_script_names_it_as_changed_and_leaves_disk_alone():
+    from agentic.review import decide, load_candidates, propose_meta_edit
+
+    treg, tmp, skill, script = _edit_script_rig()
+    out = propose_meta_edit(treg, "skill", skill.name, {}, skill.body, "",
+                            resources={"scripts/run.sh": "echo two\n", "examples/a.md": "a\n"})
+    assert out["ok"], out
+    assert script.read_text(encoding="utf-8") == "echo one\n"        # nothing written yet
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert [(r["path"], r["status"]) for r in cand["resource_changes"]] == \
+        [("scripts/run.sh", "changed")]                                # changed files only
+    diff = cand["resource_changes"][0]["diff"]
+    assert any(r["l"] == "echo one" and r["r"] == "echo two" for r in diff)
+    assert decide(loader.load(tmp), out["id"], "accept", "")["ok"]
+    assert script.read_text(encoding="utf-8") == "echo two\n"
+
+
+def test_resource_changes_report_added_and_removed_files():
+    from agentic.review import load_candidates, propose_meta_edit
+
+    treg, _tmp, skill, _script = _edit_script_rig()
+    out = propose_meta_edit(treg, "skill", skill.name, {}, skill.body, "",
+                            resources={"scripts/run.sh": "echo one\n", "templates/t.md": "t\n"})
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert {(r["path"], r["status"]) for r in cand["resource_changes"]} == \
+        {("examples/a.md", "removed"), ("templates/t.md", "added")}
+
+
+def test_supporting_file_edited_on_disk_after_propose_is_stale_even_when_skill_md_is_not():
+    """ARCH-02: `_sync_skill_resources` replaces the resource dirs wholesale on accept, so a
+    file changed on disk after propose must flag the candidate — against the DISK, not the
+    registry the console loaded at startup (`treg` below is never reloaded)."""
+    from agentic.review import _stale, decide, load_candidates, propose_meta_edit
+
+    treg, tmp, skill, script = _edit_script_rig()
+    out = propose_meta_edit(treg, "skill", skill.name, {}, skill.body, "",
+                            resources={"scripts/run.sh": "echo two\n", "examples/a.md": "a\n"})
+    assert out["ok"], out
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert cand["stale"] is False
+    script.write_text("echo edited by hand\n", encoding="utf-8")        # external edit
+    meta = yaml.safe_load((loader.inbox_dir(treg) / out["id"] / "meta.yaml").read_text(encoding="utf-8"))
+    assert _stale(treg, meta) is True
+    refused = decide(treg, out["id"], "accept", "")
+    assert not refused["ok"] and refused.get("stale") is True
+    assert script.read_text(encoding="utf-8") == "echo edited by hand\n"
+    assert decide(treg, out["id"], "accept", "", force=True)["ok"]
+    assert script.read_text(encoding="utf-8") == "echo two\n"
+
+
+def test_propose_right_after_an_external_disk_edit_is_not_stale():
+    """The base comes from disk at propose time too, so a console that has been running
+    while a file changed does not report a false stale on its own fresh candidate."""
+    from agentic.review import _stale, propose_meta_edit
+
+    treg, _tmp, skill, script = _edit_script_rig()
+    script.write_text("echo edited before propose\n", encoding="utf-8")
+    out = propose_meta_edit(treg, "skill", skill.name, {}, skill.body, "",
+                            resources={"scripts/run.sh": "echo two\n", "examples/a.md": "a\n"})
+    meta = yaml.safe_load((loader.inbox_dir(treg) / out["id"] / "meta.yaml").read_text(encoding="utf-8"))
+    assert _stale(treg, meta) is False
+
+
+def _fn_src(src, start):
+    body = src[src.index(start):]
+    return body[:body.index("\n}\n")]
+
+
+def test_app_js_drawer_points_at_the_workspace_and_the_workspace_hides_fullscreen():
+    src = _ui_src("app.js")
+    assert "renderSkillFilesSection(s)" in _fn_src(src, "function renderSkillDrawer")   # one-line pointer
+    assert "Edit files →" in _fn_src(src, "function renderSkillFilesSection")
+    assert "buildResourceEditor" not in _fn_src(src, "function renderSkillFilesSection")
+    assert "hideFullscreen: true" in _fn_src(src, "function buildFileWorkspace")
+    assert "if (!opts.hideFullscreen)" in _fn_src(src, "function buildContextualEditor")
+
+
+def test_app_js_workspace_keeps_every_keystroke_in_the_hosts_drafts():
+    """Switching files rebuilds the editor, so nothing may live only in the textarea."""
+    src = _ui_src("app.js")
+    ws = _fn_src(src, "function buildFileWorkspace")
+    assert "opts.setText(path, value);" in ws
+    host = _fn_src(src, "function skillFilesWorkspace")
+    assert "drafts[key] = value;" in host and "setRes({ ...res(), [path]: value })" in host
+    assert "resourceDrafts[key] = next;" in host
+    assert 'skillFilesSelected = "SKILL.md";' in _fn_src(src, "function renderSkillFilesSection")
+    assert "skillFilesSelected = path;" in host
+
+
+def test_agent_edit_propose_leaves_the_definition_unchanged_until_accept():
+    from agentic import review
+
+    treg, tmp = _temp_registry()
+    adir = tmp / "registry" / "local" / "agents"
+    adir.mkdir(parents=True, exist_ok=True)
+    f = adir / "ws-agent.md"
+    f.write_text("---\nname: ws-agent\ndescription: d\ntargets: [overlay-harness]\n"
+                 "goal: g\nskills: [graph-bootstrap]\n---\n\n# Instructions\n\nOld.\n",
+                 encoding="utf-8")
+    treg = loader.load(tmp)
+    before = f.read_text(encoding="utf-8")
+    out = review.propose_meta_edit(
+        treg, "agent", "ws-agent",
+        {"description": "d", "targets": ["overlay-harness"], "goal": "g", "skills": ["graph-bootstrap"]},
+        "# Instructions\n\nNew.")
+    assert out["ok"], out
+    assert f.read_text(encoding="utf-8") == before
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    assert "New." in f.read_text(encoding="utf-8")
+
+
+def test_app_js_agent_form_saves_the_draft_not_the_textarea_and_can_revert():
+    src = _ui_src("app.js")
+    form = _fn_src(src, "function editAgentForm")
+    assert ".textarea.value" not in form                      # ARB-03: one source of truth
+    assert "body: draft.body," in form
+    assert "buildFileWorkspace(" in form
+    assert "delete agentEditDraft[agentName];" in form        # Revert
+    assert 'el("button", "reject", "Revert")' in form
+
+
+def test_app_js_workspace_upload_refuses_binary_and_candidate_card_lists_file_diffs():
+    src = _ui_src("app.js")
+    assert "looksBinary(text)" in _fn_src(src, "function buildFileWorkspace")
+    card = _fn_src(src, "function candidateCard")
+    assert "c.resource_changes" in card and "diffTable(rc.diff)" in card
+
+
+# ── Permissions: the shared skill gate, the index, and machine curation ──────────────
+
+_WS_MAIN = """# Workstation profile: comments like windows-main.yaml's
+name: ws-main
+os: windows
+targets: [claude-app, claude-code]
+paths:
+  projects_root: "C:/Projects"
+  claude_code_skills: "~/.claude/skills"   # the personal skills dir
+  claude_skills_staging: "~/ClaudeSkills"
+
+# NOTE: claude-app takes no `skills:` curation.
+sync:
+  git:
+    hub: "git@example.com:me/overlay.git"
+    branch: "main"
+"""
+
+
+def _machine_rig(text=_WS_MAIN, *, file_name="ws-main.yaml", eol="\n"):
+    """A temp registry with one real overlay machine (no document_store) beside `rig`."""
+    treg, tmp = _temp_registry()
+    folder = tmp / "registry" / "local" / "machines"
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / file_name
+    f.write_bytes(text.replace("\n", eol).encode("utf-8"))
+    # the public core ships only connection-bound skills; plant one a coding harness gets
+    sk = tmp / "registry" / "local" / "skills" / "ws-demo"
+    sk.mkdir(parents=True, exist_ok=True)
+    (sk / "SKILL.md").write_text(
+        "---\nname: ws-demo\ndescription: d\ntargets: [claude-app, claude-code]\n---\n\nBody.\n",
+        encoding="utf-8")
+    return loader.load(tmp), tmp, f
+
+
+def test_skill_gate_agrees_with_the_selection_deploy_uses():
+    """`_selected_skills` filters on `skill_gate`, so the two cannot drift: for every
+    machine shape below, a skill is selected exactly when its gate returns None."""
+    from agentic.planner import _selected_skills, skill_gate
+    from agentic import loader as lm
+
+    skills = sorted(reg.skills)
+    machines = [
+        {}, {"document_store": "gws"},
+        {"document_store": "gws", "skills": {"claude-code": {"exclude": [skills[0]]}}},
+        {"document_store": "gws", "skills": {"claude-code": {"include": [skills[-1], "gws"]}}},
+    ]
+    for tgt in ("claude-code", "antigravity", "claude-app"):
+        spec = {"include_target": tgt, **({"mode": "zip"} if tgt == "claude-app" else {})}
+        manual = lm.is_manual_skill_target({"skills": spec})
+        for m in machines:
+            curation = {} if manual else ((m.get("skills") or {}).get(tgt) or {})
+            stores = set(lm.document_stores(m.get("document_store")))
+            picked = {s.name for s in _selected_skills(reg, spec, m)}
+            gated = {n for n, sk in reg.skills.items()
+                     if skill_gate(sk, tgt, manual, curation, stores) is None}
+            assert picked == gated, (tgt, m)
+
+
+def test_permissions_index_states_reach_and_reason_for_every_relationship():
+    from agentic.review import permissions_index
+
+    treg, _tmp, _f = _machine_rig()
+    idx = permissions_index(treg)
+    assert {m["name"] for m in idx["machines"]} >= {"ws-main"}
+    assert "ws-main" in {m["name"] for m in idx["machines"] if m["editable"]}
+    # FR-4: a connection-bound skill does not reach a machine that never wired the store
+    row = next(r for r in idx["skill_reach"]
+               if r["machine"] == "ws-main" and r["target"] == "claude-code" and r["skill"] == "gws")
+    assert row["reaches"] is False and "gws" in row["reason"]
+    # CON-3: one row type per relationship
+    assert {"name", "manual", "project_surface"} <= set(idx["targets"][0])            # target
+    assert {"requires_server", "scope", "bound_projects"} <= set(idx["skills"][0])   # scope/projects
+    assert {"name", "targets", "skills"} <= set(idx["agents"][0]) if idx["agents"] else True  # agent
+    assert {"machine", "target", "skill", "reaches", "reason", "note", "curatable"} <= set(row)
+    assert "curation" in idx["machines"][0] and "document_stores" in idx["machines"][0]
+    if idx["agent_reach"]:
+        assert {"machine", "agent", "reaches", "reason"} <= set(idx["agent_reach"][0])
+
+
+def test_permissions_index_manual_target_rows_are_not_curatable():
+    """FR-8: claude-app stages a menu the operator picks from at upload time."""
+    from agentic.review import permissions_index
+
+    treg, _tmp, _f = _machine_rig()
+    rows = [r for r in permissions_index(treg)["skill_reach"]
+            if r["machine"] == "ws-main" and r["target"] == "claude-app"]
+    assert rows and all(r["curatable"] is False for r in rows)
+    code = [r for r in permissions_index(treg)["skill_reach"]
+            if r["machine"] == "ws-main" and r["target"] == "claude-code" and r["reaches"]]
+    assert code and all(r["curatable"] is True for r in code)
+
+
+def test_overlay_machine_file_is_found_by_name_not_file_name():
+    from agentic.review import _overlay_machine_file
+
+    treg, _tmp, f = _machine_rig(file_name="some-other-name.yaml")
+    assert _overlay_machine_file(treg, "ws-main") == f
+    assert _overlay_machine_file(treg, "rig") is None          # a core-layer profile
+    assert _overlay_machine_file(treg, "no-such-machine") is None
+
+
+def _curation_skill(treg):
+    return next(n for n in sorted(treg.skills) if "claude-code" in treg.skills[n].targets
+                and treg.skills[n].requires_server is None)
+
+
+def test_propose_machine_curation_builds_the_profile_and_leaves_disk_alone():
+    from agentic.review import load_candidates, propose_machine_curation
+
+    treg, _tmp, f = _machine_rig()
+    before = f.read_bytes()
+    skill = _curation_skill(treg)
+    out = propose_machine_curation(treg, "ws-main", {"claude-code": {"exclude": [skill]}}, "trim")
+    assert out["ok"], out
+    assert f.read_bytes() == before                              # nothing written yet
+    cand = next(c for c in load_candidates(treg) if c["id"] == out["id"])
+    assert cand["kind"] == "machine" and cand["stale"] is False and cand["acceptable"]
+    assert f"- {skill}" in cand["payload"] and "claude-code:" in cand["payload"]
+    assert "# Workstation profile" in cand["payload"]            # comments survive
+    assert any(r["t"] == "ins" for r in cand["diff"])
+
+
+def test_accepted_machine_curation_changes_only_the_skills_block():
+    """CON-2: every original line byte-identical, plus the `skills:` block — in the file's
+    own line ending (Windows profiles are CRLF)."""
+    from agentic.review import decide, propose_machine_curation
+
+    for eol in ("\n", "\r\n"):
+        treg, tmp, f = _machine_rig(eol=eol)
+        before = f.read_bytes()
+        skill = _curation_skill(treg)
+        out = propose_machine_curation(treg, "ws-main", {"claude-code": {"exclude": [skill]}})
+        assert out["ok"], out
+        res = decide(treg, out["id"], "accept", "")
+        assert res["ok"], res
+        after = f.read_bytes()
+        assert after.startswith(before.rstrip(b"\r\n")), "original bytes must be untouched"
+        added = after[len(before.rstrip(b"\r\n")):].decode("utf-8")
+        assert added.replace("\r\n", "\n").split() == ["skills:", "claude-code:", "exclude:", "-", skill]
+        assert (b"\r\n" in after) == (eol == "\r\n")
+        assert (b"\n" not in after.replace(b"\r\n", b"")) == (eol == "\r\n")
+        # the same profile, read back by the loader
+        assert loader.load(tmp).machines["ws-main"]["skills"] == {"claude-code": {"exclude": [skill]}}
+
+
+def test_machine_curation_accept_reports_the_change_and_the_reloaded_index_shows_it():
+    """ARB-01: `changed` is what makes the HTTP handler reload the registry, so the
+    Permissions view reflects an accepted curation without a manual Reload from disk."""
+    from agentic.review import decide, permissions_index, propose_machine_curation
+
+    treg, tmp, _f = _machine_rig()
+    skill = _curation_skill(treg)
+    out = propose_machine_curation(treg, "ws-main", {"claude-code": {"exclude": [skill]}})
+    res = decide(treg, out["id"], "accept", "")
+    assert res["changed"] == ["local/machines/ws-main.yaml"], res
+    row = next(r for r in permissions_index(loader.load(tmp))["skill_reach"]
+               if r["machine"] == "ws-main" and r["target"] == "claude-code" and r["skill"] == skill)
+    assert row["reaches"] is False and row["reason"].startswith("excluded by")
+
+
+def test_machine_curation_is_refused_where_it_cannot_apply():
+    from agentic.review import propose_machine_curation
+
+    treg, _tmp, f = _machine_rig()
+    before = f.read_bytes()
+    skill = _curation_skill(treg)
+    manual = propose_machine_curation(treg, "ws-main", {"claude-app": {"exclude": [skill]}})
+    assert not manual["ok"] and "claude-app" in manual["error"]
+    core_only = propose_machine_curation(treg, "rig", {"claude-code": {"exclude": [skill]}})
+    assert not core_only["ok"] and "no profile" in core_only["error"]
+    unknown = propose_machine_curation(treg, "ws-main", {"claude-code": {"exclude": ["no-such-skill"]}})
+    assert not unknown["ok"]
+    assert not propose_machine_curation(treg, "ws-main", {"claude-code": {"bogus": []}})["ok"]
+    assert not propose_machine_curation(treg, "ws-main", {})["ok"]          # nothing to change
+    assert f.read_bytes() == before
+
+
+def test_machine_candidate_goes_stale_when_the_profile_changes_on_disk():
+    from agentic.review import decide, propose_machine_curation
+
+    treg, _tmp, f = _machine_rig()
+    skill = _curation_skill(treg)
+    out = propose_machine_curation(treg, "ws-main", {"claude-code": {"exclude": [skill]}})
+    f.write_bytes(f.read_bytes() + b"# edited by hand\n")
+    refused = decide(treg, out["id"], "accept", "")
+    assert not refused["ok"] and refused.get("stale") is True
+
+
+def test_machine_curation_endpoint_is_routed():
+    src = (__import__("agentic.review", fromlist=["x"]).__file__)
+    text = open(src, encoding="utf-8").read()
+    assert '"/api/machines/curation"' in text and '"/api/permissions"' in text
+
+
+# ── Permissions view: source scans (the UI has no DOM test harness) ─────────────────
+
+def _perm_src():
+    src = _ui_src("app.js")
+    start = src.index("// ── Permissions: what reaches each machine, and why")
+    return src, src[start:src.index("function orgTreeNode")]
+
+
+def test_app_js_permissions_links_open_the_editors_that_own_each_relationship():
+    src, perm = _perm_src()
+    agent = perm[perm.index("function permAgentPanel"):perm.index("function permSkillPanel")]
+    assert "editingAgentName = name;" in agent                      # FR-5: the existing agent form
+    assert "openProjectEdit(slug)" in perm                          # project chip -> project editor
+    assert "function openProjectEdit(slug)" in src
+    assert "editBtn.onclick = () => openProjectEdit(g.slug);" in src   # the old button shares it
+    assert 'openContextualEditor({ kind: "skill", ident: name, returnTab: "skills" })' in perm
+    assert "openSkillDrawer(s, null)" in perm
+
+
+def test_app_js_permissions_view_has_an_exit_to_the_skills_grid():
+    _src, perm = _perm_src()
+    view = perm[perm.index("function renderPermissionsView"):perm.index("function permSkillRows")]
+    assert '"← Back to skills"' in view
+    assert "permissionsOpen = false; renderSkills();" in view
+
+
+def test_app_js_curation_drafts_survive_navigation_and_revert_clears_them():
+    src, perm = _perm_src()
+    assert "\nlet curationDrafts = {};" in src                      # module-level, not per render
+    machine = perm[perm.index("function permMachinePanel"):perm.index("function permChips")]
+    assert "delete curationDrafts[m.name];" in machine and '"Revert"' in machine
+    assert "curationDrafts[x.name]" in perm and 'aria-label", "Edited"' in perm   # the row's dot
+    assert "/api/machines/curation" in machine
+
+
+def test_app_js_permissions_reach_glyphs_are_hidden_from_assistive_tech_and_not_live_regions():
+    _src, perm = _perm_src()
+    glyph = perm[perm.index("function permGlyph"):perm.index("function renderPermissionsView")]
+    assert 'setAttribute("aria-hidden", "true")' in glyph
+    assert '"sr-only"' in glyph and '"Does not reach"' in glyph
+    assert 'role", "status"' not in perm and "aria-live" not in perm
+
+
+def test_app_js_permissions_groups_build_their_rows_lazily():
+    _src, perm = _perm_src()
+    machine = perm[perm.index("function permMachinePanel"):perm.index("function permChips")]
+    assert 'det.addEventListener("toggle"' in machine and "det.dataset.built" in machine
+
+
+def test_app_js_refresh_rereads_permissions_while_the_view_is_open():
+    src = _ui_src("app.js")
+    refresh = src[src.index("async function refresh(pre)"):src.index("async function reloadFromDisk")]
+    assert "if (permissionsOpen) await loadPermissions();" in refresh
+
+
+def test_machine_curation_keeps_an_empty_include_list_because_it_means_deploy_nothing():
+    from agentic.review import _machine_skills_block
+
+    block, err = _machine_skills_block({"claude-code": {"include": [], "exclude": []}, "antigravity": {"exclude": []}})
+    assert err is None
+    assert block == {"claude-code": {"include": []}}               # empty exclude / empty block dropped

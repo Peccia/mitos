@@ -599,3 +599,11 @@ def test_reverse_expand_round_trips_a_generic_path_token():
     expanded = "Data at /srv/store."
     assert render.reverse_expand_placeholders(r, original, expanded) == original
 
+
+
+def test_expand_never_matches_the_consoles_multiline_token_form():
+    """`{{#name}}` is console-only (it asks for a multi-line field when a prompt is copied).
+    `#` is not `\w`, so a deploy leaves it exactly as written, next to a substituted token."""
+    user = {"given_name": "Paul", "full_name": "", "email": "", "location": ""}
+    out = render.expand_placeholders(_FakeReg(user), "{{#notes}} for {{user_given_name}}")
+    assert out == "{{#notes}} for Paul"

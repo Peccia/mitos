@@ -1513,6 +1513,7 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
   font-size: .85rem;
 }
 .prompt-input-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.prompt-input-field.multiline { min-height: 8.5rem; resize: vertical; font-family: var(--mono); font-size: .8rem; }
 #prompt-input-footer {
   display: flex;
   justify-content: flex-end;
@@ -2252,6 +2253,84 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 }
 .new-skill-form .editor-wrap textarea { min-height: 10rem; }
 .new-skill-form h3 { margin: 0 0 .8rem; }
+
+/* Full-size file workspace: file list left, Contextual Editor filling the rest. The
+   editor is the same surface as everywhere else; only its height changes, so a file can
+   be read whole. Stacks below 720px (list above editor). */
+.file-workspace {
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: .8rem;
+  align-items: start;
+}
+.fw-side { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+.fw-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: calc(100vh - 16rem); overflow-y: auto;
+}
+.fw-row { display: flex; align-items: center; gap: 2px; border-radius: 6px; }
+.fw-row.active { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }
+.fw-file {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: .4rem;
+  text-align: left; border: none; background: transparent; color: var(--ink);
+  padding: .35rem .5rem; border-radius: 6px; cursor: pointer;
+  font-family: var(--mono); font-size: .78rem;
+}
+.fw-file:hover { background: var(--panel); }
+.fw-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fw-name { overflow-wrap: anywhere; }
+.fw-dot { color: var(--warn); font-size: .7rem; flex: none; }
+.fw-del { flex: none; }
+.fw-add { display: flex; flex-wrap: wrap; gap: .3rem; }
+.fw-add input[type="text"] { flex: 1 1 100%; min-width: 0; }
+.fw-pane { min-width: 0; }
+.fw-pane .ce-root .editor-toolbar { margin-top: 0; }
+/* Bounded, not content-sized: the gutter would otherwise stretch the textarea to the whole
+   file. The textarea scrolls inside it and the gutter follows (syncGutter). */
+.file-workspace .editor-wrap { height: max(22rem, calc(100vh - 18rem)); }
+.file-workspace .editor-wrap textarea { min-height: 0; height: 100%; resize: none; }
+/* Permissions view: segmented list left, selection panel right; stacks below 720px. */
+.permissions-view { display: flex; flex-direction: column; gap: .5rem; }
+.perm-cols { display: grid; grid-template-columns: 18rem minmax(0, 1fr); gap: 1rem; align-items: start; }
+.perm-left { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+.perm-seg { display: flex; flex-wrap: wrap; gap: .3rem; }
+.perm-list { display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 18rem); overflow-y: auto; }
+.perm-item {
+  display: flex; align-items: center; justify-content: space-between; gap: .4rem;
+  text-align: left; border: none; background: transparent; color: var(--ink);
+  padding: .35rem .5rem; border-radius: 6px; cursor: pointer; font-size: .82rem;
+}
+.perm-item:hover { background: var(--panel); }
+.perm-item.active { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }
+.perm-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.perm-item-name { overflow-wrap: anywhere; }
+.perm-tag { font-size: .7rem; flex: none; }
+.perm-panel { min-width: 0; display: flex; flex-direction: column; gap: .4rem; }
+.perm-panel h4, .perm-panel h5 { margin: .6rem 0 .2rem; }
+.perm-panel h4 { margin-top: 0; }
+.perm-group { border: 1px solid var(--line); border-radius: 6px; padding: .3rem .6rem; margin: .3rem 0; }
+.perm-group > summary { cursor: pointer; padding: .2rem 0; }
+.perm-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .15rem 0; font-size: .82rem; }
+.perm-nocb { display: inline-block; width: 1rem; flex: none; }
+.perm-reason { font-size: .78rem; }
+.perm-glyph.reach { color: var(--ok); }
+.perm-glyph.noreach { color: var(--bad); }
+.perm-chips { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; }
+.perm-chip { font-size: .76rem; }
+.link-btn { border: none; background: transparent; color: var(--accent); padding: 0; cursor: pointer; font: inherit; text-decoration: underline; }
+.link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .perm-cols { grid-template-columns: minmax(0, 1fr); }
+  .perm-list { max-height: 12rem; }
+}
+.skill-files-line { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.resource-changes { margin: .6rem 0; }
+.resource-changes h4 { margin: 0 0 .3rem; }
+@media (max-width: 720px) {
+  .file-workspace { grid-template-columns: minmax(0, 1fr); }
+  .fw-list { max-height: 12rem; }
+}
 .target-checks { display: flex; flex-wrap: wrap; gap: .8rem; }
 .target-check { display: flex; align-items: center; gap: .3rem; font-size: .84rem; cursor: pointer; }
 

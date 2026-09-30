@@ -1525,6 +1525,26 @@ def test_claude_code_deploys_bound_prompt():
     assert "description: Code review checklist" in o.content
     assert "Check these items:" in o.content
 
+def test_claude_code_deploys_multiline_input_token_unchanged():
+    """`{{#notes}}` (the console's multi-line input form) reaches a deployed prompt exactly as
+    written: the compiler's placeholder syntax never matches it."""
+    import copy
+    r = copy.deepcopy(reg)
+    r.machines["example-windows"]["targets"] = ["claude-code"]
+    r.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
+    r.prompts["with-notes"] = loader.Prompt(
+        name="with-notes", rel="prompts/with-notes.md",
+        frontmatter={"name": "with-notes", "description": "Takes notes",
+                     "targets": ["claude-code"]},
+        body="Review this:\n{{#notes}}",
+    )
+    r.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    r.projects["example-project"]["prompts"] = ["with-notes"]
+    outs = [o for o in planner.plan_machine(r, "example-windows") if "with-notes" in o.deploy_path]
+    assert outs and ".claude/commands/with-notes.md" in outs[0].deploy_path
+    assert "{{#notes}}" in outs[0].content
+
+
 def test_claude_code_unbound_prompt_not_deployed():
     """A prompt not listed in the project manifest is not deployed to that project."""
     import copy

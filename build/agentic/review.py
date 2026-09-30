@@ -33,7 +33,7 @@ from . import commands, loader, render, staging as staging_mod
 from .commands import _now, _real_registry_rel, route_into_registry
 from .io import sha256
 from .loader import Registry
-from .planner import plan_machine, _project_repos, _selected_skills
+from .planner import plan_machine, skill_gate, _project_repos, _selected_skills
 
 UI_DIR = Path(__file__).resolve().parent.parent / "review_ui"
 DECISIONS = "decisions.jsonl"
@@ -91,6 +91,7 @@ def load_candidates(reg: Registry) -> list[dict]:
             "resources": (_candidate_resources(folder)
                          if registry_path.endswith("SKILL.md") else {}),
             "resources_provided": bool(meta.get("resources_provided")),
+            "resource_changes": _resource_changes(reg, meta, folder),
             "project": project,
             "doc_ids": doc_ids,
             "removal_ids": removal_ids,
@@ -243,6 +244,17 @@ def _bodies(reg: Registry, meta: dict, payload: str) -> tuple[str, str, bool, st
         dest = reg.root / "registry" / rp
         current = dest.read_text(encoding="utf-8") if dest.is_file() else ""
         return current, payload, True, ""
+    if meta.get("kind") == "machine":
+        # a machine-profile curation edit: the payload IS the full replacement YAML (built
+        # by propose_machine_curation) — diffed whole-file, never prose-routed. CRs are
+        # dropped for display only: a CRLF profile must not read as all-lines-changed.
+        rp = meta.get("registry_path") or ""
+        if not rp:
+            return "", payload, False, "no registry route for a machine candidate"
+        dest = reg.root / "registry" / rp
+        current = (dest.read_bytes().decode("utf-8").replace("\r\n", "\n")
+                   if dest.is_file() else "")
+        return current, payload, True, ""
     if meta.get("sections"):
         cur = [(s["source"], reg.partials[s["source"]].body)
                for s in meta["sections"] if s["source"] in reg.partials]
@@ -330,6 +342,12 @@ def _current_source_text(reg: Registry, meta: dict) -> str | None:
     rp = meta.get("registry_path") or ""
     if not rp:
         return None
+    if meta.get("kind") == "machine":
+        # raw bytes, exactly as on disk: a YAML profile may open with a `---` document
+        # marker that strip_frontmatter would mistake for frontmatter, and a CRLF file
+        # must hash as it is (never as Python's newline-translated read)
+        dest = reg.root / "registry" / rp
+        return dest.read_bytes().decode("utf-8") if dest.is_file() else None
     if meta.get("verbatim"):
         real = _real_registry_rel(reg, rp)
         dest = reg.root / "registry" / real
@@ -382,7 +400,15 @@ def _stale(reg: Registry, meta: dict) -> bool | None:
         current = _current_source_text(reg, meta)
         if current is None:
             return True
-        return sha256(current.encode("utf-8")) != registry_base_hash
+        if sha256(current.encode("utf-8")) != registry_base_hash:
+            return True
+        # A replacement supporting-file set is checked against the files as they are on
+        # disk now, not the registry loaded at startup.
+        resources_base = meta.get("resources_base_hash") or ""
+        if resources_base:
+            skill_md = reg.root / "registry" / _real_registry_rel(reg, meta.get("registry_path") or "")
+            return _disk_resources_hash(skill_md) != resources_base
+        return False
     base_hash = meta.get("base_hash") or ""
     if not base_hash:
         return None
@@ -468,6 +494,11 @@ def decide(reg: Registry, candidate_id: str, decision: str, reason: str = "",
         elif meta.get("kind") == "project":
             # a project-manifest edit writes YAML verbatim, not prose routing
             changed, err = _apply_project_candidate(reg, meta, payload)
+            if err:
+                return {"ok": False, "error": err}
+        elif meta.get("kind") == "machine":
+            # a machine-profile curation edit writes YAML verbatim, not prose routing
+            changed, err = _apply_machine_candidate(reg, meta, payload)
             if err:
                 return {"ok": False, "error": err}
         else:
@@ -662,6 +693,250 @@ def _apply_project_candidate(reg: Registry, meta: dict, payload: str) -> tuple[l
     return [rp], None
 
 
+def _overlay_machine_file(reg: Registry, name: str) -> Path | None:
+    """The `registry/local/machines/*.yaml` file whose `name:` is `name`, or None when the
+    machine has no overlay profile (a core example, or one that does not exist). The loader
+    keys machines by their `name:` value and records neither file nor layer, so this scans
+    instead of assuming `<name>.yaml` — the file name matching is a habit, not a rule."""
+    folder = reg.root / "registry" / loader.LOCAL_OVERLAY / "machines"
+    if not folder.is_dir():
+        return None
+    for f in sorted(folder.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(data, dict) and data.get("name") == name:
+            return f
+    return None
+
+
+def _machine_skills_block(raw) -> tuple[dict | None, str | None]:
+    """Normalize + shape-check a curation block `{<target>: {include?: [..], exclude?: [..]}}`.
+    Empty exclude lists and empty target blocks are dropped (an absent key IS "no curation");
+    names and targets are validated against the registry by loader._validate, not here."""
+    if not isinstance(raw, dict):
+        return None, "skills must be a mapping of target -> {include?, exclude?}"
+    out: dict[str, dict] = {}
+    for target, curation in raw.items():
+        if not isinstance(curation, dict):
+            return None, f"skills.{target} must be a mapping ({{include: [...]}} or {{exclude: [...]}})"
+        unknown = set(curation) - {"include", "exclude"}
+        if unknown:
+            return None, f"skills.{target}: unknown key(s) {sorted(unknown)}"
+        block: dict[str, list[str]] = {}
+        for key in ("include", "exclude"):
+            if key not in curation:
+                continue
+            lst = curation[key]
+            if not isinstance(lst, list) or not all(isinstance(n, str) for n in lst):
+                return None, f"skills.{target}.{key} must be a list of skill names"
+            # an EMPTY include list is a real answer — "deploy nothing here" — and must
+            # survive; an empty exclude list says nothing, so it is dropped
+            if lst or key == "include":
+                block[key] = [n.strip() for n in lst if n.strip()]
+        if block:
+            out[str(target)] = block
+    return out, None
+
+
+def _curated_profile_text(raw_text: str, skills_block: dict) -> str:
+    """The profile's text with its `skills:` block replaced, everything else untouched —
+    comments, quoting, key order — via ruamel's round trip (commands._ruamel). LF in, LF out:
+    the caller restores the file's own line ending."""
+    import io as _io
+    doc = commands._ruamel.load(raw_text)
+    if skills_block:
+        doc["skills"] = skills_block
+    elif "skills" in doc:
+        del doc["skills"]
+    out = _io.StringIO()
+    commands._ruamel.dump(doc, out)
+    return out.getvalue()
+
+
+def propose_machine_curation(reg: Registry, machine: str, skills_block: dict,
+                             reason: str = "") -> dict:
+    """Propose a machine profile's per-target skill curation (`skills:`) as a `kind: machine`
+    inbox candidate carrying the FULL replacement profile. Only `registry/local/machines/`
+    profiles are editable here; a machine with none (a shipped example) is refused. Every
+    other line of the profile is preserved. Re-validated against a scratch copy of the whole
+    registry before it reaches the inbox (and again at accept) — that is also what refuses
+    curation on a manual target (claude-app) and on unknown skills or targets.
+    Returns {ok, id, registry_path} or {ok: False, error}."""
+    if machine not in reg.machines:
+        return {"ok": False, "error": f"unknown machine {machine!r}"}
+    dest = _overlay_machine_file(reg, machine)
+    if dest is None:
+        return {"ok": False, "error": f"machine {machine!r} has no profile under "
+                                      "registry/local/machines/ — only overlay profiles are "
+                                      "editable from the console"}
+    block, err = _machine_skills_block(skills_block)
+    if err:
+        return {"ok": False, "error": err}
+    raw = dest.read_bytes().decode("utf-8")
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    try:
+        payload = _curated_profile_text(raw.replace("\r\n", "\n"), block)
+        parsed = yaml.safe_load(payload) or {}
+    except Exception as e:     # ruamel raises its own family; any parse failure is a refusal
+        return {"ok": False, "error": f"could not rewrite the profile: {e}"}
+    if payload == raw.replace("\r\n", "\n"):
+        return {"ok": False, "error": "no change — the profile already has this curation"}
+    import copy
+    trial = copy.deepcopy(reg)
+    trial_machine = dict(reg.machines[machine])
+    trial_machine.pop("skills", None)
+    trial_machine.update(parsed)
+    trial.machines[machine] = trial_machine
+    try:
+        loader._validate(trial)
+    except loader.RegistryError as e:
+        return {"ok": False, "error": str(e)}
+    registry_path = dest.relative_to(reg.root / "registry").as_posix()
+    meta = {
+        "registry_path": registry_path,
+        "kind": "machine",
+        "machine": machine,
+        "eol": "crlf" if eol == "\r\n" else "lf",
+        "source": {"machine": socket.gethostname() or "console", "tool": "console"},
+        "base_hash": "",
+        "deploy_path": "",
+        "sources": [registry_path],
+        "captured_at": _now(),
+        "note": "machine skill curation edited in the operator console",
+        "registry_base_hash": sha256(raw),
+    }
+    if reason:
+        meta["reason"] = reason
+    cid = _write_candidate(reg, f"machine-{machine}", meta, dest.name, payload)
+    return {"ok": True, "id": cid, "registry_path": registry_path}
+
+
+def _apply_machine_candidate(reg: Registry, meta: dict, payload: str) -> tuple[list[str], str | None]:
+    """Accept a `kind: machine` candidate: re-parse and re-validate it (it sat on disk as
+    untrusted text since propose), then write the profile verbatim in its own line ending.
+    Returns `[registry_path]` as `changed` whenever it writes — that return value is what
+    makes the HTTP handler reload the registry, so the Permissions view sees the new curation
+    without a manual Reload from disk. Returns (changed_paths, error)."""
+    machine = meta.get("machine") or ""
+    if machine not in reg.machines:
+        return [], f"unknown machine {machine!r} for machine candidate"
+    rp = meta.get("registry_path") or ""
+    clean = PurePosixPath(rp.replace("\\", "/"))
+    if clean.parts[:2] != (loader.LOCAL_OVERLAY, "machines") or ".." in clean.parts:
+        return [], f"machine candidates may only write registry/local/machines/: {rp!r}"
+    try:
+        parsed = yaml.safe_load(payload) or {}
+    except yaml.YAMLError as e:
+        return [], f"invalid machine profile YAML: {e}"
+    if not isinstance(parsed, dict) or parsed.get("name") != machine:
+        return [], "machine profile must be a mapping whose name: is this machine"
+    import copy
+    trial = copy.deepcopy(reg)
+    trial_machine = dict(reg.machines[machine])
+    trial_machine.pop("skills", None)
+    trial_machine.update(parsed)
+    trial.machines[machine] = trial_machine
+    try:
+        loader._validate(trial)
+    except loader.RegistryError as e:
+        return [], str(e)
+    dest = reg.root / "registry" / rp
+    eol = "\r\n" if meta.get("eol") == "crlf" else "\n"
+    data = payload.replace("\r\n", "\n").replace("\n", eol).encode("utf-8")
+    if dest.is_file() and dest.read_bytes() == data:
+        return [], None
+    dest.write_bytes(data)
+    return [rp], None
+
+
+def permissions_index(reg: Registry) -> dict:
+    """The console's Permissions view (GET /api/permissions): for every real machine, what
+    reaches it and why, for skills and agents. Reach and reason come from the deploy's own
+    gates — `planner.skill_gate` (what `_selected_skills` filters on) and
+    `loader.selected_agents` — so this view can never disagree with a deploy.
+
+    Returns {machines, targets, skills, agents, skill_reach, agent_reach}; see each below.
+    Only real machines appear (`commands.real_machines`: a shipped example is shown only on
+    a registry that has no other)."""
+    names = sorted(commands.real_machines(reg))
+    skill_targets = {t: spec["skills"] for t, spec in reg.targets.items()
+                     if isinstance(spec, dict) and spec.get("skills")}
+    machines, skill_reach, agent_reach = [], [], []
+    for mname in names:
+        m = reg.machines.get(mname) or {}
+        editable = _overlay_machine_file(reg, mname) is not None
+        stores = set(loader.document_stores(m.get("document_store")))
+        machines.append({
+            "name": mname,
+            "targets": list(m.get("targets") or []),
+            "document_stores": sorted(stores),
+            "curation": m.get("skills") or {},
+            "editable": editable,
+        })
+        for target in m.get("targets") or []:
+            sk_spec = skill_targets.get(target)
+            if sk_spec is None:
+                continue
+            manual = loader.is_manual_skill_target({"skills": sk_spec})
+            curation = {} if manual else ((m.get("skills") or {}).get(target) or {})
+            for skill in sorted(reg.skills.values(), key=lambda x: x.name):
+                if target not in skill.targets:
+                    continue
+                gate = skill_gate(skill, target, manual, curation, stores)
+                blocked_by_connection = (skill.requires_server is not None
+                                         and skill.requires_server not in stores)
+                note = ""
+                if skill.scope == "project":
+                    bound = sorted(slug for slug, proj in reg.projects.items()
+                                   if skill.name in (proj.get("skills") or []))
+                    if target in loader.PROJECT_SCOPE_CAPABLE_TARGETS:
+                        note = ("project: only " + ", ".join(bound)) if bound \
+                            else "project: no project binds it, so it deploys nowhere"
+                    else:
+                        note = "project scope ignored here, deploys globally"
+                skill_reach.append({
+                    "machine": mname, "target": target, "skill": skill.name,
+                    "reaches": gate is None,
+                    "reason": gate or ("in this machine's skills: include list"
+                                       if curation.get("include") is not None
+                                       else f"targets {target}"),
+                    "note": note,
+                    "curatable": editable and not manual and not blocked_by_connection,
+                })
+        selected = set(loader.selected_agents(reg, m))
+        mtargets = set(m.get("targets") or [])
+        mag = m.get("agents") or {}
+        for agent in sorted(reg.agents.values(), key=lambda a: a.name):
+            if agent.name in selected:
+                reason = "targets " + ", ".join(t for t in agent.targets if t in mtargets)
+            elif not any(t in mtargets for t in agent.targets):
+                reason = "targets none of this machine's targets"
+            elif mag.get("include") is not None:
+                reason = f"not in machines/{mname}.yaml agents: include list"
+            else:
+                reason = f"excluded by machines/{mname}.yaml agents:"
+            agent_reach.append({"machine": mname, "agent": agent.name,
+                                "reaches": agent.name in selected, "reason": reason})
+    return {
+        "machines": machines,
+        "targets": [{"name": t,
+                     "manual": loader.is_manual_skill_target({"skills": sp}),
+                     "project_surface": t in loader.PROJECT_SCOPE_CAPABLE_TARGETS}
+                    for t, sp in sorted(skill_targets.items())],
+        "skills": [{"name": sk.name, "targets": list(sk.targets),
+                    "requires_server": sk.requires_server, "scope": sk.scope,
+                    "bound_projects": sorted(slug for slug, proj in reg.projects.items()
+                                             if sk.name in (proj.get("skills") or []))}
+                   for sk in sorted(reg.skills.values(), key=lambda x: x.name)],
+        "agents": [{"name": a.name, "targets": list(a.targets), "skills": list(a.skills)}
+                   for a in sorted(reg.agents.values(), key=lambda a: a.name)],
+        "skill_reach": skill_reach,
+        "agent_reach": agent_reach,
+    }
+
+
 def _graph_note(n_docs: int, n_removals: int,
                 n_efforts: int = 0, n_effort_removals: int = 0) -> str:
     """Human-readable summary of a graph candidate for the inbox card."""
@@ -708,6 +983,50 @@ def _candidate_resources(folder: Path) -> dict[str, str]:
             if f.is_file():
                 out[f.relative_to(folder).as_posix()] = f.read_text(
                     encoding="utf-8", errors="replace")
+    return out
+
+
+def _disk_resources(skill_md: Path) -> dict[str, str]:
+    """The supporting files that sit beside `skill_md` ON DISK right now (the loader's
+    resource subdirectories), as {posix path: text}. Reads the filesystem, never the loaded
+    registry: a console that has been up while a file changed on disk must still see it."""
+    out: dict[str, str] = {}
+    for sub in loader._SKILL_RESOURCE_DIRS:
+        subdir = skill_md.parent / sub
+        if not subdir.is_dir():
+            continue
+        for f in sorted(subdir.rglob("*")):
+            if f.is_file():
+                out[f.relative_to(skill_md.parent).as_posix()] = f.read_text(
+                    encoding="utf-8", errors="replace")
+    return out
+
+
+def _disk_resources_hash(skill_md: Path) -> str:
+    """SHA-256 of a skill's on-disk supporting files — the stale-check base for a candidate
+    that carries a replacement set (`_sync_skill_resources` replaces the directories
+    wholesale on accept, so a file edited on disk meanwhile would be silently lost)."""
+    blob = "".join(f"{path}\0{text}\0" for path, text in sorted(_disk_resources(skill_md).items()))
+    return sha256(blob.encode("utf-8"))
+
+
+def _resource_changes(reg: Registry, meta: dict, folder: Path) -> list[dict]:
+    """Per-file diffs of a skill candidate's replacement supporting-file set against the
+    files on disk: [{path, status: added|changed|removed, diff}], changed files only.
+    Empty when the candidate carries no resources block."""
+    rp = meta.get("registry_path") or ""
+    if not (rp.endswith("SKILL.md") and meta.get("resources_provided")):
+        return []
+    disk = _disk_resources(reg.root / "registry" / _real_registry_rel(reg, rp))
+    proposed = _candidate_resources(folder)
+    out: list[dict] = []
+    for path in sorted(set(disk) | set(proposed)):
+        old, new = disk.get(path), proposed.get(path)
+        if old == new:
+            continue
+        status = "added" if old is None else ("removed" if new is None else "changed")
+        out.append({"path": path, "status": status,
+                    "diff": _diff_rows(old or "", new or "")})
     return out
 
 
@@ -1350,6 +1669,8 @@ def propose_meta_edit(reg: Registry, kind: str, ident: str, fields: dict, body: 
         meta["reason"] = reason
     if kind == "skill" and resources is not None:
         meta["resources_provided"] = True
+        if dest.is_file():
+            meta["resources_base_hash"] = _disk_resources_hash(dest)
     try:
         cid = _write_candidate(reg, _slug_path(registry_path), meta,
                                PurePosixPath(registry_path).name, payload,
@@ -2717,6 +3038,8 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 return self._json(200, org_index(holder["reg"]))
             if self.path == "/api/agents":
                 return self._json(200, agents_index(holder["reg"]))
+            if self.path == "/api/permissions":
+                return self._json(200, permissions_index(holder["reg"]))
             if self.path.startswith("/api/org/tree"):
                 from urllib.parse import parse_qs, urlsplit
                 q = parse_qs(urlsplit(self.path).query)
@@ -2743,6 +3066,7 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                                   "/api/graph/peek-identity",
                                   "/api/graph/unwatch", "/api/graph/rename-watch",
                                   "/api/project/edit", "/api/project/new",
+                                  "/api/machines/curation",
                                   "/api/reload",
                                   "/api/prompts/favorite", "/api/prompts/new", "/api/skills/new",
                                   "/api/agents/new",
@@ -2863,6 +3187,15 @@ def make_server(reg: Registry, port: int = 0) -> ThreadingHTTPServer:
                 result = propose_project_edit(
                     holder["reg"], str(body.get("slug", "")),
                     fields if isinstance(fields, dict) else {},
+                    str(body.get("reason", "") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
+            if self.path == "/api/machines/curation":
+                # propose a machine profile's skill curation as a kind:machine candidate —
+                # only writes inbox/ (the Permissions view's deploy toggles)
+                block = body.get("skills")
+                result = propose_machine_curation(
+                    holder["reg"], str(body.get("machine", "")),
+                    block if isinstance(block, dict) else {},
                     str(body.get("reason", "") or ""))
                 return self._json(200 if result.get("ok") else 400, result)
             if self.path == "/api/project/new":

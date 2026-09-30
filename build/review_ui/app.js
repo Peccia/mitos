@@ -147,18 +147,22 @@ async function copyText(text, label) {
 //                                         paths apply. Left literal, never prompted.
 //   everything else                     — the operator's own fillable inputs.
 //
-// Mirrors render.expand_placeholders' token syntax exactly (\w+ inside {{…}}), so a prompt
-// reads the same here as it does at deploy.
-const PROMPT_TOKEN_RE = /\{\{(\w+)\}\}/g;
+// Mirrors render.expand_placeholders' token syntax (\w+ inside {{…}}), plus ONE console-only
+// form: {{#name}} asks for a multi-line field. render._PLACEHOLDER_RE is \{\{(\w+)\}\} and
+// "#" is not \w, so a deploy never matches {{#name}} — it reaches a deployed prompt as written.
+// {{#name}} and {{name}} are the same input: one field, filling every occurrence of either.
+const PROMPT_TOKEN_RE = /\{\{(#?)(\w+)\}\}/g;
 
 function promptTokens(text) {
   const userTok = (STATE && STATE.user_tokens) || {};
   const machineTok = new Set((STATE && STATE.machine_tokens) || []);
   const inputs = [];
   for (const m of String(text || "").matchAll(PROMPT_TOKEN_RE)) {
-    const tok = m[1];
+    const tok = m[2];
     if (tok in userTok || machineTok.has(tok)) continue;
-    if (!inputs.includes(tok)) inputs.push(tok);   // dedupe, keep first-seen order
+    const seen = inputs.find((i) => i.name === tok);       // dedupe, keep first-seen order
+    if (seen) seen.multiline = seen.multiline || m[1] === "#";
+    else inputs.push({ name: tok, multiline: m[1] === "#" });
   }
   return inputs;
 }
@@ -168,7 +172,7 @@ function promptTokens(text) {
 // than silently missing a word.
 function fillPrompt(text, values) {
   const userTok = (STATE && STATE.user_tokens) || {};
-  return String(text || "").replace(PROMPT_TOKEN_RE, (whole, tok) => {
+  return String(text || "").replace(PROMPT_TOKEN_RE, (whole, _hash, tok) => {
     if (tok in userTok) return userTok[tok];
     const v = values && values[tok];
     return v ? v : whole;
@@ -194,31 +198,45 @@ function openPromptInputs(p, body, inputs) {
   if (!modal || !fields) { copyText(fillPrompt(body, {}), p.name); return; }
   $("prompt-input-sub").textContent =
     `${p.name} — ${inputs.length} input${inputs.length === 1 ? "" : "s"}. `
-    + "Leave one blank to keep its {{token}} literal.";
+    + "Leave one blank to keep its token literal.";
   fields.replaceChildren();
   const boxes = {};
-  for (const tok of inputs) {
+  for (const { name: tok, multiline } of inputs) {
     const row = el("div", "prompt-input-row");
     const lab = el("label", "prompt-input-label", tok);
     lab.htmlFor = "pi-" + tok;
-    const inp = el("input", "prompt-input-field");
-    inp.id = "pi-" + tok; inp.type = "text"; inp.autocomplete = "off";
-    inp.placeholder = `{{${tok}}}`;
-    inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+    let inp;
+    if (multiline) {
+      // Enter types a newline here; Copy stays on the button.
+      inp = el("textarea", "prompt-input-field multiline");
+      inp.rows = 6; inp.spellcheck = false;
+      inp.placeholder = `{{#${tok}}}`;
+    } else {
+      inp = el("input", "prompt-input-field");
+      inp.type = "text";
+      inp.placeholder = `{{${tok}}}`;
+      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+    }
+    inp.id = "pi-" + tok; inp.autocomplete = "off";
     boxes[tok] = inp;
     row.append(lab, inp);
     fields.append(row);
   }
   const go = () => {
     const values = {};
-    for (const tok of inputs) values[tok] = boxes[tok].value.trim();
+    // Blank is blank either way; a filled multi-line value keeps its leading indentation
+    // and inner newlines, losing only trailing whitespace.
+    for (const { name: tok, multiline } of inputs) {
+      const raw = boxes[tok].value;
+      values[tok] = multiline ? (raw.trim() ? raw.trimEnd() : "") : raw.trim();
+    }
     closePromptInputs();
     copyText(fillPrompt(body, values), p.name);
   };
   $("prompt-input-copy").onclick = go;
   $("prompt-input-cancel").onclick = closePromptInputs;
   modal.hidden = false;
-  boxes[inputs[0]].focus();
+  boxes[inputs[0].name].focus();
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────
@@ -243,6 +261,10 @@ async function refresh(pre) {
     try { agentsData = await (await fetch("/api/agents")).json(); }
     catch (e) { agentsData = { agents: [], machines: [] }; }
   }
+  // Reach is derived from machine profiles, which an accepted curation candidate rewrites:
+  // while the Permissions view is open, every refresh re-reads it so it never shows a
+  // stale answer (a cheap loopback fetch nobody pays for while the view is closed).
+  if (permissionsOpen) await loadPermissions();
   const rootEl = $("root");
   if (rootEl) { rootEl.textContent = STATE.root; rootEl.title = STATE.root; }
   const countEl = $("inbox-count");
@@ -278,6 +300,7 @@ async function reloadFromDisk() {
   // Staged/dismissed panes are fetched separately and may now be stale too; drop the
   // caches so the Knowledge Graph tab refetches them for the selected project.
   stagedData = null; dismissedData = null; orgData = null; agentsData = null;
+  permissionsData = null;
   await refresh(r.state);
   if (graphSlug) { loadStaged(graphSlug); loadDismissed(graphSlug); }
   toast("Reloaded from disk.");
@@ -480,6 +503,24 @@ function candidateCard(c) {
     card.append(fullDiff);
   } else {
     card.append(diffTable(c.diff));
+  }
+
+  if ((c.resource_changes || []).length) {
+    // The diff above is SKILL.md alone; a supporting file the candidate adds, changes or
+    // drops is reviewed here, one row per file, against the files as they are on disk.
+    const files = el("div", "resource-changes");
+    files.append(el("h4", "", "Supporting files"));
+    const badgeClass = { added: "badge new", changed: "badge kind", removed: "badge manual" };
+    for (const rc of c.resource_changes) {
+      const det = el("details", "payload");
+      det.open = true;
+      const sum = el("summary", "");
+      sum.append(el("span", badgeClass[rc.status] || "badge", rc.status),
+                 document.createTextNode(" "), el("code", "", rc.path));
+      det.append(sum, diffTable(rc.diff));
+      files.append(det);
+    }
+    card.append(files);
   }
 
   const details = el("details", "payload");
@@ -788,6 +829,25 @@ function selectProject(slug) {
   loadDismissed(slug);
 }
 
+// Open a project's Edit-properties form from anywhere (the Project panel's own button, a
+// project chip in the Permissions view): switch to the Knowledge Graph tab, select the
+// project, and seed the editor from its current manifest.
+function openProjectEdit(slug) {
+  const g = (STATE.graphs || []).find((x) => x.slug === slug);
+  if (!g) { toast(`Project ${slug} not found.`, 3000); return; }
+  showTab("graph");
+  selectProject(slug);
+  projectEditVals = {
+    name: g.name || "", description: g.description || "", stage: g.stage || "",
+    document_store: g.document_store || "none",
+    hidden: !!g.hidden,
+    skills: (g.skills || []).slice(),
+    repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
+  };
+  projectEditOpen = true;
+  renderGraph();
+}
+
 // ── Project panel: identity (name/description/stage) + repos, the Knowledge Graph
 // tab's first step toward a full Project view. Edits propose a `kind: project` inbox
 // candidate (POST /api/project/edit) — reviewed and Accepted in the Inbox tab like
@@ -845,17 +905,7 @@ function buildProjectPanel(container, g) {
   configBtn.setAttribute("aria-expanded", String(projectConfigOpen));
   configBtn.onclick = () => { projectConfigOpen = !projectConfigOpen; renderGraph(); };
   const editBtn = el("button", "tiny", "Edit properties");
-  editBtn.onclick = () => {
-    projectEditVals = {
-      name: g.name || "", description: g.description || "", stage: g.stage || "",
-      document_store: g.document_store || "none",
-      hidden: !!g.hidden,
-      skills: (g.skills || []).slice(),
-      repos: (g.repo || []).map((url) => ({ url, description: (g.repo_notes || {})[repoBasename(url)] || "" })),
-    };
-    projectEditOpen = true;
-    renderGraph();
-  };
+  editBtn.onclick = () => openProjectEdit(g.slug);
   actions.append(configBtn, editBtn);
   head.append(actions);
   card.append(head);
@@ -3344,7 +3394,8 @@ function renderReturnBar(box, key) {
 // differ per context (Save-to-inbox/Revert here, Save-as-new-skill/Cancel there); this
 // only owns the editing surface itself.
 //
-// opts: { value: string, onInput(newValue), statusText(value) -> string }
+// opts: { value: string, onInput(newValue), statusText(value) -> string,
+//         isModified?() -> bool, hideFullscreen?: bool }
 // returns: { root, textarea, refreshStatus() }
 function buildContextualEditor(opts) {
   const root = el("div", "ce-root");
@@ -3406,16 +3457,20 @@ function buildContextualEditor(opts) {
     fullscreenToggle.classList.toggle("active", root.classList.contains("fullscreen"));
     ta.focus();
   });
-  toolbar.append(fullscreenToggle);
-  // Scoped to `root` (not document) so it only ever fires while focus is somewhere
-  // inside this editor instance, and needs no manual teardown — once a re-render
-  // detaches `root` from the DOM, it stops receiving bubbled events on its own.
-  root.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && root.classList.contains("fullscreen")) {
-      root.classList.remove("fullscreen");
-      fullscreenToggle.classList.remove("active");
-    }
-  });
+  // `hideFullscreen`: a host that is already full-size (the file workspace) has nothing to
+  // expand into, so the toggle and its Escape handler are not attached at all.
+  if (!opts.hideFullscreen) {
+    toolbar.append(fullscreenToggle);
+    // Scoped to `root` (not document) so it only ever fires while focus is somewhere
+    // inside this editor instance, and needs no manual teardown — once a re-render
+    // detaches `root` from the DOM, it stops receiving bubbled events on its own.
+    root.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && root.classList.contains("fullscreen")) {
+        root.classList.remove("fullscreen");
+        fullscreenToggle.classList.remove("active");
+      }
+    });
+  }
 
   const editorWrap = el("div", "editor-wrap");
   const gutter = el("div", "line-nums");
@@ -3716,9 +3771,149 @@ function buildResourceEditor(getResources, setResources) {
   return wrap;
 }
 
-// Supporting files themselves are edited in the Skills & Orgs tab (renderSkillFilesSection)
-// — this stays only to gate the Prompt Library's "Revert" button, which resets a skill's
-// body + metadata + any pending resource draft together as one full discard.
+// ── the full-size file workspace ─────────────────────────────────────────────
+// ONE surface for editing a definition's files: a file list on the left, the Contextual
+// Editor filling the rest. Hosts: a skill (SKILL.md + supporting files) and an agent (its
+// one definition file). The host owns the data and everything around it (Reason, Save,
+// Revert, Close); this owns only list + editor, and funnels every keystroke through
+// `setText`, so switching files can never lose what was typed — the host's draft maps are
+// the single source of truth, never the textarea.
+//
+// opts: { files() -> [path], selected, onSelect?(path), getText(path), setText(path, value),
+//         isModified(path) -> bool, statusText(path, value) -> string, onChange?(),
+//         canAddRemove?, fixed? (the path that can never be deleted), addFile?(path, text),
+//         removeFile?(path) }
+// returns: { root, current() -> path }
+function buildFileWorkspace(opts) {
+  const root = el("div", "file-workspace");
+  const side = el("div", "fw-side");
+  const list = el("div", "fw-list");
+  const pane = el("div", "fw-pane");
+  side.append(list);
+  root.append(side, pane);
+  let selected = opts.selected;
+  const dots = {};
+
+  function refreshDot(path) { if (dots[path]) dots[path].hidden = !opts.isModified(path); }
+
+  function select(path) {
+    selected = path;
+    if (opts.onSelect) opts.onSelect(path);
+    renderList();
+    renderEditor();
+  }
+
+  function renderList() {
+    list.replaceChildren();
+    for (const k of Object.keys(dots)) delete dots[k];
+    const all = opts.files();
+    if (!all.includes(selected)) selected = all[0];
+    for (const path of all) {
+      const row = el("div", "fw-row" + (path === selected ? " active" : ""));
+      const pick = el("button", "fw-file", "");
+      pick.type = "button";
+      if (path === selected) pick.setAttribute("aria-current", "true");
+      pick.append(el("span", "fw-name", path));
+      const dot = el("span", "fw-dot", "●");
+      dot.title = "Edited"; dot.setAttribute("aria-label", "Edited");
+      dot.hidden = !opts.isModified(path);
+      dots[path] = dot;
+      pick.append(dot);
+      pick.onclick = () => select(path);
+      row.append(pick);
+      if (opts.canAddRemove && path !== opts.fixed) {
+        const del = el("button", "tiny ghost fw-del", "×");
+        del.type = "button";
+        del.title = `Delete ${path}`;
+        del.setAttribute("aria-label", `Delete ${path}`);
+        del.onclick = () => {
+          opts.removeFile(path);
+          if (opts.onChange) opts.onChange();
+          renderList();
+          renderEditor();
+        };
+        row.append(del);
+      }
+      list.append(row);
+    }
+  }
+
+  function renderEditor() {
+    pane.replaceChildren();
+    const path = selected;
+    const ed = buildContextualEditor({
+      value: opts.getText(path),
+      hideFullscreen: true,
+      onInput(value) {
+        opts.setText(path, value);
+        refreshDot(path);
+        if (opts.onChange) opts.onChange();
+      },
+      statusText(value) { return opts.statusText(path, value); },
+      isModified() { return opts.isModified(path); },
+    });
+    pane.append(ed.root);
+  }
+
+  if (opts.canAddRemove) {
+    const add = el("div", "fw-add");
+    const pathInput = el("input");
+    pathInput.type = "text";
+    pathInput.placeholder = "examples/sample.md";
+    pathInput.setAttribute("aria-label", "New file path");
+    const addBtn = el("button", "ghost tiny", "+ Add file");
+    addBtn.type = "button";
+    addBtn.onclick = () => {
+      const p = pathInput.value.trim();
+      if (!RESOURCE_PATH_RE.test(p)) {
+        toast("Path must be under examples/, scripts/, references/, templates/ or resources/ — e.g. examples/sample.md", 4000);
+        return;
+      }
+      if (opts.files().includes(p)) { toast(`${p} already exists`, 3000); return; }
+      pathInput.value = "";
+      opts.addFile(p, "");
+      if (opts.onChange) opts.onChange();
+      select(p);
+    };
+    const uploadInput = document.createElement("input");
+    uploadInput.type = "file";
+    uploadInput.multiple = true;
+    uploadInput.hidden = true;
+    uploadInput.onchange = async () => {
+      const picked = Array.from(uploadInput.files || []);
+      uploadInput.value = "";   // allow re-selecting the same file(s) later
+      let last = null;
+      for (const file of picked) {
+        let text;
+        try { text = await readFileAsText(file); }
+        catch (e) { toast(`Could not read ${file.name} — skipped.`, 4000); continue; }
+        if (looksBinary(text)) {
+          toast(`${file.name} looks like a binary file — only UTF-8 text is supported here, skipped.`, 5000);
+          continue;
+        }
+        const path = routeForFilename(file.name);
+        if (opts.files().includes(path)) toast(`Replaced existing ${path}`, 3000);
+        opts.addFile(path, text);
+        last = path;
+      }
+      if (last) { if (opts.onChange) opts.onChange(); select(last); }
+    };
+    const uploadBtn = el("button", "ghost tiny", "Upload…");
+    uploadBtn.type = "button";
+    uploadBtn.onclick = () => uploadInput.click();
+    add.append(pathInput, addBtn, uploadBtn, uploadInput);
+    side.append(add);
+  }
+
+  renderList();
+  renderEditor();
+  return { root, current: () => selected };
+}
+
+// Supporting files themselves are edited in the full-size file workspace (Skills tab →
+// Properties → Edit files →) — this stays only to gate the Prompt Library's "Revert"
+// button, which resets a skill's body + metadata + any pending resource draft together as
+// one full discard.
 function resourcesModified(p) {
   return resourceDrafts[p.key] !== undefined;
 }
@@ -3881,6 +4076,9 @@ let skillShowingAgents = false;
 let agentsData = null;
 let newAgentOpen = false;
 let editingAgentName = null;
+let permissionsOpen = false;      // the Permissions sub-view (like Context Tree, replaces the grid)
+let skillFilesOpen = null;        // skill name whose full-size file workspace is showing
+let skillFilesSelected = "SKILL.md";   // survives a refresh() re-render; resets per skill
 let newAgentFieldDraft = { name: "", description: "", targets: [], goal: "", skills: [] };
 let newAgentDraftBody = "# Instructions\n\n";
 let agentEditDraft = {};
@@ -3897,10 +4095,12 @@ function renderSkills() {
 
   // The create forms replace the grid entirely — the drawer must not hang over them.
   // (These return early, before the drawer-sync tail at the end of this function.)
-  if (newSkillOpen || newAgentOpen || editingAgentName || contextTreeOpen) closeSkillDrawer();
+  if (newSkillOpen || newAgentOpen || editingAgentName || skillFilesOpen || permissionsOpen || contextTreeOpen) closeSkillDrawer();
   if (newSkillOpen)     { box.replaceChildren(newSkillForm());      return; }
   if (newAgentOpen)     { box.replaceChildren(newAgentForm());      return; }
   if (editingAgentName) { box.replaceChildren(editAgentForm(editingAgentName)); return; }
+  if (skillFilesOpen)   { box.replaceChildren(skillFilesWorkspace(skillFilesOpen)); return; }
+  if (permissionsOpen)  { box.replaceChildren(renderPermissionsView()); return; }
   if (contextTreeOpen)  { box.replaceChildren(renderContextTreeSection()); return; }
 
   // ── build domain-by-skill lookup from orgData ────────────────────────────
@@ -3971,6 +4171,10 @@ function renderSkills() {
   treeBtn.title = "View planned Context Tree";
   treeBtn.onclick = () => { contextTreeOpen = true; renderSkills(); };
   btnGroup.append(treeBtn);
+  const permBtn = el("button", "", "Permissions");
+  permBtn.title = "What reaches each machine, and why";
+  permBtn.onclick = openPermissions;
+  btnGroup.append(permBtn);
 
   chipRow.replaceChildren();
 
@@ -4239,58 +4443,113 @@ function renderSkillDrawer(s, domain) {
   requestAnimationFrame(() => drawer.classList.add("open"));
 }
 
-// ── skill-row supporting files: examples/, scripts/ live here directly, independent
-// of SKILL.md's body/metadata (Prompt-Library-only). Shares resourceDrafts/saveDraft
-// with the Prompt Library editor via the same `skill:<name>` key, so a draft started
-// on either surface is visible — and savable — from both. ────────────────────────
+// ── skill files: the drawer only points at the full-size workspace ───────────────
+// The Supporting Files editor that used to live in this drawer is now the file list of the
+// full-size workspace below (SKILL.md + every supporting file, one editor). Drafts are the
+// same `drafts`/`resourceDrafts` maps under the `skill:<name>` key the Prompt Library reads,
+// so a draft started on either surface is visible — and savable — from both.
 function renderSkillFilesSection(s) {
-  const key = `skill:${s.name}`;
   const section = el("div", "skill-files-section");
+  const n = Object.keys(s.resources || {}).length;
+  const row = el("div", "skill-files-line");
+  row.append(el("span", "muted", `${n} supporting file${n === 1 ? "" : "s"}`));
+  const open = el("button", "ghost tiny", "Edit files →");
+  open.title = "Open SKILL.md and its supporting files in the full-size editor";
+  open.onclick = () => {
+    skillFilesOpen = s.name;
+    skillFilesSelected = "SKILL.md";
+    renderSkills();
+  };
+  row.append(open);
+  section.append(row);
+  return section;
+}
 
-  const header = el("div", "resources-panel-header");
-  header.append(el("h4", "", "Supporting Files"));
-  const badge = el("span", "meta-modified-badge hidden", "● files modified");
-  header.append(badge);
-  section.append(header);
-  section.append(el("div", "muted resources-hint",
-    "Deployed alongside SKILL.md and bundled into claude.ai zips."));
+function skillFilesWorkspace(skillName) {
+  const s = (STATE.prompts.skills || []).find((x) => x.name === skillName);
+  if (!s) {
+    skillFilesOpen = null;
+    return el("div", "empty-state", `Skill ${skillName} not found.`);
+  }
+  const key = `skill:${s.name}`;
+  const original = s.resources || {};
+  const res = () => resourceDrafts[key] !== undefined ? resourceDrafts[key] : original;
+  // A resource draft identical to the registry's set is "untouched" (undefined), not an
+  // explicit replacement: the server only rewrites the files when one is provided.
+  const setRes = (next) => {
+    const same = Object.keys(next).length === Object.keys(original).length
+      && Object.keys(next).every((k) => original[k] === next[k]);
+    if (same) delete resourceDrafts[key]; else resourceDrafts[key] = next;
+  };
+  const bodyNow = () => drafts[key] != null ? drafts[key] : s.body;
+
+  const wrap = el("div", "new-skill-form file-workspace-host");
+  wrap.append(el("h3", "", `Files: ${s.name}`));
+
+  const ws = buildFileWorkspace({
+    files: () => ["SKILL.md", ...Object.keys(res()).sort()],
+    selected: skillFilesSelected,
+    onSelect: (path) => { skillFilesSelected = path; },
+    getText: (path) => path === "SKILL.md" ? bodyNow() : (res()[path] ?? ""),
+    setText: (path, value) => {
+      if (path === "SKILL.md") {
+        // same bookkeeping as the Prompt Library editor, so the E/M badges agree
+        if (value === s.body) { delete drafts[key]; delete draftBase[key]; }
+        else {
+          if (drafts[key] == null) draftBase[key] = s.body;
+          drafts[key] = value;
+        }
+        store.set(LS.drafts, drafts);
+        store.set(LS.draftBase, draftBase);
+      } else {
+        setRes({ ...res(), [path]: value });
+      }
+    },
+    isModified: (path) => path === "SKILL.md"
+      ? drafts[key] != null
+      : resourceDrafts[key] !== undefined && original[path] !== res()[path],
+    statusText: (path, value) => `${value.length.toLocaleString()} chars · ${s.name}/${path}`,
+    onChange: () => refreshActions(),
+    canAddRemove: true,
+    fixed: "SKILL.md",
+    addFile: (path, text) => setRes({ ...res(), [path]: text }),
+    removeFile: (path) => { const next = { ...res() }; delete next[path]; setRes(next); },
+  });
+  wrap.append(ws.root);
 
   const actions = el("div", "detail-actions");
   const reason = el("input", "detail-reason");
   reason.type = "text";
   reason.placeholder = "Reason (optional — logged on accept)";
-  const save = el("button", "accept tiny", "Save files to inbox");
-  save.title = "Propose the current supporting-file set as an inbox candidate";
-  const revert = el("button", "reject tiny", "Revert files");
-  revert.title = "Discard local supporting-file edits for this skill";
-
-  // buildResourceEditor funnels every mutation (add/edit/delete/upload) through
-  // setResources below, so this one place keeps Save/Revert and the badge in sync —
-  // unlike the disabled-state-computed-once approach the Prompt Library panel uses,
-  // which doesn't need to react since it lives inside a full-page re-render already.
-  function refreshActionState() {
-    const hasDraft = resourceDrafts[key] !== undefined;
-    save.disabled = !hasDraft;
-    revert.disabled = !hasDraft;
-    badge.classList.toggle("hidden", !hasDraft);
+  const save = el("button", "accept", "Save to inbox");
+  save.title = "Propose SKILL.md and the supporting files as one inbox candidate";
+  const revert = el("button", "reject", "Revert");
+  revert.title = "Discard local edits to SKILL.md and the supporting files";
+  const close = el("button", "ghost", "Close");
+  close.title = "Back to the skill; unsaved edits are kept";
+  function refreshActions() {
+    const dirty = drafts[key] != null || resourceDrafts[key] !== undefined;
+    save.disabled = !dirty;
+    revert.disabled = !dirty;
   }
-  refreshActionState();
-
-  section.append(buildResourceEditor(
-    () => resourceDrafts[key] !== undefined ? resourceDrafts[key] : (s.resources || {}),
-    (next) => { resourceDrafts[key] = next; refreshActionState(); },
-  ));
-
-  save.onclick = () => {
-    const body = drafts[key] != null ? drafts[key] : s.body;
-    saveDraft({ key, kind: "skill", ident: s.name }, body, reason.value);
+  refreshActions();
+  save.onclick = () => saveDraft({ key, kind: "skill", ident: s.name }, bodyNow(), reason.value);
+  revert.onclick = () => {
+    delete drafts[key]; delete draftBase[key]; delete resourceDrafts[key];
+    store.set(LS.drafts, drafts);
+    store.set(LS.draftBase, draftBase);
+    renderSkills();
   };
-  revert.onclick = () => { delete resourceDrafts[key]; renderSkills(); };
+  close.onclick = () => {
+    expandedSkillName = skillFilesOpen;   // the grid tail re-opens the drawer for it
+    skillFilesOpen = null;
+    renderSkills();
+  };
   const btns = el("div", "action-group");
-  btns.append(save, revert);
+  btns.append(save, revert, close);
   actions.append(reason, btns);
-  section.append(actions);
-  return section;
+  wrap.append(actions);
+  return wrap;
 }
 
 // Prompt Library metadata panel for the same reason as Supporting Files — it's a
@@ -4912,10 +5171,18 @@ function editAgentForm(agentName) {
   updateSkillPicker();
   wrap.append(skillsWrap);
 
-  const editor = buildContextualEditor({
-    value: draft.body,
-    onInput(value) { draft.body = value; },
-    statusText(value) { return `${value.length.toLocaleString()} chars · agent · ${agentName}`; },
+  // The same full-size workspace a skill's files use, listing the agent's one definition
+  // file. Its body lives in `draft.body` — kept current on every keystroke — and that, not
+  // the textarea, is what Save sends.
+  const agentFile = String(agent.source || "").split(/[\/]/).pop() || `${agentName}.md`;
+  const editor = buildFileWorkspace({
+    files: () => [agentFile],
+    selected: agentFile,
+    getText: () => draft.body,
+    setText: (_path, value) => { draft.body = value; },
+    isModified: () => draft.body !== (agent.body || ""),
+    statusText: (_path, value) => `${value.length.toLocaleString()} chars · agent · ${agentName}`,
+    canAddRemove: false,
   });
   wrap.append(editor.root);
 
@@ -4941,7 +5208,7 @@ function editAgentForm(agentName) {
         kind: "agent",
         ident: agentName,
         fields,
-        body: editor.textarea.value,
+        body: draft.body,
         reason: reason.value,
       }),
     });
@@ -4957,6 +5224,13 @@ function editAgentForm(agentName) {
     }
   };
 
+  const revert = el("button", "reject", "Revert");
+  revert.title = "Discard local edits and restore the registry copy";
+  revert.onclick = () => {
+    delete agentEditDraft[agentName];
+    renderSkills();          // re-seeds the draft from agentsData
+  };
+
   const cancel = el("button", "ghost", "Cancel");
   cancel.onclick = () => {
     editingAgentName = null;
@@ -4964,7 +5238,7 @@ function editAgentForm(agentName) {
   };
 
   const btns = el("div", "action-group");
-  btns.append(save, cancel);
+  btns.append(save, revert, cancel);
   actions.append(reason, btns);
   wrap.append(actions);
   return wrap;
@@ -5024,6 +5298,460 @@ function renderContextTreeSection() {
   wrap.append(renderContextTreePicker());
   wrap.append(renderContextTree());
   return wrap;
+}
+
+// ── Permissions: what reaches each machine, and why ──────────────────────────────
+// A read-mostly index fed by ONE endpoint (GET /api/permissions) whose reach and reason come
+// from the same gate the deploy uses (planner.skill_gate), so this view cannot disagree with
+// what a deploy does. Every relationship links to the editor that already owns it; the one
+// thing written here is a machine's per-target skill curation, and it is a draft like every
+// other edit in the console: held in `curationDrafts` (it survives leaving the view), marked
+// with a dot, discardable with Revert, and only ever PROPOSED (POST /api/machines/curation
+// → a kind: machine Inbox candidate). Nothing writes registry/ but the Inbox's Accept.
+let permissionsData = null;          // the last GET /api/permissions, or null while loading
+let permSeg = "machines";            // machines | targets | agents | skills
+let permSel = {};                    // segment -> selected name (survives a segment switch)
+let permFilter = "";
+// machine -> { <target>: {include?: [..], exclude?: [..]} }: the operator's pending blocks,
+// one per target they touched. Module-level on purpose (like drafts/agentEditDraft): leaving
+// the view, following an edit link or switching tabs loses nothing.
+let curationDrafts = {};
+
+async function loadPermissions() {
+  try { permissionsData = await (await fetch("/api/permissions")).json(); }
+  catch (e) { permissionsData = null; toast(`Could not load permissions: ${e}`, 5000); }
+}
+
+function openPermissions() {
+  permissionsOpen = true;
+  permissionsData = null;
+  permFilter = "";
+  renderSkills();                               // "Loading…" first, then the real thing
+  loadPermissions().then(() => { if (permissionsOpen) renderSkills(); });
+}
+
+function permBlock(m, target) {
+  const d = curationDrafts[m.name];
+  return (d && target in d ? d[target] : (m.curation || {})[target]) || {};
+}
+
+// The curation half of planner.skill_gate, for the checkbox's drafted state.
+function permDeploys(block, skill) {
+  if (block.include && !block.include.includes(skill)) return false;
+  return !(block.exclude || []).includes(skill);
+}
+
+function permNorm(b) {
+  const out = {};
+  if (b.include) out.include = [...b.include].sort();
+  if (b.exclude && b.exclude.length) out.exclude = [...b.exclude].sort();
+  return JSON.stringify(out);
+}
+
+function setPermDeploy(m, target, skill, on) {
+  const cur = permBlock(m, target);
+  const next = {};
+  if (cur.include) next.include = cur.include.filter((n) => n !== skill);
+  if (cur.exclude) next.exclude = cur.exclude.filter((n) => n !== skill);
+  if (on && next.include) next.include.push(skill);
+  if (!on && !next.include) next.exclude = [...(next.exclude || []), skill];
+  if (next.exclude && !next.exclude.length) delete next.exclude;
+  const d = (curationDrafts[m.name] = curationDrafts[m.name] || {});
+  d[target] = next;
+  // a block equal to what is loaded is no draft at all
+  for (const t of Object.keys(d)) {
+    if (permNorm(d[t]) === permNorm((m.curation || {})[t] || {})) delete d[t];
+  }
+  if (!Object.keys(d).length) delete curationDrafts[m.name];
+}
+
+function permGlyph(reaches) {
+  const g = el("span", "perm-glyph " + (reaches ? "reach" : "noreach"), reaches ? "✓" : "✗");
+  g.setAttribute("aria-hidden", "true");
+  const sr = el("span", "sr-only", reaches ? "Reaches" : "Does not reach");
+  const wrap = el("span", "perm-reach");
+  wrap.append(g, sr);
+  return wrap;
+}
+
+function renderPermissionsView() {
+  const wrap = el("div", "permissions-view");
+  const head = el("div", "skill-actions-bar");
+  const back = el("button", "ghost", "← Back to skills");
+  back.onclick = () => { permissionsOpen = false; renderSkills(); };
+  head.append(back);
+  wrap.append(head);
+  wrap.append(el("h3", "", "Permissions"));
+  if (!permissionsData) {
+    wrap.append(el("div", "muted", "Loading permissions…"));
+    return wrap;
+  }
+  const d = permissionsData;
+  wrap.append(el("div", "muted resources-hint",
+    "What reaches each machine, and why — the same gate a deploy uses. "
+    + "Skills are curated per machine here; everything else links to its own editor."));
+
+  const SEGS = [
+    ["machines", "Machines", d.machines], ["targets", "Targets", d.targets],
+    ["agents", "Agents", d.agents], ["skills", "Skills", d.skills],
+  ];
+  const namesOf = (seg) => (SEGS.find(([k]) => k === seg)[2]).map((x) => x.name);
+  // a selection is never blank on entry, and never points at something that no longer exists
+  const ensureSel = () => {
+    const names = namesOf(permSeg);
+    if (!names.includes(permSel[permSeg])) permSel[permSeg] = names[0] || null;
+  };
+  ensureSel();
+
+  const cols = el("div", "perm-cols");
+  const left = el("div", "perm-left");
+  const seg = el("div", "perm-seg");
+  const filterInp = el("input");
+  filterInp.type = "text";
+  filterInp.placeholder = "Filter…";
+  filterInp.setAttribute("aria-label", "Filter the list");
+  filterInp.value = permFilter;
+  const list = el("div", "perm-list");
+  const panel = el("div", "perm-panel");
+
+  const select = (name) => { permSel[permSeg] = name; renderList(); renderPanel(); };
+  const go = (segment, name) => {           // a link from one panel to another segment
+    permSeg = segment; permSel[segment] = name; permFilter = ""; renderSkills();
+  };
+
+  function renderSeg() {
+    seg.replaceChildren();
+    for (const [key, label, items] of SEGS) {
+      const b = el("button", "pool-opt" + (permSeg === key ? " active" : ""), `${label} ${items.length}`);
+      b.setAttribute("aria-pressed", String(permSeg === key));
+      b.onclick = () => { permSeg = key; permFilter = ""; filterInp.value = ""; ensureSel(); renderSeg(); renderList(); renderPanel(); };
+      seg.append(b);
+    }
+  }
+
+  function renderList() {
+    list.replaceChildren();
+    const label = SEGS.find(([k]) => k === permSeg)[1].toLowerCase();
+    const all = SEGS.find(([k]) => k === permSeg)[2];
+    const q = permFilter.trim().toLowerCase();
+    const shown = all.filter((x) => !q || x.name.toLowerCase().includes(q));
+    if (!all.length) { list.append(el("div", "muted", `No ${label} in this registry`)); return; }
+    if (!shown.length) { list.append(el("div", "muted", `No ${label} match '${permFilter.trim()}'`)); return; }
+    for (const x of shown) {
+      const b = el("button", "perm-item" + (permSel[permSeg] === x.name ? " active" : ""), "");
+      b.type = "button";
+      if (permSel[permSeg] === x.name) b.setAttribute("aria-current", "true");
+      b.append(el("span", "perm-item-name", x.name));
+      if (permSeg === "machines") {
+        if (curationDrafts[x.name]) {
+          const dot = el("span", "fw-dot", "●");
+          dot.title = "Edited"; dot.setAttribute("aria-label", "Edited");
+          b.append(dot);
+        }
+        if (!x.editable) b.append(el("span", "muted perm-tag", "read-only"));
+      } else if (permSeg === "targets" && x.manual) {
+        b.append(el("span", "muted perm-tag", "manual"));
+      }
+      b.onclick = () => select(x.name);
+      list.append(b);
+    }
+  }
+
+  filterInp.oninput = () => { permFilter = filterInp.value; renderList(); };
+
+  function renderPanel() {
+    panel.replaceChildren();
+    const name = permSel[permSeg];
+    if (!name) return;
+    const build = { machines: permMachinePanel, targets: permTargetPanel,
+                    agents: permAgentPanel, skills: permSkillPanel }[permSeg];
+    panel.append(build(d, name, { go, refreshList: renderList }));
+  }
+
+  left.append(seg, filterInp, list);
+  cols.append(left, panel);
+  wrap.append(cols);
+  renderSeg(); renderList(); renderPanel();
+  return wrap;
+}
+
+function permSkillRows(d, machine, target) {
+  return d.skill_reach.filter((r) => r.machine === machine && r.target === target);
+}
+
+function permMachinePanel(d, name, ctx) {
+  const m = d.machines.find((x) => x.name === name);
+  const box = el("div", "perm-machine");
+  box.append(el("h4", "", m.name));
+  box.append(el("div", "muted", `Targets: ${m.targets.join(", ") || "none"} · Connections: `
+    + (m.document_stores.length ? m.document_stores.join(", ") : "none wired")));
+  if (!m.editable) {
+    box.append(el("div", "muted perm-note",
+      "Read-only: this machine has no profile under registry/local/machines/, so there is "
+      + "nothing here to edit."));
+  }
+
+  const lane = new Set(d.targets.map((t) => t.name));
+  const manual = new Set(d.targets.filter((t) => t.manual).map((t) => t.name));
+  const pendingTags = [];
+  const refreshActions = () => {
+    const dirty = !!curationDrafts[m.name];
+    save.disabled = !dirty; revert.disabled = !dirty;
+    for (const fn of pendingTags) fn();
+    ctx.refreshList();
+  };
+
+  for (const target of m.targets.filter((t) => lane.has(t))) {
+    const rows = permSkillRows(d, m.name, target);
+    const det = el("details", "perm-group");
+    const sum = el("summary", "");
+    sum.append(el("strong", "", target),
+      el("span", "muted", ` — ${rows.filter((r) => r.reaches).length} of ${rows.length} skills reach`
+        + (manual.has(target) ? " · chosen at upload time" : "")));
+    det.append(sum);
+    // rows are built when the group first opens, not up front (NFR-2: a registry with many
+    // skills × targets must not pay for groups nobody looked at)
+    det.addEventListener("toggle", () => {
+      if (!det.open || det.dataset.built) return;
+      det.dataset.built = "1";
+      for (const r of rows) {
+        const row = el("div", "perm-row");
+        const block = () => permBlock(m, target);
+        if (r.curatable) {
+          const cb = el("input");
+          cb.type = "checkbox";
+          cb.checked = permDeploys(block(), r.skill);
+          cb.setAttribute("aria-label", `Deploy ${r.skill} to ${m.name} ${target}`);
+          cb.onchange = () => { setPermDeploy(m, target, r.skill, cb.checked); refreshActions(); };
+          row.append(cb);
+        } else {
+          row.append(el("span", "perm-nocb"));
+        }
+        const link = el("button", "link-btn", r.skill);
+        link.type = "button";
+        link.onclick = () => ctx.go("skills", r.skill);
+        row.append(link, permGlyph(r.reaches), el("span", "muted perm-reason", r.reason));
+        if (r.note) row.append(el("span", "muted perm-reason", `· ${r.note}`));
+        const pending = el("span", "muted perm-reason", "");
+        const syncPending = () => {
+          const want = r.curatable ? permDeploys(block(), r.skill) : r.reaches;
+          pending.textContent = want !== r.reaches ? (want ? "· will deploy after save" : "· will stop after save") : "";
+        };
+        pendingTags.push(syncPending);
+        syncPending();
+        row.append(pending);
+        det.append(row);
+      }
+    });
+    box.append(det);
+  }
+
+  // this machine's agents: reach and reason, each linking to the agent form
+  const agents = d.agent_reach.filter((r) => r.machine === m.name);
+  if (agents.length) {
+    box.append(el("h5", "", "Agents"));
+    for (const r of agents) {
+      const row = el("div", "perm-row");
+      row.append(el("span", "perm-nocb"));
+      const link = el("button", "link-btn", r.agent);
+      link.type = "button";
+      link.onclick = () => ctx.go("agents", r.agent);
+      row.append(link, permGlyph(r.reaches), el("span", "muted perm-reason", r.reason));
+      box.append(row);
+    }
+  }
+
+  const actions = el("div", "detail-actions");
+  const reason = el("input", "detail-reason");
+  reason.type = "text";
+  reason.placeholder = "Reason (optional — logged on accept)";
+  const save = el("button", "accept", "Save to inbox");
+  save.title = "Propose this machine's curation as an inbox candidate";
+  const revert = el("button", "reject tiny", "Revert");
+  revert.title = "Discard pending curation changes for this machine";
+  save.onclick = async () => {
+    const block = {};
+    for (const [t, b] of Object.entries(m.curation || {})) block[t] = b;
+    for (const [t, b] of Object.entries(curationDrafts[m.name] || {})) block[t] = b;
+    const res = await fetch("/api/machines/curation", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine: m.name, skills: block, reason: reason.value }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`Proposed → inbox/${out.id} — review in the Inbox tab, then Accept.`, 5000);
+      delete curationDrafts[m.name];
+      await refresh();
+    } else {
+      toast(`Error: ${out.error}`, 6000);
+    }
+  };
+  revert.onclick = () => { delete curationDrafts[m.name]; renderSkills(); };
+  const btns = el("div", "action-group");
+  btns.append(save, revert);
+  if (m.editable) {
+    actions.append(reason, btns);
+    box.append(actions);
+    const dirty = !!curationDrafts[m.name];
+    save.disabled = !dirty; revert.disabled = !dirty;
+  }
+  return box;
+}
+
+function permChips(d, rowsOf) {
+  const chips = el("div", "perm-chips");
+  for (const r of rowsOf) {
+    const c = el("span", "perm-chip " + (r.reaches ? "reach" : "noreach"));
+    c.title = r.reason;
+    c.append(permGlyph(r.reaches), document.createTextNode(" " + r.machine));
+    chips.append(c);
+  }
+  return chips;
+}
+
+function permTargetPanel(d, name, ctx) {
+  const box = el("div", "perm-target");
+  const t = d.targets.find((x) => x.name === name);
+  box.append(el("h4", "", name));
+  box.append(el("div", "muted",
+    (t.manual ? "Manual: stages a menu you upload by hand — no curation. " : "")
+    + (t.project_surface ? "Has a project-scoped skill surface." : "Global skills only.")));
+  const machines = d.machines.filter((m) => m.targets.includes(name));
+  box.append(el("h5", "", "Machines running it"));
+  const mrow = el("div", "perm-chips");
+  for (const m of machines) {
+    const b = el("button", "link-btn", m.name);
+    b.type = "button";
+    b.onclick = () => ctx.go("machines", m.name);
+    mrow.append(b);
+  }
+  if (!machines.length) mrow.append(el("span", "muted", "No machine runs this target."));
+  box.append(mrow);
+  box.append(el("h5", "", "Skills targeting it"));
+  const skills = d.skills.filter((s) => s.targets.includes(name));
+  if (!skills.length) box.append(el("div", "muted", "None."));
+  for (const s of skills) {
+    const row = el("div", "perm-row");
+    const link = el("button", "link-btn", s.name);
+    link.type = "button";
+    link.onclick = () => ctx.go("skills", s.name);
+    row.append(link, permChips(d, d.skill_reach.filter((r) => r.target === name && r.skill === s.name)));
+    box.append(row);
+  }
+  const agents = d.agents.filter((a) => a.targets.includes(name));
+  box.append(el("h5", "", "Agents targeting it"));
+  if (!agents.length) box.append(el("div", "muted", "None."));
+  for (const a of agents) {
+    const link = el("button", "link-btn", a.name);
+    link.type = "button";
+    link.onclick = () => ctx.go("agents", a.name);
+    box.append(link);
+  }
+  return box;
+}
+
+function permAgentPanel(d, name, ctx) {
+  const a = d.agents.find((x) => x.name === name);
+  const box = el("div", "perm-agent");
+  box.append(el("h4", "", name));
+  box.append(el("div", "muted", `Targets: ${a.targets.join(", ") || "none"}`));
+  const edit = el("button", "tiny", "Edit agent");
+  edit.onclick = () => { editingAgentName = name; renderSkills(); };
+  box.append(edit);
+  box.append(el("h5", "", "Machines it reaches"));
+  const reach = d.agent_reach.filter((r) => r.agent === name);
+  if (!reach.length) box.append(el("div", "muted", "No machines."));
+  for (const r of reach) {
+    const row = el("div", "perm-row");
+    const link = el("button", "link-btn", r.machine);
+    link.type = "button";
+    link.onclick = () => ctx.go("machines", r.machine);
+    row.append(link, permGlyph(r.reaches), el("span", "muted perm-reason", r.reason));
+    box.append(row);
+  }
+  box.append(el("h5", "", "Skills it uses"));
+  if (!a.skills.length) box.append(el("div", "muted", "None."));
+  for (const sk of a.skills) {
+    const row = el("div", "perm-row");
+    const link = el("button", "link-btn", sk);
+    link.type = "button";
+    link.onclick = () => ctx.go("skills", sk);
+    const rows = d.skill_reach.filter((r) => r.skill === sk && a.targets.includes(r.target));
+    row.append(link, permChips(d, rows));
+    box.append(row);
+  }
+  return box;
+}
+
+function permSkillPanel(d, name, ctx) {
+  const sk = d.skills.find((x) => x.name === name);
+  const box = el("div", "perm-skill");
+  box.append(el("h4", "", name));
+
+  box.append(el("h5", "", "Targets"));
+  box.append(el("div", "muted", sk.targets.join(", ") || "none"));
+  const editT = el("button", "tiny", "Edit targets");
+  editT.onclick = () => { permissionsOpen = false; openContextualEditor({ kind: "skill", ident: name, returnTab: "skills" }); };
+  box.append(editT);
+
+  box.append(el("h5", "", "Scope"));
+  box.append(el("div", "muted", sk.scope === "project"
+    ? "project: deploys only to the projects below, on targets with a project-scoped surface"
+    : "global: deploys to every shared directory its targets offer"));
+  const chips = el("div", "perm-chips");
+  for (const slug of sk.bound_projects) {
+    const b = el("button", "link-btn", slug);
+    b.type = "button";
+    b.title = "Edit this project's properties";
+    b.onclick = () => { permissionsOpen = false; openProjectEdit(slug); };
+    chips.append(b);
+  }
+  if (!sk.bound_projects.length) chips.append(el("span", "muted", "No project binds it."));
+  box.append(chips);
+  const editS = el("button", "tiny", "Edit scope");
+  editS.onclick = () => {
+    const s = (STATE.prompts.skills || []).find((x) => x.name === name);
+    if (!s) return;
+    permissionsOpen = false;
+    openSkillDrawer(s, null);
+  };
+  box.append(editS);
+
+  box.append(el("h5", "", "Required connection"));
+  if (!sk.requires_server) {
+    box.append(el("div", "muted", "None."));
+  } else {
+    for (const m of d.machines) {
+      const wired = m.document_stores.includes(sk.requires_server);
+      const row = el("div", "perm-row");
+      row.append(el("span", "perm-nocb"), permGlyph(wired),
+        el("span", "", m.name),
+        el("span", "muted perm-reason", wired ? `${sk.requires_server} is wired` : `${sk.requires_server} is not wired`));
+      box.append(row);
+    }
+  }
+
+  box.append(el("h5", "", "Reach"));
+  const rows = d.skill_reach.filter((r) => r.skill === name);
+  if (!rows.length) box.append(el("div", "muted", "No machine has a target this skill is for."));
+  for (const r of rows) {
+    const row = el("div", "perm-row");
+    row.append(el("span", "perm-nocb"), permGlyph(r.reaches), el("span", "", `${r.machine} · ${r.target}`),
+      el("span", "muted perm-reason", r.reason));
+    if (r.note) row.append(el("span", "muted perm-reason", `· ${r.note}`));
+    box.append(row);
+  }
+
+  box.append(el("h5", "", "Agents that use it"));
+  const users = d.agents.filter((a) => a.skills.includes(name));
+  if (!users.length) box.append(el("div", "muted", "None."));
+  for (const a of users) {
+    const b = el("button", "link-btn", a.name);
+    b.type = "button";
+    b.onclick = () => ctx.go("agents", a.name);
+    box.append(b);
+  }
+  return box;
 }
 
 function orgTreeNode(node) {

@@ -713,14 +713,31 @@ def _selected_skills(reg: Registry, sk_spec: dict, machine: dict | None = None) 
     tgt = sk_spec["include_target"]
     manual = is_manual_skill_target({"skills": sk_spec})
     curation = {} if manual else (((machine or {}).get("skills") or {}).get(tgt) or {})
-    include = curation.get("include")
-    exclude = set(curation.get("exclude") or [])
     stores = set(document_stores((machine or {}).get("document_store")))
     return [s for s in reg.skills.values()
-            if tgt in s.targets
-            and (s.requires_server is None or s.requires_server in stores)
-            and (include is None or s.name in include)
-            and s.name not in exclude]
+            if skill_gate(s, tgt, manual, curation, stores) is None]
+
+
+def skill_gate(skill, target: str, manual: bool, curation: dict, stores: set) -> str | None:
+    """Whether ONE skill reaches ONE target on ONE machine: None when it does, otherwise the
+    reason it does not. This is the single gate `_selected_skills` filters on (deploy) and the
+    console's Permissions view prints (`review.permissions_index`), so the view can never say
+    something the deploy does not do. The checks run in the order the docstring above lists
+    them: targeted, then the non-curatable connection gate, then the machine's curation.
+    `curation` is the machine's `skills: {<target>: {...}}` block, already `{}` for a manual
+    target (`manual` is accepted so a caller states it; it is never consulted twice)."""
+    if target not in skill.targets:
+        return f"does not target {target}"
+    if skill.requires_server is not None and skill.requires_server not in stores:
+        return (f"needs the {skill.requires_server} connection, which this machine's "
+                f"document_store: does not wire")
+    include = None if manual else (curation or {}).get("include")
+    exclude = set() if manual else set((curation or {}).get("exclude") or [])
+    if include is not None and skill.name not in include:
+        return "not in this machine's skills: include list"
+    if skill.name in exclude:
+        return "excluded by this machine's skills: exclude list"
+    return None
 
 
 def skill_deploy_warnings(reg: Registry, machine_name: str) -> list[str]:
