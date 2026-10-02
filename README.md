@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/mitos_logo.png" alt="Mitos — Human Agentic Harness" width="360"></p>
+
 # Mitos
 
 > **Mitos** *(MEE-tohs)* — a human-agentic harness. Named after the Greek word **μίτος**, the thread Ariadne gave Theseus to find his way back out of the labyrinth. Your agents work the maze; Mitos is the thread that keeps them anchored to *your* knowledge, your tools, and your judgment.
