@@ -172,6 +172,16 @@ surfaced it — presence anywhere always wins over absence from one scope. The s
 this before clearing anything, so a stale browser tab can never purge a document that's still
 live in some watch.
 
+### Goals on a Work item
+
+The effort editor's **Goal** box has a `+`. It breaks the goal out into a numbered list, each goal
+just its text; `+` below the list adds one, `×` removes one, and with a single goal left the editor
+returns to the one box. A document can be filed under a goal: the document editor's Parent
+dropdown, a row's move select and the bulk **Move to** bar list `Work › Goal n`. Removing a goal
+returns its documents to the Work item, and the Knowledge Graph tab shows them there as soon as the
+removal is in the draft. A goal edit is a `kind: graph` candidate like any other; its Inbox card
+shows `Effort <id>: goals n → m` and `k document(s) return to the Work item`.
+
 ### ✔️ Done state on efforts
 
 The effort editor has a **Mark as Done** checkbox and an **Implemented Document ID** field. Done

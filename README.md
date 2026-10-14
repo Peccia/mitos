@@ -368,6 +368,11 @@ and `keywords`. PNG/JPEG/GIF/WebP files collapse to the kind `image` and seriali
 `schema:ImageObject` node (no `additionalType`) — a reference and a description, never the
 image bytes; the deployed doc lines then tell the harness to open such an entry as an image.
 
+A Work item (`CreativeWork`) carries one `peccia:goal`, or two or more numbered goal nodes
+(`creativework/<id>/goal/<k>`); a document may belong to a goal, and removing a goal returns its
+documents to the Work item. A proposal that sends `goal` to a multi-goal Work item is refused:
+send `goals: []` with it to collapse to one goal.
+
 You map documents into the graph through **one human-gated valve** — a `kind: graph` candidate
 in `inbox/` that you accept in the console. Building it is **three independent stages**, so the
 document store is set up once and reused, never coupled to scaffolding.

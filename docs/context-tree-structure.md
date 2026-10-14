@@ -48,7 +48,9 @@ same way — only the deploy root differs.
 
    Under an effort's `###` heading the generated lines render in a fixed order: the effort
    description, then the `**Goal:** …` intent line (`graph._effort_goal_line`), then the effort's
-   documents.
+   documents. A Work item with two or more goals renders `**Goals:**` instead, then each goal as
+   `1. <text>` with its own documents indented beneath it (`graph._effort_goals_block`), then the
+   status and keywords lines, then the Work item's own documents.
 
    A document line reads `- **<name>** `<id>` (<date> · <type>) — <description>`. The
    `· <type>` label appears only for a kind other than the default `document` (a sheet, a
