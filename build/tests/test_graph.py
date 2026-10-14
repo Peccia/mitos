@@ -1388,3 +1388,395 @@ def test_loader_rejects_duplicate_status_triples():
     jsonld = graph.canonical_jsonld(_done_graph()).replace(
         '"creativeWorkStatus": "done"', '"creativeWorkStatus": ["done", "shipped"]')
     _expect_graph_error(jsonld, "duplicate status")
+
+
+# ── Single-goal Work item: byte-identical to the base (FR-2) ───────────────────
+# Literals captured from v0.2.0 (56b93a5) before the multi-goal change. A one-goal Work
+# item keeps `peccia:goal` on the effort node, no goal node, and the same rendered lines.
+
+_GOLDEN_FULL = (
+    '## P \u2014 Documents\n'
+    '\n'
+    'Knowledge-graph documents for this project. Resolve a document by its ID.\n'
+    '\n'
+    '### Documents\n'
+    '\n'
+    '- **Root doc** `ROOT1` (2026-01-09) \u2014 d Root doc\n'
+    '\n'
+    '### Auth (auth)\n'
+    '\n'
+    'Auth rework\n'
+    '\n'
+    '**Goal:** Ship single sign-on\n'
+    '\n'
+    '_Status: Done \xb7 Implemented Document: `IMPL1`._\n'
+    '\n'
+    '_Also known as: login, sso._\n'
+    '\n'
+    '- **Notes** `NOTE1` (2026-01-06) \u2014 d Notes\n'
+    '- **Spec** `SPEC1` (2026-01-05) \u2014 d Spec\n'
+    '- **Implemented** `IMPL1` (2026-01-03) \u2014 d Implemented\n'
+)
+
+_GOLDEN_INDEX = (
+    '## P \u2014 Documents\n'
+    '\n'
+    'Document titles from the knowledge graph. Full details (document IDs, links, descriptions, tags) are in [`AGENTS_DETAILS.md`](AGENTS_DETAILS.md). To change this list, edit `registry/graph/p.jsonld` and redeploy.\n'
+    '\n'
+    '### Documents\n'
+    '\n'
+    '- Root doc\n'
+    '\n'
+    '### Auth (auth)\n'
+    '\n'
+    '**Goal:** Ship single sign-on\n'
+    '\n'
+    '_Status: Done \xb7 Implemented Document: `IMPL1`._\n'
+    '\n'
+    '_Also known as: login, sso._\n'
+    '\n'
+    '- Notes\n'
+    '- Spec\n'
+    '- Implemented\n'
+)
+
+_GOLDEN_DETAILS = (
+    '# P \u2014 Documents\n'
+    '\n'
+    'Full document reference for `AGENTS.md`. Resolve a document by its ID.\n'
+    '\n'
+    '## Documents\n'
+    '\n'
+    '- **Root doc** `ROOT1` (2026-01-09) \u2014 d Root doc\n'
+    '\n'
+    '## Auth (auth)\n'
+    '\n'
+    'Auth rework\n'
+    '\n'
+    '**Goal:** Ship single sign-on\n'
+    '\n'
+    '_Status: Done \xb7 Implemented Document: `IMPL1`._\n'
+    '\n'
+    '_Also known as: login, sso._\n'
+    '\n'
+    '- **Notes** `NOTE1` (2026-01-06) \u2014 d Notes\n'
+    '- **Spec** `SPEC1` (2026-01-05) \u2014 d Spec\n'
+    '- **Implemented** `IMPL1` (2026-01-03) \u2014 d Implemented\n'
+)
+
+_GOLDEN_JSONLD = (
+    '{\n'
+    '  "@context": {\n'
+    '    "@vocab": "https://schema.org/"\n'
+    '  },\n'
+    '  "@graph": [\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/project/p",\n'
+    '      "@type": "Project",\n'
+    '      "name": "P"\n'
+    '    },\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/creativework/auth",\n'
+    '      "@type": "CreativeWork",\n'
+    '      "name": "Auth",\n'
+    '      "description": "Auth rework",\n'
+    '      "isPartOf": {\n'
+    '        "@id": "http://peccia.net/project/p"\n'
+    '      },\n'
+    '      "http://peccia.net/goal": "Ship single sign-on",\n'
+    '      "keywords": "login, sso",\n'
+    '      "creativeWorkStatus": "done",\n'
+    '      "http://peccia.net/evaluation": {\n'
+    '        "@id": "http://peccia.net/document/IMPL1"\n'
+    '      }\n'
+    '    },\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/document/IMPL1",\n'
+    '      "@type": "DigitalDocument",\n'
+    '      "identifier": "IMPL1",\n'
+    '      "name": "Implemented",\n'
+    '      "description": "d Implemented",\n'
+    '      "dateModified": "2026-01-03",\n'
+    '      "isPartOf": {\n'
+    '        "@id": "http://peccia.net/creativework/auth"\n'
+    '      }\n'
+    '    },\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/document/NOTE1",\n'
+    '      "@type": "DigitalDocument",\n'
+    '      "identifier": "NOTE1",\n'
+    '      "name": "Notes",\n'
+    '      "description": "d Notes",\n'
+    '      "dateModified": "2026-01-06",\n'
+    '      "isPartOf": {\n'
+    '        "@id": "http://peccia.net/creativework/auth"\n'
+    '      }\n'
+    '    },\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/document/ROOT1",\n'
+    '      "@type": "DigitalDocument",\n'
+    '      "identifier": "ROOT1",\n'
+    '      "name": "Root doc",\n'
+    '      "description": "d Root doc",\n'
+    '      "dateModified": "2026-01-09",\n'
+    '      "isPartOf": {\n'
+    '        "@id": "http://peccia.net/project/p"\n'
+    '      }\n'
+    '    },\n'
+    '    {\n'
+    '      "@id": "http://peccia.net/document/SPEC1",\n'
+    '      "@type": "DigitalDocument",\n'
+    '      "identifier": "SPEC1",\n'
+    '      "name": "Spec",\n'
+    '      "description": "d Spec",\n'
+    '      "dateModified": "2026-01-05",\n'
+    '      "isPartOf": {\n'
+    '        "@id": "http://peccia.net/creativework/auth"\n'
+    '      }\n'
+    '    }\n'
+    '  ]\n'
+    '}\n'
+)
+
+
+def _golden_single_goal_graph():
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="")
+    e = graph.CreativeWork(id="auth", name="Auth", description="Auth rework", is_part_of=pg.iri,
+                           goal="Ship single sign-on", keywords="login, sso", status="done",
+                           evaluation="IMPL1")
+    pg = graph.upsert_effort(pg, e)
+    for did, nm, day, part in (("SPEC1", "Spec", "05", e.iri), ("NOTE1", "Notes", "06", e.iri),
+                               ("IMPL1", "Implemented", "03", e.iri),
+                               ("ROOT1", "Root doc", "09", "")):
+        pg = graph.upsert_document(pg, graph.Document(
+            drive_id=did, name=nm, description="d " + nm, date_modified="2026-01-" + day,
+            is_part_of=part))
+    return pg
+
+
+def test_single_goal_work_item_is_byte_identical_to_base():
+    """FR-2: a one-goal Work item's three markdown views and its canonical JSON-LD equal the
+    literals captured from the base commit, and no goal node is emitted."""
+    from agentic import graph
+    pg = _golden_single_goal_graph()
+    assert graph.project_full_markdown(pg) == _GOLDEN_FULL
+    assert graph.project_index_markdown(pg) == _GOLDEN_INDEX
+    assert graph.project_details_markdown(pg) == _GOLDEN_DETAILS
+    assert graph.canonical_jsonld(pg) == _GOLDEN_JSONLD
+    assert "/goal/" not in graph.canonical_jsonld(pg)
+
+
+
+# ── Multi-goal Work items ─────────────────────────────────────────────────────
+def _auth_with_goals(status="", keys=((1, "Spec the API"), (2, "Plan the rollout")),
+                     docs=(("SPEC1", "Spec", 1), ("PLAN1", "Plan", 2), ("NOTE1", "Notes", 0))):
+    """A Work item "Auth" with a goal list, a document per goal and one on the Work item."""
+    from agentic import graph
+    pg = graph.ProjectGraph(slug="p", name="P", description="")
+    e = graph.CreativeWork(id="auth", name="Auth", description="", is_part_of=pg.iri,
+                           status=status, goals=tuple(keys))
+    pg = graph.upsert_effort(pg, e)
+    for did, nm, key in docs:
+        parent = graph.goal_iri("auth", key) if key else e.iri
+        pg = graph.upsert_document(pg, graph.Document(
+            drive_id=did, name=nm, description="", date_modified="2026-01-01", is_part_of=parent))
+    return pg
+
+
+def test_multi_goal_canonical_jsonld_round_trips():
+    """A three-goal Work item serializes its goal nodes right after the effort, by key, and the
+    serialization survives load -> re-serialize byte for byte."""
+    import json
+    from agentic import graph
+    pg = _auth_with_goals(keys=((3, "Third"), (1, "First"), (7, "Seventh")),
+                          docs=(("D1", "Alpha", 1), ("D3", "Gamma", 7)))
+    text = graph.canonical_jsonld(pg)
+    ids = [n["@id"] for n in json.loads(text)["@graph"]]
+    at = ids.index(graph.CREATIVE_WORK_NS + "auth")
+    assert ids[at + 1:at + 4] == [graph.goal_iri("auth", k) for k in (1, 3, 7)]
+    p = _write_graph(text)
+    try:
+        reloaded = graph.load_project_graph(p)
+        assert graph.canonical_jsonld(reloaded) == text
+        e = reloaded.efforts[0]
+        assert e.goal == "" and e.goals == ((1, "First"), (3, "Third"), (7, "Seventh"))
+        parents = {d.drive_id: d.is_part_of for d in reloaded.documents}
+        assert parents == {"D1": graph.goal_iri("auth", 1), "D3": graph.goal_iri("auth", 7)}
+    finally:
+        p.unlink()
+
+
+_AUTH_FULL = (
+    "### Auth (auth)\n\n"
+    "**Goals:**\n\n"
+    "1. Spec the API\n"
+    "   - **Spec** `SPEC1` (2026-01-01)\n\n"
+    "2. Plan the rollout\n"
+    "   - **Plan** `PLAN1` (2026-01-01)\n\n"
+    "_Status: Done._\n\n"
+    "- **Notes** `NOTE1` (2026-01-01)\n")
+
+
+def test_multi_goal_renders_numbered_goals_in_every_view():
+    """FR-13, FR-14, FR-20: each goal is a numbered line followed by its own indented documents,
+    the Work item's documents come after the last goal, and a Done item has one status line."""
+    from agentic import graph
+    pg = _auth_with_goals(status="done")
+    full = graph.project_full_markdown(pg)
+    assert full[full.index("### Auth (auth)"):] == _AUTH_FULL
+    details = graph.project_details_markdown(pg)
+    assert details[details.index("## Auth (auth)"):] == _AUTH_FULL.replace("### Auth", "## Auth")
+    index = graph.project_index_markdown(pg)
+    assert index[index.index("### Auth (auth)"):] == (
+        "### Auth (auth)\n\n**Goals:**\n\n"
+        "1. Spec the API\n   - Spec\n\n"
+        "2. Plan the rollout\n   - Plan\n\n"
+        "_Status: Done._\n\n- Notes\n")
+    for out in (full, index, details):
+        assert out.count("_Status:") == 1
+        assert "**Goal:**" not in out
+        for line in out.splitlines():
+            if line.startswith(("1. ", "2. ")):
+                assert "Done" not in line
+
+
+def test_multi_goal_no_documents_note_only_when_everything_is_empty():
+    from agentic import graph
+    empty = _auth_with_goals(docs=())
+    assert "_No documents in this effort._" in graph.project_full_markdown(empty)
+    goal_only = _auth_with_goals(docs=(("SPEC1", "Spec", 1),))
+    out = graph.project_full_markdown(goal_only)
+    assert "_No documents in this effort._" not in out and "Spec" in out
+    assert "2. Plan the rollout" in out       # a goal with no document is still listed
+
+
+def test_multi_goal_cap_footer_is_indented_under_its_goal():
+    from agentic import graph
+    many = tuple((f"D{i:03d}", f"Doc {i:03d}", 1) for i in range(graph.INDEX_LIMIT + 3))
+    pg = _auth_with_goals(docs=many)
+    assert ("   - _…and 3 more — see [`AGENTS_DETAILS.md`](AGENTS_DETAILS.md)_\n"
+            in graph.project_index_markdown(pg))
+    assert "   _…and 3 more documents._\n" in graph.project_full_markdown(pg)
+
+
+def test_remove_effort_returns_goal_documents_to_the_project_root():
+    """TEST-01: removing a Work item resets documents on the Work item AND on its goals."""
+    from agentic import graph
+    pg = graph.remove_effort(_auth_with_goals(), "auth")
+    assert not pg.efforts
+    assert {d.is_part_of for d in pg.documents} == {""}
+    p = _write_graph(graph.canonical_jsonld(pg))
+    try:
+        graph.load_project_graph(p)
+    finally:
+        p.unlink()
+
+
+def test_upsert_effort_rehomes_documents_of_a_removed_goal():
+    """FR-10, FR-12 at the graph level: a document whose goal node disappears lands on its
+    Work item; documents on surviving goals stay."""
+    from dataclasses import replace
+    from agentic import graph
+    pg = _auth_with_goals(keys=((1, "One"), (2, "Two"), (3, "Three")),
+                          docs=(("D1", "A", 1), ("D2", "B", 2), ("D3", "C", 3)))
+    eff = pg.efforts[0]
+    dropped = graph.upsert_effort(pg, replace(eff, goals=((1, "One"), (3, "Three"))))
+    assert {d.drive_id: d.is_part_of for d in dropped.documents} == {
+        "D1": graph.goal_iri("auth", 1), "D2": eff.iri, "D3": graph.goal_iri("auth", 3)}
+    collapsed = graph.upsert_effort(pg, replace(eff, goal="Just one", goals=()))
+    assert {d.is_part_of for d in collapsed.documents} == {eff.iri}
+    assert "/goal/" not in graph.canonical_jsonld(collapsed)
+
+
+def test_loader_refuses_malformed_goal_structures():
+    """Each broken goal shape raises GraphError (loader negatives, including a document on a
+    goal key that is not active)."""
+    import json
+    from agentic import graph
+    from conftest import raises
+    base = json.loads(graph.canonical_jsonld(_auth_with_goals()))
+
+    def goal_node(key, text="x", owner="auth"):
+        return {"@id": f"http://peccia.net/creativework/{owner}/goal/{key}",
+                "@type": "CreativeWork",
+                "isPartOf": {"@id": f"http://peccia.net/creativework/{owner}"},
+                graph.GOAL_PRED: text}
+
+    def node(g, suffix):
+        return next(n for n in g if n["@id"].endswith(suffix))
+
+    def drop_goal_2(g):
+        g.remove(node(g, "/goal/2"))
+        g.remove(node(g, "/document/PLAN1"))
+
+    cases = {
+        "goal for an unknown effort": (lambda g: g.append(goal_node(1, owner="ghost")),
+                                       "names an effort that is not in this file"),
+        "literal plus goal nodes": (
+            lambda g: node(g, "/creativework/auth").__setitem__(graph.GOAL_PRED, "one"),
+            "both a goal and a goal list"),
+        "exactly one goal node": (drop_goal_2, "exactly one goal node"),
+        "empty goal text": (lambda g: node(g, "/goal/1").__setitem__(graph.GOAL_PRED, "  "),
+                            "non-empty peccia:goal text"),
+        "goal owned by another parent": (
+            lambda g: node(g, "/goal/1").__setitem__(
+                "isPartOf", {"@id": "http://peccia.net/project/p"}),
+            "must be isPartOf its effort"),
+        "two goal texts on one node": (
+            lambda g: node(g, "/goal/1").__setitem__(graph.GOAL_PRED, ["a", "b"]),
+            "non-empty peccia:goal text"),
+        "document on an inactive goal key": (
+            lambda g: node(g, "/document/NOTE1").__setitem__(
+                "isPartOf", {"@id": "http://peccia.net/creativework/auth/goal/9"}),
+            "known CreativeWork IRI"),
+        "leading-zero goal key": (lambda g: g.append(goal_node("03")), "effort id"),
+    }
+    for label, (mutate, expect) in cases.items():
+        copy = json.loads(json.dumps(base))
+        mutate(copy["@graph"])
+        p = _write_graph(json.dumps(copy))
+        try:
+            with raises(graph.GraphError, match=expect):
+                graph.load_project_graph(p)
+        finally:
+            p.unlink()
+
+
+def test_check_effort_goals_refuses_bad_lists():
+    from agentic import graph
+    from conftest import raises
+
+    def mk(**kw):
+        return graph.CreativeWork(id="a", name="A", description="",
+                                  is_part_of=graph.PROJECT_NS + "p", **kw)
+
+    for label, bad in {
+        "duplicate key": mk(goals=((1, "a"), (1, "b"))),
+        "key zero": mk(goals=((0, "a"), (1, "b"))),
+        "single goal node": mk(goals=((1, "a"),)),
+        "goal and list": mk(goal="g", goals=((1, "a"), (2, "b"))),
+        "blank text": mk(goals=((1, "a"), (2, "  "))),
+    }.items():
+        with raises(graph.GraphError):
+            graph.check_effort_goals(bad, label)
+    graph.check_effort_goals(mk(goals=((1, "a"), (4, "b"))), "ok")
+
+
+def test_parse_fragment_parents_documents_only_to_goals_it_carries():
+    """A fragment is self-consistent: a document's goal parent must be an active goal of an
+    effort the fragment itself carries (the shared pass-2 parent check)."""
+    import json
+    from agentic import graph
+    from conftest import raises
+    doc = json.loads(graph.canonical_jsonld(_auth_with_goals()))
+    efforts = [n for n in doc["@graph"] if "/creativework/" in n["@id"]]
+    note = next(n for n in doc["@graph"] if n["@id"].endswith("/document/NOTE1"))
+
+    def fragment(parent):
+        moved = {**note, "isPartOf": {"@id": parent}}
+        return json.dumps({"@context": doc["@context"], "@graph": efforts + [moved]})
+
+    graph.parse_fragment(fragment(graph.goal_iri("auth", 2)), "p")
+    with raises(graph.GraphError, match="known CreativeWork IRI"):
+        graph.parse_fragment(fragment(graph.goal_iri("auth", 9)), "p")

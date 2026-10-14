@@ -74,6 +74,10 @@ JSONLD_CONTEXT = {"@vocab": SCHEMA}
 # Effort IDs are IRI suffixes: only lowercase alphanumerics and hyphens, no leading/
 # trailing/consecutive hyphens (same discipline as DNS labels).
 _EFFORT_ID_RE = re.compile(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+# A goal node of a multi-goal effort: `<effort-id>/goal/<k>` under creativework/. `k` is a
+# stable positive integer key that is never shown; the number a reader sees is the goal's
+# rank by key, so removing a goal renumbers the rest without changing any IRI.
+_GOAL_IRI_RE = re.compile(r'^([a-z0-9]([a-z0-9-]*[a-z0-9])?)/goal/([1-9][0-9]*)$')
 
 
 class GraphError(Exception):
@@ -120,10 +124,45 @@ class CreativeWork:
     hidden: bool = False  # peccia:hidden — whether this effort is hidden from deployed trees
     status: str = ""      # schema:creativeWorkStatus — "" (active) or "done" (KNOWN_STATUSES)
     evaluation: str = ""  # peccia:evaluation — Drive ID of the Implemented Document; needs "done"
+    goals: tuple[tuple[int, str], ...] = ()
+    #                     (key, text) sorted by key. One goal lives in `goal` with goals == ();
+    #                     two or more live here as goal nodes, with goal == "".
 
     @property
     def iri(self) -> str:
         return CREATIVE_WORK_NS + self.id
+
+    @property
+    def goal_iris(self) -> tuple[str, ...]:
+        return tuple(goal_iri(self.id, k) for k, _t in self.goals)
+
+
+def goal_iri(effort_id: str, key: int) -> str:
+    """The IRI of goal `key` of effort `effort_id`."""
+    return CREATIVE_WORK_NS + f"{effort_id}/goal/{key}"
+
+
+def check_effort_goals(effort: CreativeWork, label: str) -> None:
+    """Validate an effort's goal list: a list holds two or more goals and no single `goal`
+    text, every key is a positive integer used once, every text is non-empty. Raises
+    GraphError."""
+    if not effort.goals:
+        return
+    if effort.goal:
+        raise GraphError(
+            f"{label}: effort {effort.id!r} has both a goal and a goal list — one goal is "
+            f"stored as peccia:goal on the Work item, two or more as goal nodes")
+    if len(effort.goals) == 1:
+        raise GraphError(
+            f"{label}: effort {effort.id!r} has exactly one goal node — a single goal is "
+            f"stored as peccia:goal on the Work item")
+    keys = [k for k, _t in effort.goals]
+    if any((not isinstance(k, int)) or k < 1 for k in keys):
+        raise GraphError(f"{label}: effort {effort.id!r} has a goal key that is not a positive integer")
+    if len(set(keys)) != len(keys):
+        raise GraphError(f"{label}: effort {effort.id!r} has a duplicate goal key")
+    if any(not t.strip() for _k, t in effort.goals):
+        raise GraphError(f"{label}: effort {effort.id!r} has a goal with no text")
 
 
 @dataclass
@@ -228,11 +267,12 @@ def load_project_graph(path: Path) -> ProjectGraph:
     doc_ids = {d.drive_id for _p, d in docs}
     for effort in efforts:
         check_effort_status(effort, doc_ids, path.name)
+    allowed_parents = {proj_iri} | effort_iris | {g for e in efforts for g in e.goal_iris}
     for part_of, _doc in docs:
-        if part_of != proj_iri and part_of not in effort_iris:
+        if part_of not in allowed_parents:
             raise GraphError(
                 f"{path.name}: document isPartOf {part_of} but this file's project is "
-                f"{proj_iri} and no matching effort is defined")
+                f"{proj_iri} and no matching effort or goal is defined")
     # Normalise: docs parented directly to the project use "" (not the project IRI) so
     # canonical_jsonld and grouping logic can treat "" as "project root". `replace()`
     # (not a positional reconstruction) so any field added to Document later survives
@@ -326,6 +366,7 @@ def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[d
     projects: dict[str, tuple[str, str]] = {}     # iri -> (name, description)
     raw_efforts: list[tuple] = []
     #  (iri, name, description, goal, keywords, hidden, status, evaluation)
+    raw_goals: dict[str, list[tuple[int, str]]] = {}     # effort id -> [(key, text)]
 
     for subj in set(g.subjects()):
         types = {str(t) for t in g.objects(subj, RDF.type)}
@@ -348,6 +389,21 @@ def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[d
             if not s.startswith(CREATIVE_WORK_NS):
                 raise GraphError(
                     f"{label}: CreativeWork IRI {s} must start with {CREATIVE_WORK_NS}")
+            goal_match = _GOAL_IRI_RE.match(s[len(CREATIVE_WORK_NS):])
+            if goal_match:
+                # A goal node of a multi-goal effort: one non-empty goal text, owned by its effort.
+                goal_effort, goal_key = goal_match.group(1), int(goal_match.group(3))
+                texts = list(g.objects(subj, URIRef(GOAL_PRED)))
+                if len(texts) != 1 or not str(texts[0]).strip():
+                    raise GraphError(
+                        f"{label}: goal node {s} needs exactly one non-empty peccia:goal text")
+                owner = g.value(subj, SDO("isPartOf"))
+                if owner is None or str(owner) != CREATIVE_WORK_NS + goal_effort:
+                    raise GraphError(
+                        f"{label}: goal node {s} must be isPartOf its effort "
+                        f"{CREATIVE_WORK_NS + goal_effort}")
+                raw_goals.setdefault(goal_effort, []).append((goal_key, str(texts[0])))
+                continue
             effort_id = s[len(CREATIVE_WORK_NS):]
             if not _EFFORT_ID_RE.match(effort_id):
                 raise GraphError(
@@ -382,6 +438,12 @@ def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[d
                                 keywords, hidden, status, evaluation))
 
     effort_iris = {r[0] for r in raw_efforts}
+    for goal_effort in raw_goals:
+        if CREATIVE_WORK_NS + goal_effort not in effort_iris:
+            raise GraphError(
+                f"{label}: goal node under {CREATIVE_WORK_NS}{goal_effort}/goal/ names an "
+                f"effort that is not in this file")
+    goal_iris = {goal_iri(eid, k) for eid, goals in raw_goals.items() for k, _t in goals}
 
     # ── Pass 2: validate DigitalDocument / ImageObject nodes ─────────────────
     # An ImageObject is a document that is a picture: same identifier/IRI/isPartOf
@@ -413,7 +475,8 @@ def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[d
                 f"{label}: document {name!r} is missing schema:isPartOf "
                 f"(every document must belong to a project or effort)")
         part_of_str = str(part_of)
-        if not (part_of_str.startswith(PROJECT_NS) or part_of_str in effort_iris):
+        if not (part_of_str.startswith(PROJECT_NS) or part_of_str in effort_iris
+                or part_of_str in goal_iris):
             raise GraphError(
                 f"{label}: document {name!r} isPartOf {part_of_str} must be a "
                 f"{PROJECT_NS} IRI or a known CreativeWork IRI in this file")
@@ -441,14 +504,19 @@ def _parse_nodes(text: str, label: str, refuse_retired: bool = False) -> tuple[d
     efforts = []
     for (iri, name, desc, goal, keywords, hidden, status, evaluation) in raw_efforts:
         part_of = g.value(URIRef(iri), SDO("isPartOf"))
-        efforts.append(CreativeWork(id=iri[len(CREATIVE_WORK_NS):], name=name,
-                                    description=desc,
-                                    is_part_of=str(part_of) if part_of is not None else "",
-                                    goal=goal,
-                                    keywords=keywords,
-                                    hidden=hidden,
-                                    status=status,
-                                    evaluation=evaluation))
+        eid = iri[len(CREATIVE_WORK_NS):]
+        goals = tuple(sorted(raw_goals.get(eid, [])))
+        effort = CreativeWork(id=eid, name=name,
+                              description=desc,
+                              is_part_of=str(part_of) if part_of is not None else "",
+                              goal=goal,
+                              keywords=keywords,
+                              hidden=hidden,
+                              status=status,
+                              evaluation=evaluation,
+                              goals=goals)
+        check_effort_goals(effort, label)
+        efforts.append(effort)
 
     return projects, docs, efforts, warnings
 
@@ -537,6 +605,13 @@ def canonical_jsonld(pg: ProjectGraph) -> str:
         if e.evaluation:
             effort_node[EVALUATION_PRED] = {"@id": DOCUMENT_NS + e.evaluation}
         graph_nodes.append(effort_node)
+        for key, text in sorted(e.goals):
+            graph_nodes.append({
+                "@id": goal_iri(e.id, key),
+                "@type": "CreativeWork",
+                "isPartOf": {"@id": e.iri},
+                GOAL_PRED: text,
+            })
     for d in sorted(pg.documents, key=lambda d: (d.name.lower(), d.drive_id)):
         parent_iri = d.is_part_of if d.is_part_of else pg.iri
         doc_node: dict = {
@@ -585,21 +660,29 @@ def remove_document(pg: ProjectGraph, drive_id: str) -> ProjectGraph:
 
 
 def upsert_effort(pg: ProjectGraph, effort: CreativeWork) -> ProjectGraph:
-    """Add an effort or update an existing one (matched by id)."""
+    """Add an effort or update an existing one (matched by id). A document whose goal node
+    the new effort no longer has lands on the effort itself (a collapse to one goal drops
+    every goal node, so all goal documents return to the Work item)."""
+    check_effort_goals(effort, f"effort {effort.id!r}")
     kept = [e for e in pg.efforts if e.id != effort.id]
     kept.append(effort)
     kept.sort(key=lambda e: (e.name.lower(), e.id))
+    stale_prefix, live = effort.iri + "/goal/", set(effort.goal_iris)
+    docs = [replace(d, is_part_of=effort.iri)
+            if d.is_part_of.startswith(stale_prefix) and d.is_part_of not in live else d
+            for d in pg.documents]
     return ProjectGraph(slug=pg.slug, name=pg.name, description=pg.description,
-                        documents=pg.documents, efforts=kept, path=pg.path)
+                        documents=docs, efforts=kept, path=pg.path)
 
 
 def remove_effort(pg: ProjectGraph, effort_id: str) -> ProjectGraph:
-    """Remove an effort and reset any child documents' is_part_of back to the project.
-    Uses `replace()` (not a positional reconstruction) so any other Document field
-    survives the reset untouched."""
+    """Remove an effort and reset any child documents' is_part_of back to the project —
+    documents of its goals included. Uses `replace()` (not a positional reconstruction) so
+    any other Document field survives the reset untouched."""
     effort_iri = CREATIVE_WORK_NS + effort_id
     new_docs = [
-        replace(d, is_part_of="") if d.is_part_of == effort_iri else d
+        replace(d, is_part_of="")
+        if d.is_part_of == effort_iri or d.is_part_of.startswith(effort_iri + "/goal/") else d
         for d in pg.documents
     ]
     kept_efforts = [e for e in pg.efforts if e.id != effort_id]
@@ -697,6 +780,23 @@ def _effort_goal_line(e: CreativeWork) -> list[str]:
     return [f"**Goal:** {e.goal}", ""]
 
 
+def _effort_goals_block(e: CreativeWork, groups: dict[str, list["Document"]],
+                        entry_fn) -> list[str]:
+    """The intent block of a Work item with two or more goals, in place of `_effort_goal_line`:
+    a `**Goals:**` label, then each goal as `{n}. {text}` (n is the goal's rank by key) followed
+    by that goal's own documents, indented under it. `entry_fn` is the view's group renderer, so
+    each view keeps its own entry shape and cap; blank lines stay unindented."""
+    lines = ["**Goals:**", ""]
+    for n, (key, text) in enumerate(e.goals, 1):
+        lines.append(f"{n}. " + text.replace("\n", "\n   "))
+        docs = groups.get(goal_iri(e.id, key), [])
+        if docs:
+            lines += [("   " + ln) if ln else ln for ln in entry_fn(docs)]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines + [""]
+
+
 def effort_heading(e: CreativeWork) -> str:
     """An effort's group heading text: its human name followed by its stable id in parentheses —
     `Auth rework (auth-rework)`. The SAME identity form a project roster line already uses
@@ -786,12 +886,12 @@ def _doc_block(pg: ProjectGraph, *, heading: str, level: int, emit_heading: bool
             lines += [f"{gh} {effort_heading(e)}", ""]
             if include_effort_desc and e.description:
                 lines += [e.description, ""]
-            lines += _effort_goal_line(e)
+            lines += _effort_goals_block(e, groups, entry_fn) if e.goals else _effort_goal_line(e)
             lines += _effort_status_line(e)
             lines += _effort_keywords_line(e)
             if docs_in_effort:
                 lines += entry_fn(docs_in_effort)
-            else:
+            elif not any(groups.get(g) for g in e.goal_iris):
                 lines += ["_No documents in this effort._", ""]
     return "\n".join(lines).rstrip("\n") + "\n"
 
