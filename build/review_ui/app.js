@@ -403,13 +403,32 @@ function effortDeltaSummary(c) {
   const box = el("div", "doc-delta");
   for (const x of c.effort_delta || []) {
     const [was, now] = x.status || ["", ""];
-    const cls = now === "done" && was !== "done" ? "ins" : (was === "done" && now !== "done" ? "del" : "chg");
-    const r = el("div", "doc-delta-row " + cls);
-    r.append(el("span", "doc-delta-label",
-      `Effort ${x.id}: ${was || "active"} → ${now || "active"}`));
-    const ev = (x.evaluation || ["", ""])[1];
-    if (ev) r.append(el("code", "doc-delta-ids", "Implemented Document " + ev));
-    box.append(r);
+    const [evWas, evNow] = x.evaluation || ["", ""];
+    if (was !== now || evWas !== evNow) {
+      const cls = now === "done" && was !== "done" ? "ins" : (was === "done" && now !== "done" ? "del" : "chg");
+      const r = el("div", "doc-delta-row " + cls);
+      r.append(el("span", "doc-delta-label",
+        `Effort ${x.id}: ${was || "active"} → ${now || "active"}`));
+      if (evNow) r.append(el("code", "doc-delta-ids", "Implemented Document " + evNow));
+      box.append(r);
+    }
+    if (x.goals) {
+      // A goal edit is a change in its own right; documents on a removed goal return to the Work item.
+      const [oldGoals, newGoals] = x.goals;
+      const r = el("div", "doc-delta-row chg");
+      r.append(el("span", "doc-delta-label",
+        `Effort ${x.id}: goals ${oldGoals.length} → ${newGoals.length}`));
+      if (newGoals.length) r.append(el("code", "doc-delta-ids", newGoals.join(" | ")));
+      box.append(r);
+      const back = x.rehomed || [];
+      if (back.length) {
+        const rr = el("div", "doc-delta-row chg");
+        rr.append(el("span", "doc-delta-label",
+          `${back.length} document(s) return to the Work item`));
+        rr.append(el("code", "doc-delta-ids", back.join(", ")));
+        box.append(rr);
+      }
+    }
   }
   return box;
 }

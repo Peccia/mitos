@@ -1054,3 +1054,34 @@ def test_deploy_skipped_machine_exits_nonzero_and_touches_nothing(tmp_path):
     assert rc != 0
     assert list(sandbox.iterdir()) == []
 
+
+
+def test_cmd_graph_complete_effort_keeps_a_multi_goal_work_items_goals():
+    """`graph --complete-effort` sends no `goals`, so the Work item's goal list and its goal
+    documents survive the Done transition."""
+    from agentic import graph, loader as loadermod, review
+    treg, tmp = _temp_registry()
+    out = review.propose_graph_change(
+        treg, "example-project",
+        documents=[{"id": "GSPEC", "name": "Spec", "dateModified": "2026-09-01",
+                    "parentId": "auth/goal/1"},
+                   {"id": "GPLAN", "name": "Plan", "dateModified": "2026-09-01",
+                    "parentId": "auth/goal/2"}],
+        efforts=[{"id": "auth", "name": "Auth", "goals": [
+            {"key": 1, "text": "Spec the API"}, {"key": 2, "text": "Plan the rollout"}]}])
+    assert out["ok"], out
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    treg = loadermod.load(tmp)
+    rc, text = _run_graph(treg, "example-project", "documents",
+                          complete_effort="auth", evaluation_doc="GPLAN")
+    assert rc == 0, text
+    cand = next(c for c in review.load_candidates(treg) if c["id"] in text)
+    assert "goals" not in cand["effort_delta"][0]       # the candidate changes no goal
+    assert review.decide(treg, cand["id"], "accept", "")["ok"]
+    pg = loadermod.load(tmp).graphs["example-project"]
+    eff = next(e for e in pg.efforts if e.id == "auth")
+    assert (eff.status, eff.evaluation) == ("done", "GPLAN")
+    assert eff.goals == ((1, "Spec the API"), (2, "Plan the rollout")) and eff.goal == ""
+    parents = {d.drive_id: d.is_part_of for d in pg.documents}
+    assert parents["GSPEC"] == graph.goal_iri("auth", 1)
+    assert parents["GPLAN"] == graph.goal_iri("auth", 2)

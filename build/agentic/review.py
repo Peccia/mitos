@@ -188,31 +188,45 @@ def _doc_delta(reg: Registry, meta: dict, payload: str) -> dict:
 
 
 def _effort_delta(reg: Registry, meta: dict, payload: str) -> list[dict]:
-    """Completion-state changes a `kind: graph` candidate would make, per effort:
+    """Changes a `kind: graph` candidate would make to an effort, per effort:
     [{id, status: [old, new], evaluation: [old, new]}] for each effort whose status or
-    evaluation differs from the current graph. Scoped to `efforts_touched` when the candidate
-    records it — the fragment carries every effort, and only touched ones are merged. [] for a
-    non-graph or unparsable candidate."""
+    evaluation differs from the current graph, plus `goals: [[old texts], [new texts]]` and
+    `rehomed: [doc id, …]` when its goal state differs — the documents whose goal the candidate
+    removes, which return to the Work item on accept. Scoped to `efforts_touched` when the
+    candidate records it — the fragment carries every effort, and only touched ones are merged.
+    [] for a non-graph or unparsable candidate."""
     if meta.get("kind") != "graph":
         return []
     slug = meta.get("project") or ""
     from . import graph as graphmod
     try:
-        _name, _desc, _docs, efforts = graphmod.parse_fragment(payload, slug)
+        _name, _desc, docs, efforts = graphmod.parse_fragment(payload, slug)
     except graphmod.GraphError:
         return []
     touched = meta.get("efforts_touched")
     existing_pg = reg.graphs.get(slug)
     existing = {e.id: e for e in (existing_pg.efforts if existing_pg else [])}
+    moved = {d.drive_id for d in docs} | {str(r) for r in (meta.get("removals") or [])}
+
+    def texts(e) -> list[str]:
+        return [t for _k, t in e.goals] if e.goals else ([e.goal] if e.goal else [])
+
     out = []
     for e in sorted(efforts, key=lambda e: e.id):
         if touched is not None and e.id not in touched:
             continue
         prior = existing.get(e.id)
         old = (prior.status, prior.evaluation) if prior else ("", "")
-        if old != (e.status, e.evaluation):
-            out.append({"id": e.id, "status": [old[0], e.status],
-                        "evaluation": [old[1], e.evaluation]})
+        entry = {"id": e.id, "status": [old[0], e.status], "evaluation": [old[1], e.evaluation]}
+        old_goals = texts(prior) if prior else []
+        if old_goals != texts(e) or (prior.goals if prior else ()) != e.goals:
+            gone = set(prior.goal_iris if prior else ()) - set(e.goal_iris)
+            entry["goals"] = [old_goals, texts(e)]
+            entry["rehomed"] = sorted(
+                d.drive_id for d in (existing_pg.documents if existing_pg else [])
+                if d.is_part_of in gone and d.drive_id not in moved)
+        if old != (e.status, e.evaluation) or "goals" in entry:
+            out.append(entry)
     return out
 
 
@@ -621,6 +635,15 @@ def _merged_graph(reg: Registry, slug: str, fragment_text: str,
     doc_ids = {d.drive_id for d in base.documents}
     for e in base.efforts:
         graphmod.check_effort_status(e, doc_ids, f"{slug}.jsonld")
+    # Every document's parent must still exist: a stale candidate can move a document onto a goal
+    # (or a Work item) that another accepted candidate has since removed, and the next compile
+    # could not load that graph.
+    parents = {""} | {e.iri for e in base.efforts} | {g for e in base.efforts for g in e.goal_iris}
+    for d in base.documents:
+        if d.is_part_of not in parents:
+            raise graphmod.GraphError(
+                f"document {d.name!r} would belong to {d.is_part_of}, which is not a Work item "
+                f"or goal in {slug}.jsonld")
     base.path = path
     return base
 
@@ -1078,6 +1101,43 @@ def _write_candidate(reg: Registry, slug: str, meta: dict, payload_filename: str
     return folder.name
 
 
+def _effort_goals_from_payload(eid: str, prior, goal: str, goals) -> tuple[str, tuple, str]:
+    """(goal, goals, error) for one effort of a graph proposal. `goals` is preserve-when-absent
+    (a caller that never sends it, such as `graph --complete-effort`, keeps the Work item's
+    goal list), so a `goal` text aimed at a multi-goal Work item without `goals` is refused
+    rather than merged or dropped. A list of two or more entries carries its own texts, so a
+    `goal` beside it is refused too; `goals: []` collapses to the single `goal` as sent."""
+    if goals is None:
+        if prior is not None and prior.goals:
+            if goal:
+                return "", (), (
+                    f"effort {eid!r} has {len(prior.goals)} goals; pass goals: [] with goal "
+                    f"to collapse to one goal, or pass goals: [...]")
+            return "", prior.goals, ""
+        return goal, (), ""
+    if not isinstance(goals, list):
+        return "", (), f"effort {eid!r}: goals must be a list of {{key, text}}"
+    entries = []
+    for g in goals:
+        key = g.get("key") if isinstance(g, dict) else None
+        text = g.get("text") if isinstance(g, dict) else None
+        if isinstance(key, bool) or not isinstance(key, int) or key < 1:
+            return "", (), f"effort {eid!r}: each goal needs an integer key of 1 or more"
+        if not isinstance(text, str) or not text.strip():
+            return "", (), f"effort {eid!r}: goal {key} needs text"
+        entries.append((key, text.strip()))
+    if len({k for k, _t in entries}) != len(entries):
+        return "", (), f"effort {eid!r}: goal keys must be unique"
+    entries.sort()
+    if not entries:
+        return goal, (), ""
+    if len(entries) == 1:
+        return entries[0][1], (), ""
+    if goal:
+        return "", (), f"effort {eid!r}: send goal: \"\" with a goal list"
+    return "", tuple(entries), ""
+
+
 def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                          removals: list[str] | None = None, reason: str = "",
                          efforts: list[dict] | None = None,
@@ -1170,15 +1230,21 @@ def propose_graph_change(reg: Registry, slug: str, documents: list[dict],
                 return {"ok": False, "error": f"unknown status {status_val!r} for effort "
                                               f"{eid!r}; valid: "
                                               f"{', '.join(graphmod.KNOWN_STATUSES)} (or empty)"}
+            goal_val, goals_val, goals_err = _effort_goals_from_payload(
+                eid, effective_efforts.get(eid), str(e_dict.get("goal", "")).strip(),
+                e_dict.get("goals"))
+            if goals_err:
+                return {"ok": False, "error": goals_err}
             effective_efforts[eid] = graphmod.CreativeWork(
                 id=eid, name=str(e_dict["name"]).strip(),
                 description=str(e_dict.get("description", "")).strip(),
                 is_part_of=proj_iri,
-                goal=str(e_dict.get("goal", "")).strip(),
+                goal=goal_val,
                 keywords=kw_val,
                 hidden=hidden_val,
                 status=status_val,
-                evaluation=eval_val)
+                evaluation=eval_val,
+                goals=goals_val)
         except KeyError as ex:
             return {"ok": False, "error": f"effort missing required field {ex}"}
     for eid in effort_removals:
@@ -2801,6 +2867,7 @@ def graph_index(reg: Registry) -> list[dict]:
             "repo_notes": dict(proj.get("repo_notes") or {}),
             "efforts": [{"id": e.id, "name": e.name, "description": e.description,
                          "goal": e.goal,
+                         "goals": [{"key": k, "text": t} for k, t in e.goals],
                          "keywords": e.keywords,
                          "hidden": bool(e.hidden),
                          "status": e.status, "evaluation": e.evaluation}

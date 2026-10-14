@@ -3527,3 +3527,285 @@ def test_permissions_endpoint_round_trip_and_cache_follows_the_reloaded_registry
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ── Multi-goal Work items: proposal valve, merge guard, Inbox delta ───────────
+def _doc(did, name, parent=""):
+    return {"id": did, "name": name, "dateModified": "2026-09-01", "parentId": parent}
+
+
+def _goal_rig(docs=None, goals=((1, "Spec the API"), (2, "Plan the rollout"))):
+    """A temp registry whose example-project holds Work item "auth" with a goal list and the
+    given documents (default: one on each goal and one on the Work item)."""
+    from agentic import review
+    treg, tmp = _temp_registry()
+    docs = docs if docs is not None else [
+        _doc("GSPEC", "Spec", "auth/goal/1"), _doc("GPLAN", "Plan", "auth/goal/2"),
+        _doc("GNOTE", "Notes", "auth")]
+    out = review.propose_graph_change(
+        treg, "example-project", docs,
+        efforts=[{"id": "auth", "name": "Auth",
+                  "goals": [{"key": k, "text": t} for k, t in goals]}])
+    assert out["ok"], out
+    assert review.decide(treg, out["id"], "accept", "")["ok"]
+    return loader.load(tmp), tmp
+
+
+def _parents(treg, slug="example-project"):
+    return {d.drive_id: d.is_part_of for d in treg.graphs[slug].documents}
+
+
+def _registry_hashes(tmp, skip_inbox=True):
+    import hashlib
+    out = {}
+    for p in sorted((tmp / "registry").rglob("*")):
+        rel = p.relative_to(tmp / "registry").as_posix()
+        if p.is_file() and not (skip_inbox and rel.startswith("local/inbox/")):
+            out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def _accept_ok(treg, out):
+    from agentic import review
+    assert out["ok"], out
+    res = review.decide(treg, out["id"], "accept", "")
+    assert res["ok"], res
+
+
+def test_goal_proposals_write_only_the_inbox_until_accepted():
+    """CON-1: a goal add, a goal removal and a document move each land as an Inbox candidate;
+    nothing under registry/ except local/inbox/ changes until the candidate is accepted."""
+    from agentic import review
+    treg, tmp = _goal_rig()
+    before = _registry_hashes(tmp)
+    proposals = [
+        review.propose_graph_change(treg, "example-project", [], efforts=[
+            {"id": "auth", "name": "Auth", "goals": [
+                {"key": 1, "text": "Spec the API"}, {"key": 2, "text": "Plan the rollout"},
+                {"key": 3, "text": "Ship it"}]}]),
+        review.propose_graph_change(treg, "example-project", [], efforts=[
+            {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "Spec the API"},
+                                                    {"key": 2, "text": "Plan the rollout"}]}],
+            ),
+        review.propose_graph_change(treg, "example-project", [_doc("GNOTE", "Notes", "auth/goal/2")]),
+    ]
+    assert all(p["ok"] for p in proposals), proposals
+    assert _registry_hashes(tmp) == before
+    assert len(list(_inbox(tmp).iterdir())) >= 4        # the rig's own accepted candidate + 3
+    _accept_ok(treg, proposals[2])
+    assert _registry_hashes(tmp) != before
+
+
+def test_graph_index_lists_goals_and_goal_parent_ids():
+    """FR-6: the index payload carries each Work item's goals, and a goal document's parentId
+    is "<effort-id>/goal/<k>"."""
+    from agentic import review
+    treg, _tmp = _goal_rig()
+    proj = next(p for p in review.graph_index(treg) if p["slug"] == "example-project")
+    auth = next(e for e in proj["efforts"] if e["id"] == "auth")
+    assert auth["goals"] == [{"key": 1, "text": "Spec the API"},
+                             {"key": 2, "text": "Plan the rollout"}]
+    assert auth["goal"] == ""
+    parent = {d["id"]: d["parentId"] for d in proj["documents"]}
+    assert parent["GSPEC"] == "auth/goal/1" and parent["GPLAN"] == "auth/goal/2"
+    assert parent["GNOTE"] == "auth"
+    single = [e for e in proj["efforts"] if e["id"] != "auth"]
+    assert all(e["goals"] == [] for e in single)
+
+
+def test_a_document_moved_to_a_goal_lands_there_once():
+    """FR-7: propose parentId auth/goal/2, accept; the document's parent is goal 2's IRI and
+    the rendered section lists it once, under 2."""
+    from agentic import graph, review
+    treg, tmp = _goal_rig()
+    _accept_ok(treg, review.propose_graph_change(
+        treg, "example-project", [_doc("GNOTE", "Notes", "auth/goal/2")]))
+    treg = loader.load(tmp)
+    assert _parents(treg)["GNOTE"] == graph.goal_iri("auth", 2)
+    full = graph.project_full_markdown(treg.graphs["example-project"])
+    section = full[full.index("### Auth (auth)"):]
+    assert section.count("**Notes**") == 1
+    assert section.index("2. Plan the rollout") < section.index("**Notes**")
+
+
+def test_breakout_keeps_the_work_items_documents_on_the_work_item():
+    """FR-8: breaking a one-goal Work item into two goals leaves its documents where they are."""
+    from agentic import graph, review
+    treg, tmp = _temp_registry()
+    _accept_ok(treg, review.propose_graph_change(
+        treg, "example-project", [_doc("GSPEC", "Spec", "auth"), _doc("GNOTE", "Notes", "auth")],
+        efforts=[{"id": "auth", "name": "Auth", "goal": "Ship auth"}]))
+    treg = loader.load(tmp)
+    _accept_ok(treg, review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goal": "", "goals": [
+            {"key": 1, "text": "Ship auth"}, {"key": 2, "text": "Document it"}]}]))
+    treg = loader.load(tmp)
+    eff = next(e for e in treg.graphs["example-project"].efforts if e.id == "auth")
+    assert eff.goals == ((1, "Ship auth"), (2, "Document it")) and eff.goal == ""
+    assert {_parents(treg)[i] for i in ("GSPEC", "GNOTE")} == {eff.iri}
+
+
+def test_removing_a_goal_returns_its_documents_to_the_work_item():
+    """FR-10: goal 2 holds "Spec"; a proposal without key 2, once accepted, leaves it on the
+    Work item. Goal 1's document stays."""
+    from agentic import graph, review
+    treg, tmp = _goal_rig(docs=[_doc("GSPEC", "Spec", "auth/goal/2"),
+                                _doc("GPLAN", "Plan", "auth/goal/1")],
+                          goals=((1, "One"), (2, "Two"), (3, "Three")))
+    _accept_ok(treg, review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "One"},
+                                                {"key": 3, "text": "Three"}]}]))
+    treg = loader.load(tmp)
+    assert _parents(treg)["GSPEC"] == graph.CREATIVE_WORK_NS + "auth"
+    assert _parents(treg)["GPLAN"] == graph.goal_iri("auth", 1)
+
+
+def test_collapsing_to_one_goal_rehomes_every_goal_document():
+    """FR-12: goal 1 holds "Plan"; goals: [] with a goal text collapses the list, "Plan" is on
+    the Work item and the canonical graph has no goal node."""
+    from agentic import graph, review
+    treg, tmp = _goal_rig(docs=[_doc("GPLAN", "Plan", "auth/goal/1")])
+    _accept_ok(treg, review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goal": "Ship v1", "goals": []}]))
+    treg = loader.load(tmp)
+    eff = next(e for e in treg.graphs["example-project"].efforts if e.id == "auth")
+    assert (eff.goal, eff.goals) == ("Ship v1", ())
+    assert _parents(treg)["GPLAN"] == eff.iri
+    assert "/goal/" not in graph.canonical_jsonld(treg.graphs["example-project"])
+
+
+def test_one_goal_in_a_list_collapses_to_a_single_goal():
+    from agentic import review
+    treg, tmp = _goal_rig()
+    _accept_ok(treg, review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": [{"key": 2, "text": "Only one left"}]}]))
+    eff = next(e for e in loader.load(tmp).graphs["example-project"].efforts if e.id == "auth")
+    assert (eff.goal, eff.goals) == ("Only one left", ())
+
+
+def test_goal_text_without_goals_on_a_multi_goal_item_is_refused():
+    """R-1: `goal` with no `goals` aimed at a Work item that has a goal list is refused, names
+    the effort and `goals: []`, and writes no candidate."""
+    from agentic import review
+    treg, tmp = _goal_rig()
+    inbox_before = sorted(p.name for p in _inbox(tmp).iterdir())
+    out = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goal": "Single text"}])
+    assert not out["ok"]
+    assert "auth" in out["error"] and "goals: []" in out["error"]
+    assert sorted(p.name for p in _inbox(tmp).iterdir()) == inbox_before
+
+
+def test_goals_omitted_with_no_goal_text_preserves_the_goal_list():
+    """goals is preserve-when-absent: a rename that never sends it keeps every goal."""
+    from agentic import review
+    treg, tmp = _goal_rig()
+    _accept_ok(treg, review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth Renamed"}]))
+    eff = next(e for e in loader.load(tmp).graphs["example-project"].efforts if e.id == "auth")
+    assert eff.name == "Auth Renamed" and len(eff.goals) == 2 and eff.goal == ""
+
+
+def test_a_goal_list_beside_a_goal_text_is_refused():
+    """The mirror of R-1: two or more goals carry their own texts, so `goal` must be empty."""
+    from agentic import review
+    treg, _tmp = _goal_rig()
+    out = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goal": "stray", "goals": [
+            {"key": 1, "text": "a"}, {"key": 2, "text": "b"}]}])
+    assert not out["ok"] and "goal: \"\"" in out["error"]
+
+
+def test_goal_list_payload_negatives_are_refused():
+    from agentic import review
+    treg, tmp = _goal_rig()
+    inbox_before = sorted(p.name for p in _inbox(tmp).iterdir())
+    bad = {
+        "duplicate keys": [{"key": 1, "text": "a"}, {"key": 1, "text": "b"}],
+        "key zero": [{"key": 0, "text": "a"}, {"key": 1, "text": "b"}],
+        "key not an integer": [{"key": "2", "text": "a"}, {"key": 1, "text": "b"}],
+        "key is a boolean": [{"key": True, "text": "a"}, {"key": 2, "text": "b"}],
+        "empty text": [{"key": 1, "text": "  "}, {"key": 2, "text": "b"}],
+        "entry is not an object": ["a", "b"],
+    }
+    for label, goals in bad.items():
+        out = review.propose_graph_change(treg, "example-project", [], efforts=[
+            {"id": "auth", "name": "Auth", "goals": goals}])
+        assert not out["ok"] and "auth" in out["error"], (label, out)
+    out = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": "nope"}])
+    assert not out["ok"]
+    assert sorted(p.name for p in _inbox(tmp).iterdir()) == inbox_before
+
+
+def test_a_proposal_cannot_parent_a_document_to_a_goal_it_removes():
+    """A proposal that removes goal 2 and moves a document onto it is refused at propose."""
+    from agentic import review
+    treg, _tmp = _goal_rig()
+    out = review.propose_graph_change(
+        treg, "example-project", [_doc("GNOTE", "Notes", "auth/goal/2")], efforts=[
+            {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "a"}, {"key": 3, "text": "c"}]}])
+    assert not out["ok"] and "invalid document(s) or effort(s)" in out["error"]
+
+
+def test_a_stale_candidate_onto_a_removed_goal_is_not_acceptable():
+    """A moves "Notes" to goal 2; B then removes goal 2 and is accepted first. Accepting A would
+    leave a dangling parent: it is refused, the graph is unchanged and the Inbox reports it."""
+    from agentic import review
+    treg, tmp = _goal_rig(goals=((1, "One"), (2, "Two"), (3, "Three")),
+                          docs=[_doc("GNOTE", "Notes", "auth")])
+    a = review.propose_graph_change(treg, "example-project", [_doc("GNOTE", "Notes", "auth/goal/2")])
+    b = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "One"},
+                                                {"key": 3, "text": "Three"}]}])
+    _accept_ok(treg, b)
+    treg = loader.load(tmp)
+    before = _registry_hashes(tmp)
+    res = review.decide(treg, a["id"], "accept", "")
+    assert not res["ok"], res
+    assert _registry_hashes(tmp) == before
+    card = next(c for c in review.load_candidates(treg) if c["id"] == a["id"])
+    assert card["acceptable"] is False and "goal" in card["accept_note"]
+
+
+def test_inbox_reports_a_goal_only_candidate_as_a_change():
+    """A goal-only candidate is not "No changes": the card lists the prior and new goal texts,
+    and the documents that return to the Work item when a goal is removed."""
+    from agentic import review
+    treg, _tmp = _goal_rig(docs=[_doc("GSPEC", "Spec", "auth/goal/2")])
+    # re-send every mapped document unchanged, so the document delta is empty and only the
+    # goals differ — the shape that used to read "No changes"
+    proj = next(p for p in review.graph_index(treg) if p["slug"] == "example-project")
+    same = [{k: d[k] for k in ("id", "name", "description", "dateModified", "parentId")}
+            for d in proj["documents"]]
+    out = review.propose_graph_change(treg, "example-project", same, efforts=[
+        {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "Spec the API v2"},
+                                                {"key": 2, "text": "Plan the rollout"}]}])
+    assert out["ok"], out
+    card = next(c for c in review.load_candidates(treg) if c["id"] == out["id"])
+    assert card["doc_delta"]["added"] == card["doc_delta"]["changed"] == []
+    assert card["doc_delta"]["removed"] == [] and card["no_changes"] is False
+    entry = next(x for x in card["effort_delta"] if x["id"] == "auth")
+    assert entry["goals"] == [["Spec the API", "Plan the rollout"],
+                              ["Spec the API v2", "Plan the rollout"]]
+    assert entry["rehomed"] == [] and entry["status"] == ["", ""]
+    out = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": [], "goal": "Just one"}])
+    card = next(c for c in review.load_candidates(treg) if c["id"] == out["id"])
+    assert next(x for x in card["effort_delta"] if x["id"] == "auth")["rehomed"] == ["GSPEC"]
+    edit = review.propose_graph_change(treg, "example-project", [], efforts=[
+        {"id": "auth", "name": "Auth", "goals": [{"key": 1, "text": "Spec the API"},
+                                                {"key": 2, "text": "Plan the rollout"}]}])
+    card = next(c for c in review.load_candidates(treg) if c["id"] == edit["id"])
+    assert card["effort_delta"] == []        # an unchanged goal list is not a delta
+
+
+def test_app_js_effort_delta_summary_prints_goal_rows():
+    """Source guard in the style of the proposeGraphDraft check: the Inbox summary renders the
+    goals row and the re-homed documents, and prints status only when it differs."""
+    from conftest import REPO_ROOT
+    js = (REPO_ROOT / "build" / "review_ui" / "app.js").read_text(encoding="utf-8")
+    body = js[js.index("function effortDeltaSummary"):js.index("function docDeltaSummary")]
+    assert "goals ${oldGoals.length} → ${newGoals.length}" in body
+    assert "return to the Work item" in body and "x.rehomed" in body
+    assert "was !== now || evWas !== evNow" in body
