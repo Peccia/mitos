@@ -2492,6 +2492,22 @@ button.chip.tiny { padding: .15rem .55rem; font-size: .74rem; }
 .effort-domain-tag { font-size: .72rem; color: var(--muted); font-weight: normal; }
 .effort-docs { padding-left: .8rem; }
 
+/* Multi-goal Work items: the KG tab's numbered goal rows and the editor's goal list */
+.effort-goal-list { margin: .15rem 0 0; padding-left: 1.3rem; }
+.effort-goals { margin-top: .35rem; display: flex; flex-direction: column; gap: .4rem; }
+.goal-row { border-left: 2px solid var(--line); padding-left: .55rem; }
+.goal-row-head { display: flex; align-items: baseline; gap: .4rem; font-size: .8rem; }
+.goal-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+.goal-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+.goal-docs { padding-left: .3rem; }
+.goal-label-row { display: flex; align-items: center; gap: .4rem; }
+.goal-edit-list { display: flex; flex-direction: column; gap: .35rem; }
+.goal-edit-row { display: flex; align-items: flex-start; gap: .4rem; }
+.goal-edit-row textarea { flex: 1; min-width: 0; }
+.goal-edit-num { color: var(--muted); font-size: .8rem; padding-top: .4rem; min-width: 1.4rem;
+  font-variant-numeric: tabular-nums; }
+.goal-area .goal-add { align-self: flex-start; }
+
 /* ── Hidden work items slide-out drawer ─────────────────────────────────── */
 #hidden-work-drawer {
   position: fixed;

@@ -714,6 +714,87 @@ function draftClear(slug) {
   saveDrafts();
 }
 
+// ── Work item goals ───────────────────────────────────────────────────────────
+// A Work item holds one goal (`goal`) or a list of two or more (`goals: [{key, text}]`, key
+// hidden and stable, the displayed number being the rank by key). A document can be parented to a
+// goal: its parentId is "<effort-id>/goal/<key>".
+function goalParentId(effortId, key) { return `${effortId}/goal/${key}`; }
+
+// The goal list of a Work item, in key order — [] below two goals (a single goal lives in `goal`).
+function goalList(effort) {
+  const goals = (effort && effort.goals) || [];
+  return goals.length >= 2 ? [...goals].sort((a, b) => a.key - b.key) : [];
+}
+
+// The effective efforts of a project — registry plus draft adds/edits, a pending removal marked
+// `_status: "remove"` — keyed by id. Every view of "what the server will hold" starts here.
+function effortMapFor(g) {
+  const draft = draftFor(g.slug);
+  const effMap = {};
+  for (const e of (g.efforts || [])) effMap[e.id] = { ...e };
+  for (const e of Object.values(draft.effortAdd)) effMap[e.id] = { ...e, _status: "add" };
+  for (const e of Object.values(draft.effortEdit)) effMap[e.id] = { ...effMap[e.id], ...e, _status: "edit" };
+  for (const id of Object.keys(draft.effortRemove)) {
+    if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
+  }
+  return effMap;
+}
+
+// DISPLAY ONLY: where the server will put a document whose parent is a goal. A goal that the
+// draft removes (or a Work item that drops below two goals) sends its documents to the Work
+// item on accept, so the KG tab shows them there now instead of losing them until then. Never
+// used for nextGoalKey (it needs the raw parent) or for what the draft stores.
+function effectiveParentId(parentId, effortsById) {
+  const m = /^(.+)\/goal\/(\d+)$/.exec(parentId || "");
+  if (!m) return parentId || "";
+  const effort = effortsById[m[1]];
+  if (!effort) return parentId;
+  return goalList(effort).some((x) => x.key === Number(m[2])) ? parentId : m[1];
+}
+
+// Parent choices for a document: the root, each Work item, and each goal of a multi-goal Work
+// item as "<Work> › Goal n" (hover shows the goal's text). A falsy rootLabel omits the root.
+function parentOptions(efforts, rootLabel) {
+  const out = rootLabel ? [{ value: "", label: rootLabel, title: "" }] : [];
+  for (const e of efforts) {
+    out.push({ value: e.id, label: e.name, title: "" });
+    goalList(e).forEach((x, i) => out.push({
+      value: goalParentId(e.id, x.key), label: `${e.name} › Goal ${i + 1}`, title: x.text }));
+  }
+  return out;
+}
+
+// The key a new goal of `effortId` takes: one past the highest key seen anywhere it could still
+// matter — the accepted goals, the editor's goals, and every document (registry, draft add, draft
+// edit) whose RAW parent names a goal of this Work item. Reusing a removed goal's key inside one
+// draft would silently hand that goal's documents to the new goal.
+function nextGoalKey(g, effortId, goals) {
+  let max = 0;
+  const see = (k) => { if (Number.isInteger(k) && k > max) max = k; };
+  const accepted = (g.efforts || []).find((e) => e.id === effortId);
+  for (const x of (accepted && accepted.goals) || []) see(x.key);
+  for (const x of goals || []) see(x.key);
+  if (effortId) {
+    const prefix = effortId + "/goal/";
+    const draft = draftFor(g.slug);
+    for (const d of [...(g.documents || []), ...Object.values(draft.add), ...Object.values(draft.edit)]) {
+      if ((d.parentId || "").startsWith(prefix)) see(Number((d.parentId || "").slice(prefix.length)));
+    }
+  }
+  return max + 1;
+}
+
+// Fill a <select> from parentOptions(); `selected` is the option value to preselect.
+function fillParentSelect(sel, options, selected) {
+  for (const o of options) {
+    const opt = el("option", "", o.label);
+    opt.value = o.value;
+    if (o.title) opt.title = o.title;
+    sel.append(opt);
+  }
+  sel.value = selected || "";
+}
+
 async function loadStaged(slug) {
   try {
     const r = await fetch("/api/graph/staged?slug=" + encodeURIComponent(slug)
@@ -2040,6 +2121,7 @@ function renderHiddenDrawer(g) {
             description: effort.description || "",
             keywords: effort.keywords || "",
             goal: effort.goal || "",
+            goals: effort.goals || [],
             status: effort.status || "",
             evaluation: effort.evaluation || "",
             hidden: !!effort.hidden,
@@ -2111,7 +2193,7 @@ function buildRegistryPane(container, g, open) {
   addEffortBtn.title = "Add a new effort grouping to this project";
   addEffortBtn.onclick = () => {
     openEditor = { where: "registry", lockId: false, kind: "effort",
-                   vals: { id: "", name: "", description: "", keywords: "", hidden: false } };
+                   vals: { id: "", name: "", description: "", keywords: "", goals: [], hidden: false } };
     renderRegistryRows(g);
   };
   head.append(addDocBtn, addEffortBtn);
@@ -2148,13 +2230,7 @@ function renderRegistryRows(g) {
   };
 
   // Effective efforts = registry + draft adds/edits, minus draft removes
-  const effMap = {};
-  for (const e of (g.efforts || [])) effMap[e.id] = { ...e };
-  for (const e of Object.values(draft.effortAdd)) effMap[e.id] = { ...e, _status: "add" };
-  for (const e of Object.values(draft.effortEdit)) effMap[e.id] = { ...effMap[e.id], ...e, _status: "edit" };
-  for (const id of Object.keys(draft.effortRemove)) {
-    if (effMap[id]) effMap[id] = { ...effMap[id], _status: "remove" };
-  }
+  const effMap = effortMapFor(g);
 
   const activeEfforts = Object.values(effMap).filter((e) => e._status !== "remove" && !e.hidden)
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
@@ -2190,11 +2266,9 @@ function renderRegistryRows(g) {
         const bar = el("div", "bulk-move-bar");
         bar.append(el("span", "muted", `${registrySel.size} selected · Move to `));
         const moveSel = el("select", "graph-select rrow-move-select");
-        for (const eff of activeEfforts) {
-          const opt = el("option", "", eff.name);
-          opt.value = eff.id;
-          moveSel.append(opt);
-        }
+        moveSel.setAttribute("aria-label", "Move selected documents to");
+        const moveOpts = parentOptions(activeEfforts, "");
+        fillParentSelect(moveSel, moveOpts, moveOpts.length ? moveOpts[0].value : "");
         bar.append(moveSel);
         const applyBtn = el("button", "accept tiny", "Apply");
         applyBtn.onclick = () => {
@@ -2241,9 +2315,18 @@ function renderRegistryRows(g) {
       (a.name || "").localeCompare(b.name || ""))) {
     const status = effort._status || "mapped";
 
-    // documents belonging to this effort
-    const effortDraftAdds = Object.values(draft.add).filter((d) => d.parentId === effort.id);
-    const effortDocs = (g.documents || []).filter((d) => d.parentId === effort.id);
+    // documents belonging to this effort: its own and, for a multi-goal Work item, its goals'.
+    // Membership is by EFFECTIVE parent, so a document whose goal the draft removes stays visible
+    // (on the Work item) instead of vanishing until accept.
+    const goals = goalList(effort);
+    const isMulti = goals.length >= 2;
+    const goalIds = new Set(goals.map((x) => goalParentId(effort.id, x.key)));
+    const belongs = (d) => {
+      const p = effectiveParentId(d.parentId, effMap);
+      return p === effort.id || goalIds.has(p);
+    };
+    const effortDraftAdds = Object.values(draft.add).filter(belongs);
+    const effortDocs = (g.documents || []).filter(belongs);
 
     const effortNameMatches = !q || (effort.name || "").toLowerCase().includes(q);
     const filteredEffortAdds = effortNameMatches ? effortDraftAdds : effortDraftAdds.filter((d) => docMatches(d));
@@ -2322,6 +2405,7 @@ function renderRegistryRows(g) {
                        vals: { id: effort.id, name: effort.name, description: effort.description || "",
                                keywords: effort.keywords || "",
                                goal: effort.goal || "",
+                               goals: effort.goals || [],
                                hidden: !!effort.hidden,
                                status: effort.status || "",
                                evaluation: effort.evaluation || "" } };
@@ -2339,7 +2423,14 @@ function renderRegistryRows(g) {
     section.append(head);
 
     if (isEffortCollapsed) {
-      if (effort.goal) {
+      if (isMulti) {
+        const goalEl = el("div", "effort-goal");
+        goalEl.append(el("strong", "", "Goals:"));
+        const ol = el("ol", "effort-goal-list");
+        for (const x of goals) ol.append(el("li", "", x.text));
+        goalEl.append(ol);
+        section.append(goalEl);
+      } else if (effort.goal) {
         const goalEl = el("div", "effort-goal");
         goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
         section.append(goalEl);
@@ -2359,7 +2450,7 @@ function renderRegistryRows(g) {
       section.append(el("div", "effort-desc muted", effort.description));
     }
 
-    if (effort.goal) {
+    if (!isMulti && effort.goal) {
       const goalEl = el("div", "effort-goal");
       goalEl.append(el("strong", "", "Goal: "), document.createTextNode(effort.goal));
       section.append(goalEl);
@@ -2377,9 +2468,32 @@ function renderRegistryRows(g) {
       section.append(effortEditorCard(g));
     }
 
+    // The Work item's own documents come first, unlabelled, then (multi-goal only) the goal list,
+    // each goal followed by its documents.
+    const parentIs = (key) => (d) => effectiveParentId(d.parentId, effMap) === key;
     const docBox = el("div", "effort-docs");
-    _renderDocGroup(docBox, g, filteredEffortAdds, filteredEffortDocs, draft, pending, false, activeEfforts, false);
+    _renderDocGroup(docBox, g, filteredEffortAdds.filter(parentIs(effort.id)),
+                    filteredEffortDocs.filter(parentIs(effort.id)), draft, pending, false,
+                    activeEfforts, false);
     section.append(docBox);
+    if (isMulti) {
+      const list = el("div", "effort-goals");
+      goals.forEach((x, i) => {
+        const pid = goalParentId(effort.id, x.key);
+        const row = el("div", "goal-row");
+        const rowHead = el("div", "goal-row-head");
+        rowHead.append(el("span", "goal-num", `${i + 1}.`), el("span", "goal-text", x.text));
+        if (effort.status === "done") rowHead.append(el("span", "badge badge-done", "Done"));
+        row.append(rowHead);
+        const goalDocs = el("div", "effort-docs goal-docs");
+        _renderDocGroup(goalDocs, g, filteredEffortAdds.filter(parentIs(pid)),
+                        filteredEffortDocs.filter(parentIs(pid)), draft, pending, false,
+                        activeEfforts, false);
+        row.append(goalDocs);
+        list.append(row);
+      });
+      section.append(list);
+    }
 
     box.append(section);
     renderedSections++;
@@ -2469,15 +2583,10 @@ function registryRow(g, doc, status, pending, activeEfforts, isUnassigned) {
   if (activeEfforts && activeEfforts.length > 0 && status !== "remove" && !isPending) {
     const moveSel = el("select", "graph-select rrow-move-select");
     moveSel.title = "Move document to effort";
-    const unopt = el("option", "", "Unassigned");
-    unopt.value = "";
-    moveSel.append(unopt);
-    for (const eff of activeEfforts) {
-      const opt = el("option", "", eff.name);
-      opt.value = eff.id;
-      moveSel.append(opt);
-    }
-    moveSel.value = doc.parentId || "";
+    moveSel.setAttribute("aria-label", "Move document to");
+    const byId = Object.fromEntries(activeEfforts.map((e) => [e.id, e]));
+    fillParentSelect(moveSel, parentOptions(activeEfforts, "Unassigned"),
+                     effectiveParentId(doc.parentId, byId));
     moveSel.onchange = () => {
       draftUpsert(g.slug, { ...doc, parentId: moveSel.value }, status === "add");
       renderGraph();
@@ -2583,13 +2692,8 @@ function editorCard() {
     const wrap = el("div", "graph-field");
     wrap.append(el("label", "", "Parent"));
     const sel = el("select", "graph-select");
-    const rootOpt = el("option"); rootOpt.value = ""; rootOpt.textContent = "Project root";
-    sel.append(rootOpt);
-    for (const e of effortList) {
-      const opt = el("option"); opt.value = e.id; opt.textContent = e.name;
-      if ((vals.parentId || "") === e.id) opt.selected = true;
-      sel.append(opt);
-    }
+    fillParentSelect(sel, parentOptions(effortList, "Project root"),
+                     effectiveParentId(vals.parentId, effMap));
     wrap.append(sel); card.append(wrap); inputs.parentId = sel;
   }
 
@@ -2685,15 +2789,89 @@ function effortEditorCard(g) {
   field("description", "Description", "short summary (optional)");
   field("keywords", "Also known as", "comma-separated aliases");
 
-  // Goal — free-text outcome statement, often a paragraph or two, so a textarea rather
-  // than the single-line inputs above.
-  const goalWrap = el("div", "graph-field");
-  goalWrap.append(el("label", "", "Goal"));
-  const goalArea = el("textarea");
-  goalArea.value = vals.goal || "";
-  goalArea.placeholder = "what done looks like (optional)";
-  goalArea.rows = 3;
-  goalWrap.append(goalArea); card.append(goalWrap); inputs.goal = goalArea;
+  // Goal — free-text outcome statement, often a paragraph or two, so a textarea rather than the
+  // single-line inputs above. One goal is today's box; "+" breaks it out into a list of goals,
+  // each just its text. The area keeps its own state and re-renders only itself, so the other
+  // inputs keep their focus and half-typed text.
+  let goals = (vals.goals || []).length >= 2
+    ? vals.goals.map((x) => ({ key: x.key, text: x.text })) : [];
+  let singleText = vals.goal || "";
+  let areas = [];           // the list-mode textareas, in goal order
+  let singleArea = null;
+  const goalWrap = el("div", "graph-field goal-area");
+  card.append(goalWrap);
+  const syncGoalText = () => {
+    if (goals.length) goals.forEach((x, i) => { if (areas[i]) x.text = areas[i].value; });
+    else if (singleArea) singleText = singleArea.value;
+  };
+  const addGoalBtn = (label, title) => {
+    const b = el("button", "ghost tiny goal-add", "+");
+    b.type = "button"; b.title = title; b.setAttribute("aria-label", label);
+    return b;
+  };
+  // `focusAt`: index of the list textarea to focus, or -1 for the single Goal textarea.
+  const renderGoalArea = (focusAt) => {
+    goalWrap.replaceChildren();
+    areas = []; singleArea = null;
+    if (!goals.length) {
+      const head = el("div", "goal-label-row");
+      head.append(el("label", "", "Goal"));
+      const add = addGoalBtn("Add goal", "Break this goal out into a list of goals");
+      add.onclick = () => {
+        syncGoalText();
+        const k = nextGoalKey(g, vals.id, []);
+        goals = [{ key: k, text: singleText }, { key: k + 1, text: "" }];
+        renderGoalArea(1);
+      };
+      head.append(add);
+      singleArea = el("textarea");
+      singleArea.value = singleText;
+      singleArea.placeholder = "what done looks like (optional)";
+      singleArea.rows = 3;
+      singleArea.setAttribute("aria-label", "Goal");
+      goalWrap.append(head, singleArea);
+      if (focusAt === -1) singleArea.focus();
+      return;
+    }
+    goalWrap.append(el("label", "", "Goals"));
+    const list = el("div", "goal-edit-list");
+    goals.forEach((x, i) => {
+      const row = el("div", "goal-edit-row");
+      row.append(el("span", "goal-edit-num", `${i + 1}.`));
+      const area = el("textarea");
+      area.value = x.text;
+      area.rows = 2;
+      area.placeholder = "what done looks like";
+      area.setAttribute("aria-label", `Goal ${i + 1}`);
+      areas.push(area);
+      const rm = el("button", "ghost tiny danger goal-remove", "×");
+      rm.type = "button";
+      rm.setAttribute("aria-label", `Remove goal ${i + 1}`);
+      rm.title = `Remove goal ${i + 1}; its documents return to the Work item`;
+      rm.onclick = () => {
+        syncGoalText();
+        goals.splice(i, 1);
+        if (goals.length === 1) {          // back to one goal: today's single box, no number
+          singleText = goals[0].text; goals = [];
+          renderGoalArea(-1);
+        } else {
+          renderGoalArea(i < goals.length ? i : i - 1);
+        }
+      };
+      row.append(area, rm);
+      list.append(row);
+    });
+    goalWrap.append(list);
+    const add = addGoalBtn("Add goal", "Add another goal");
+    add.onclick = () => {
+      syncGoalText();
+      goals.push({ key: nextGoalKey(g, vals.id, goals), text: "" });
+      renderGoalArea(goals.length - 1);
+    };
+    goalWrap.append(add);
+    if (focusAt != null && focusAt >= 0 && areas[focusAt]) areas[focusAt].focus();
+  };
+  renderGoalArea(null);
 
   // Hidden — keeps this effort and its documents out of deployed context (AGENTS.md,
   // CLAUDE.md) without touching the graph, which still loads and queries fine.
@@ -2730,10 +2908,19 @@ function effortEditorCard(g) {
                      name: inputs.name.value.trim(),
                      description: inputs.description.value.trim(),
                      keywords: inputs.keywords ? inputs.keywords.value.trim() : (vals.keywords || ""),
-                     goal: inputs.goal.value.trim(),
+                     goal: "", goals: [],
                      hidden: inputs.hidden.checked,
                      status: inputs.status.checked ? "done" : "",
                      evaluation: inputs.status.checked ? inputs.evaluation.value.trim() : "" };
+    syncGoalText();
+    if (goals.length) {                     // a list sends its texts and no single goal
+      if (goals.some((x) => !x.text.trim())) {
+        toast("Each goal needs text — fill it in or remove it."); return;
+      }
+      effort.goals = goals.map((x) => ({ key: x.key, text: x.text.trim() }));
+    } else {
+      effort.goal = singleText.trim();
+    }
     if (!effort.id || !effort.name) { toast("Effort ID and Name are required."); return; }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(effort.id)) {
       toast("Effort ID must be lowercase alphanumerics and hyphens, no leading/trailing/consecutive hyphens.");
@@ -2825,9 +3012,14 @@ function updateGraphDock() {
 async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = false) {
   if (!slug) return;
   const d = draftFor(slug);
+  // A staged document may name a goal the same draft removes; send where it will land, or the whole
+  // proposal is refused. Registry documents the operator never staged are re-homed by the server.
+  const pg = (STATE.graphs || []).find((x) => x.slug === slug);
+  const effMap = pg ? effortMapFor(pg) : {};
   const documents = [...Object.values(d.add), ...Object.values(d.edit)].map((x) => ({
     id: x.id, name: x.name, description: x.description || "",
-    dateModified: x.dateModified, keywords: x.keywords || "", parentId: x.parentId || "",
+    dateModified: x.dateModified, keywords: x.keywords || "",
+    parentId: effectiveParentId(x.parentId, effMap),
     // absent = preserve server-side, so a draft saved before the Type field can't wipe a kind
     ...("type" in x ? { type: x.type || "" } : {}) }));
   const removals = Object.keys(d.remove);
@@ -2838,6 +3030,8 @@ async function proposeGraphDraft(slug = graphSlug, reason = null, autoAccept = f
       hidden: !!x.hidden,
     };
     if ("keywords" in x) item.keywords = x.keywords ?? "";
+    // goals is preserve-when-absent server-side too: an older draft without it keeps the goal list.
+    if ("goals" in x) item.goals = x.goals || [];
     // Absent keys mean "leave as is" server-side (preserve-when-absent), so a draft that never
     // saw the completion state cannot un-mark a Done effort; an explicit "" clears it.
     if ("status" in x) item.status = x.status ?? "";

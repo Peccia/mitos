@@ -3809,3 +3809,51 @@ def test_app_js_effort_delta_summary_prints_goal_rows():
     assert "goals ${oldGoals.length} → ${newGoals.length}" in body
     assert "return to the Work item" in body and "x.rehomed" in body
     assert "was !== now || evWas !== evNow" in body
+
+
+def _app_js():
+    from conftest import REPO_ROOT
+    return (REPO_ROOT / "build" / "review_ui" / "app.js").read_text(encoding="utf-8")
+
+
+def test_app_js_propose_graph_draft_forwards_goals_and_effective_parents():
+    """Source guard (the :propose_graph_draft_includes_hidden style): the draft proposal sends
+    each effort's goals, and maps every staged document's parent through effectiveParentId so a
+    document staged onto a goal the same draft removes does not get the whole proposal refused."""
+    js = _app_js()
+    body = js[js.index("async function proposeGraphDraft"):]
+    body = body[:body.index("\nasync function ", 10) if "\nasync function " in body[10:] else len(body)]
+    assert 'if ("goals" in x) item.goals = x.goals || [];' in body
+    assert "effectiveParentId(x.parentId, effMap)" in body
+
+
+def test_app_js_new_work_item_opens_with_an_empty_goal_list():
+    js = _app_js()
+    at = js.index('addEffortBtn.onclick')
+    assert "goals: []" in js[at:at + 400]
+    # both Edit openers carry the Work item's goals into the editor
+    assert js.count("goals: effort.goals || []") == 2
+
+
+def test_app_js_next_goal_key_reads_raw_parents_not_effective_ones():
+    """TEST-06: a removed goal's key must not be reused inside one draft, so nextGoalKey looks
+    at the documents' RAW parentId, never at effectiveParentId."""
+    js = _app_js()
+    body = js[js.index("function nextGoalKey"):]
+    body = body[:body.index("\n}\n") + 3]
+    assert "effectiveParentId" not in body
+    assert "d.parentId" in body and "draft.add" in body and "draft.edit" in body
+
+
+def test_a_document_staged_on_a_removed_goal_proposes_with_its_effective_parent():
+    """RISK-05: the payload the console sends once a staged document's goal is removed in the
+    same draft names the Work item as its parent, and proposes and accepts cleanly."""
+    from agentic import graph, review
+    treg, tmp = _goal_rig()
+    out = review.propose_graph_change(
+        treg, "example-project", [_doc("GNEW", "New doc", "auth")], efforts=[
+            {"id": "auth", "name": "Auth", "goal": "Just one", "goals": []}])
+    _accept_ok(treg, out)
+    treg = loader.load(tmp)
+    assert _parents(treg)["GNEW"] == graph.CREATIVE_WORK_NS + "auth"
+    assert _parents(treg)["GSPEC"] == graph.CREATIVE_WORK_NS + "auth"      # re-homed by the server
