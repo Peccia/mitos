@@ -476,11 +476,15 @@ def skills_block(skills: list) -> str:
     return "\n".join(lines) + "\n"
 
 
-def project_roster_block(projects: list) -> str:
+def project_roster_block(projects: list, paths: dict | None = None) -> str:
     """The `<generated>` "## Project Roster" section for Projects/AGENTS.md: one bullet
     per project folder deployed in this tree, sourced from each manifest's `name`,
     `slug`, optional `aliases`, and optional `description` — the single place that text
-    lives (mirrors skills_block, which does the same for skill descriptions)."""
+    lives (mirrors skills_block, which does the same for skill descriptions).
+
+    `paths` (slug → folder text) is for the `project_roster:` target block, whose roster
+    names real checkout folders instead of this tree's generated `Projects/<name>/` nodes.
+    Omitted, the output is byte-identical to what the context tree has always rendered."""
     if not projects:
         return ""
     lines = ["## Project Roster", ""]
@@ -492,7 +496,8 @@ def project_roster_block(projects: list) -> str:
         if aliases:
             alias_str = ", ".join(aliases) if isinstance(aliases, list) else str(aliases)
             alias_part = f" [aliases: {alias_str}]"
-        entry = f"- `Projects/{name}/` ({proj.get('slug')}){alias_part}"
+        folder = f"Projects/{name}" if paths is None else paths[proj.get("slug")]
+        entry = f"- `{folder}/` ({proj.get('slug')}){alias_part}"
         lines.append(entry + (f" — {desc}" if desc else ""))
     return "\n".join(lines) + "\n"
 

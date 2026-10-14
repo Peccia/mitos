@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from conftest import raises as conftest_raises
 from conftest import (
     REPO_ROOT, reg, loader, planner, render, classify_output,
     _inbox, _temp_registry, _doc, _write_graph,
@@ -2697,3 +2698,129 @@ def test_core_machines_deploy_no_org_or_deliverable_content():
                 assert "delivers:" not in content, f"{mname}: deployed skill with delivers: in {o.deploy_path}"
                 assert "org_domain:" not in content, f"{mname}: deployed skill with org_domain: in {o.deploy_path}"
 
+
+
+# ── project_roster: target block ─────────────────────────────────────────────
+_ROSTER_SPEC = {"target": "roster-demo", "project_roster": {
+    "deploy_to_key": "demo_root", "filename": "AGENTS.md", "title": "Projects",
+    "drift_policy": "generated"}}
+
+
+def _roster_rig(projects, root="D:/Projects", targets=("roster-demo",), with_graphs=False):
+    """A registry copy whose example-windows deploys an overlay-style target carrying a
+    `project_roster:` block over exactly `projects` (slug → (name, local_path or None))."""
+    import copy
+    from agentic import graph as graphmod
+    rig = copy.deepcopy(reg)
+    rig.targets["roster-demo"] = dict(_ROSTER_SPEC)
+    m = rig.machines["example-windows"]
+    m["targets"] = list(targets)
+    m["paths"]["demo_root"] = root
+    m["paths"]["projects_root"] = root
+    rig.projects = {}
+    rig.graphs = {}
+    for slug, (name, local) in projects.items():
+        proj = {"name": name, "slug": slug, "description": f"the {name} project"}
+        if local:
+            proj["local_path"] = {"example-windows": local}
+        rig.projects[slug] = proj
+        if with_graphs:
+            rig.graphs[slug] = graphmod.ProjectGraph(
+                slug=slug, name=name, description="d",
+                documents=[_doc(f"{slug}-1", "A Doc", "a doc", "2026-06-27")],
+                efforts=[], path=None)
+    return rig
+
+
+def _roster_out(rig):
+    return next(o for o in planner.plan_machine(rig, "example-windows")
+                if o.target == "roster-demo")
+
+
+def test_project_roster_target_renders_relative_and_absolute_paths():
+    """FR-5: the block names each project's real folder — relative to the root when under
+    it (a folder with a space intact), absolute when outside — and omits a project with
+    no folder on this machine."""
+    rig = _roster_rig({
+        "mitos": ("Mitos", "Mitos"),
+        "personal-brand": ("Personal Brand", "Personal Brand"),
+        "elsewhere": ("Elsewhere", "E:/Other/Elsewhere"),
+        "nowhere": ("Nowhere", None),
+    })
+    out = _roster_out(rig)
+    assert out.deploy_path == "D:/Projects/AGENTS.md"
+    assert out.drift_policy == "generated"
+    assert out.content.startswith("# Projects\n\n## Project Roster\n")
+    assert "- `Mitos/` (mitos) — the Mitos project" in out.content
+    assert "- `Personal Brand/` (personal-brand) — the Personal Brand project" in out.content
+    assert "- `E:/Other/Elsewhere/` (elsewhere) — the Elsewhere project" in out.content
+    assert "nowhere" not in out.content
+    assert "Projects/Mitos" not in out.content
+    # the file is a node file, so it must satisfy the header taxonomy
+    assert planner.lint_node_markdown(out) == []
+
+
+def test_project_roster_root_match_ignores_drive_letter_case():
+    """A drive path has no case: `d:/projects/Mitos` is under root `D:/Projects`."""
+    rig = _roster_rig({"mitos": ("Mitos", "d:/projects/Mitos")}, root="D:/Projects")
+    assert "- `Mitos/` (mitos)" in _roster_out(rig).content
+
+
+def test_project_roster_block_malformed_is_refused():
+    """Each bad key is refused at load, with the key named."""
+    import copy
+    cases = [
+        ({"project_roster": "nope"}, "project_roster must be a mapping"),
+        ({"project_roster": {"filename": "AGENTS.md"}}, "project_roster.deploy_to_key"),
+        ({"project_roster": {"deploy_to_key": "k", "filename": 3}}, "project_roster.filename"),
+        ({"project_roster": {"deploy_to_key": "k", "title": []}}, "project_roster.title"),
+        ({"project_roster": {"deploy_to_key": "k", "drift_policy": "wild"}},
+         "project_roster.drift_policy"),
+    ]
+    for spec, needle in cases:
+        rig = copy.deepcopy(reg)
+        rig.targets["roster-demo"] = {"target": "roster-demo", **spec}
+        with conftest_raises(loader.RegistryError, match=needle):
+            loader._validate(rig)
+    # a machine deploying the target must define the path key the roster lands in
+    rig = copy.deepcopy(reg)
+    rig.targets["roster-demo"] = dict(_ROSTER_SPEC)
+    rig.machines["example-windows"]["targets"] = ["roster-demo"]
+    rig.machines["example-windows"]["paths"].pop("demo_root", None)
+    with conftest_raises(loader.RegistryError, match="paths.demo_root"):
+        loader._validate(rig)
+
+
+def test_context_tree_roster_unchanged_by_paths():
+    """The context-tree's own `Projects/<name>/` roster is byte-identical to what 131a865
+    rendered: `paths` is opt-in and the default output did not move."""
+    projects = [
+        {"name": "Alpha", "slug": "alpha", "description": "first"},
+        {"name": "Beta Two", "slug": "beta", "aliases": ["b2", "bt"]},
+    ]
+    assert render.project_roster_block(projects) == (
+        "## Project Roster\n\n"
+        "- `Projects/Alpha/` (alpha) — first\n"
+        "- `Projects/Beta Two/` (beta) [aliases: b2, bt]\n")
+    assert render.project_roster_block([]) == ""
+
+
+def test_project_roster_matches_claude_code_project_folders():
+    """The roster lists exactly the folders the claude-code target deploys a project
+    AGENTS.md into: same filter, so a roster folder always holds Mitos's AGENTS.md."""
+    rig = _roster_rig({
+        "mitos": ("Mitos", "Mitos"),
+        "personal-brand": ("Personal Brand", "Personal Brand"),
+        "elsewhere": ("Elsewhere", "E:/Other/Elsewhere"),
+        "nowhere": ("Nowhere", None),
+    }, targets=("claude-code", "roster-demo"), with_graphs=True)
+    outs = planner.plan_machine(rig, "example-windows")
+    deployed = {o.deploy_path.rsplit("/", 1)[0] for o in outs
+                if o.target == "claude-code" and o.deploy_path.endswith("/AGENTS.md")
+                and o.deploy_path.count("/") >= 2 and "/.claude/" not in o.deploy_path
+                and "skills" not in o.deploy_path}
+    roster = next(o for o in outs if o.target == "roster-demo")
+    import re as _re
+    listed = {("D:/Projects/" + f).rstrip("/") if not _re.match(r"^[A-Za-z]:/", f) else f.rstrip("/")
+              for f in _re.findall(r"^- `([^`]+)/` \(", roster.content, _re.M)}
+    assert deployed and listed == deployed, (listed, deployed)

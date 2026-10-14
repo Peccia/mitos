@@ -276,6 +276,20 @@ A personal context tree (`targets/context-tree.yaml`) compiles your identity, pr
 - **Dynamic branches:** Add custom folders under `registry/context/<branch>/` (e.g. `family/` or `ops/`) to mount specialized operating context without modifying target definitions.
 - **Decoupled from harnesses:** The tree is standard Markdown files on disk, readable by any CLI, IDE, or agent harness. See [`docs/context-tree.md`](docs/context-tree.md).
 
+## Project roster target block
+
+A target (typically one in your overlay) can carry a `project_roster:` block. It deploys one generated file that names the real folder of every project that has a `local_path` on that machine: the same projects the `claude-code` target writes a project `AGENTS.md` into. A downstream tool can then find every checkout from that one file.
+
+```yaml
+project_roster:
+  deploy_to_key: sdlc_root      # the machine `paths:` key the file lands in (required)
+  filename: AGENTS.md           # default
+  title: Projects               # the H1; default "Projects"
+  drift_policy: generated       # protect | harvest | generated; default generated
+```
+
+Each line reads `` - `<folder>/` (<slug>) — <description> ``. A folder under the `deploy_to_key` root is written relative to it (a folder name with a space is kept as is); a folder elsewhere is written absolute. A machine deploying the target must set `paths.<deploy_to_key>`. The context tree's own `Projects/<name>/` roster is unchanged.
+
 ## Agents
 
 Mitos lets you author custom subagents in `registry/agents/<name>.md` (or in your overlay at `registry/local/agents/<name>.md`) and deploy them natively to harnesses that support custom agents (such as Claude Code at `~/.claude/agents/<name>.md`).

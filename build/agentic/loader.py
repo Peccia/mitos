@@ -1241,6 +1241,14 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(
                     f"machine {name}: agents lists agent(s) in BOTH "
                     f"include and exclude: {sorted(both)}")
+        # a target's project_roster: needs the machine path it lands in
+        for t in m.get("targets", []):
+            pr = (reg.targets.get(t) or {}).get("project_roster")
+            key = pr.get("deploy_to_key") if isinstance(pr, dict) else None
+            if key and not (m.get("paths") or {}).get(key):
+                raise RegistryError(
+                    f"machine {name}: target {t!r} has a project_roster: that lands in "
+                    f"paths.{key}, which is not set in machines/{name}.yaml")
         # An `example: true` template is never deployed (compile skips it, deploy refuses it),
         # so an overlay agent needing a skill the template's store omits must not fail it.
         if not m.get("example"):
@@ -1276,6 +1284,24 @@ def _validate(reg: Registry) -> None:
                 f"target {tname}: skills.include/exclude is not allowed in targets/*.yaml "
                 f"(core, not overlayable) — set it on the machine profile instead: "
                 f"machines/<name>.yaml's `skills: {{{tname}: {{include: [...]}}}}`")
+    # project_roster: — a generated roster of real project folders (planner._plan_generic).
+    for tname, tspec in reg.targets.items():
+        pr = tspec.get("project_roster")
+        if pr is None:
+            continue
+        if not isinstance(pr, dict):
+            raise RegistryError(f"target {tname}: project_roster must be a mapping")
+        if not isinstance(pr.get("deploy_to_key"), str) or not pr["deploy_to_key"]:
+            raise RegistryError(
+                f"target {tname}: project_roster.deploy_to_key must be a string "
+                f"(the machine paths: key the roster file lands in)")
+        for key in ("filename", "title"):
+            if key in pr and not isinstance(pr[key], str):
+                raise RegistryError(f"target {tname}: project_roster.{key} must be a string")
+        if pr.get("drift_policy", "generated") not in ("protect", "harvest", "generated"):
+            raise RegistryError(
+                f"target {tname}: project_roster.drift_policy must be "
+                f"protect, harvest or generated, not {pr['drift_policy']!r}")
     # machine-side skill curation (the overlayable equivalent): validated below,
     # alongside the rest of machine profile validation.
     # servers.yaml shape; per-machine URL overrides reference known machines

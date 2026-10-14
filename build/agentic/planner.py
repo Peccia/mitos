@@ -1226,6 +1226,20 @@ _plan_agents_md = _plan_context_tree
 
 
 # ── generic target planner ──────────────────────────────────────────────────
+def _roster_folder(local: str, root: str) -> str:
+    """A project folder as the `project_roster:` block names it: relative to `root` when it
+    lies under it, otherwise absolute; forward slashes throughout. A drive-lettered path
+    is matched case-insensitively (`d:/projects/Mitos` under `D:/Projects`), because a
+    Windows drive path has no case."""
+    folder = local.replace("\\", "/").rstrip("/")
+    base = root.replace("\\", "/").rstrip("/")
+    drive = len(base) >= 2 and base[1] == ":"
+    f_cmp, b_cmp = (folder.casefold(), base.casefold()) if drive else (folder, base)
+    if f_cmp.startswith(b_cmp + "/"):
+        return folder[len(base) + 1:]
+    return folder
+
+
 def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> list[Output]:
     """Generic target planner covering context_file, skills (with subdir pattern
     and frontmatter full|minimal), agents, and mcp (mcp_servers_json).
@@ -1253,6 +1267,29 @@ def _plan_generic(reg: Registry, machine_name: str, spec: dict, paths: dict) -> 
                 drift_policy=cf.get("drift_policy", "protect"), sources=sources,
                 section_bodies=_multi(sections) if sections else {},
             ))
+
+    # 1b. project_roster — a generated roster naming the real folders of every project
+    # that has a folder on this machine (the same filter _plan_claude_code deploys
+    # AGENTS.md by), so a downstream tool finds each project from one deployed file.
+    pr = spec.get("project_roster")
+    if pr:
+        root_dir = paths.get(pr.get("deploy_to_key"))
+        if root_dir:
+            folders: dict[str, str] = {}
+            for slug, proj in reg.projects.items():
+                local = _local(reg, machine_name, proj)
+                if local:
+                    folders[slug] = _roster_folder(local, root_dir)
+            ordered = [reg.projects[s] for s in sorted(folders, key=lambda s: folders[s])]
+            if ordered:
+                body = render.project_roster_block(ordered, folders)
+                content = "# " + pr.get("title", "Projects") + "\n\n" + body
+                deploy_path = f"{root_dir.rstrip('/')}/{pr.get('filename', 'AGENTS.md')}"
+                outputs.append(Output(
+                    target=tname, kind="text", deploy_path=deploy_path,
+                    dist_rel=f"{tname}/{safe_rel(deploy_path)}",
+                    content=content, drift_policy=pr.get("drift_policy", "generated"),
+                    sources=[]))
 
     # 2. skills
     sk = spec.get("skills")
