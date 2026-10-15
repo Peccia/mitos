@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The skill drawer's Supporting Files panel moved into **Edit files →**; the agent form now hosts the same full-size editor and gains **Revert**.
+- The context tree now deploys as `MitosProjects/` (the project roster `AGENTS.md` plus one `<Name>/` node per project, with repo checkouts beside each node), at a machine's `context_root` or a project's `context_tree` mount. `deploy --prune` now also removes the empty folders it leaves, and reports a legacy folder it keeps because it still holds your files. Move existing checkouts from `Projects/<Name>/<repo>` to `MitosProjects/<Name>/<repo>` before the first deploy; deploy never moves or deletes a checkout.
 
 ### Removed
+- Removed the `Assistant/` branch, the operating-root `AGENTS.md` (`agentic-root.md`) and dynamic branches (`registry/context/<branch>/`) from the context tree. `deploy --prune` deletes the files they deployed.
 - Removed the `new-session` skill. Its steps were a copy of the Session Protocol that a planning harness supplies itself. The context-tree operating rules no longer tell the agent to run a skill at a topic shift. A coding-harness machine with no `document_store:` now deploys no core skills.
 - Removed the retired-key warning for `mitos_agent` in `user.yaml`. A leftover `mitos_agent:` line now stops the load with an "unknown key" error; delete the line.
 - Removed the `mitos_agent_mcp_config` renderer alias. A target naming it falls back to `mcp_servers_json`, so output is unchanged.

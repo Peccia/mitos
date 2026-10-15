@@ -15,28 +15,27 @@ guidelines, communication style, and documentation. When every harness invents i
 format or siloed configuration, context drifts and diverges.
 
 A Mitos Context Tree solves this by organizing your operating context as a filesystem tree:
-- **`AGENTS.md` (Root):** High-level navigation roster pointing to projects and personal workflows.
-- **`Projects/<name>/AGENTS.md`:** Per-project context, repositories, and documentation graphs.
-- **`Projects/<name>/AGENTS_DETAILS.md`:** On-demand document index with deep links and summaries.
-- **`Assistant/`:** Personal assistant workflows (tasks, notes, reminders, routines).
+- **`MitosProjects/AGENTS.md` (Root):** The project roster: one line per project folder beside it.
+- **`MitosProjects/<name>/AGENTS.md`:** Per-project context, repositories, and documentation graphs.
+- **`MitosProjects/<name>/AGENTS_DETAILS.md`:** On-demand document index with deep links and summaries.
 
 ---
 
 ## How Harnesses Read It
 
 Any AI harness with basic filesystem and file-reading tools can navigate a context tree:
-1. **Entry Point:** The harness starts at the operating root `AGENTS.md` (or a project checkout's root `AGENTS.md`).
+1. **Entry Point:** The harness starts at the roster `MitosProjects/AGENTS.md` (or a project checkout's root `AGENTS.md`).
 2. **Navigation:** Harnesses read the `## Navigation` section to discover child nodes, project directories, and cloned repositories.
 3. **Progressive Disclosure:** High-level indexes provide immediate orientation, while deep files (`AGENTS_DETAILS.md`) are read only when needed for specific tasks.
 4. **Symlinks and Stubs:** Coding harnesses that expect specific filenames (e.g. `CLAUDE.md`) receive lightweight stubs pointing to `@AGENTS.md`, ensuring all tools share the same ground truth without duplicated text.
 
 ---
 
-## Operating Mount (`context_root`) vs. Project Mount (`context_tree`)
+## Machine Mount (`context_root`) vs. Project Mount (`context_tree`)
 
 A context tree can be deployed at two distinct scopes:
 
-### 1. Operating Mount (`context_root`)
+### 1. Machine Mount (`context_root`)
 Configured on a machine profile (`registry/local/machines/<name>.yaml` or `machines/<name>.yaml`):
 ```yaml
 targets:
@@ -45,8 +44,8 @@ targets:
 paths:
   context_root: "~/context-tree"
 ```
-- Deploys the complete machine-wide operating tree at `context_root` (e.g., `~/context-tree`).
-- Clones project repositories beside project nodes in `Projects/<Name>/<repo>`.
+- Deploys the machine-wide project tree at `<context_root>/MitosProjects/` (e.g., `~/context-tree/MitosProjects/`).
+- Clones project repositories beside project nodes in `MitosProjects/<Name>/<repo>`.
 - Deploys universal identity partials (`who-i-am.md`, `operating-rules.md`, `security.md`).
 
 ### 2. Project Mount (`context_tree`)
@@ -55,9 +54,9 @@ Configured on an individual project (`registry/projects/<slug>.yaml`):
 name: Family
 context_tree: context
 ```
-- Mounts an operating tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/context/`).
-- Allows a project checkout to host its own self-contained operating tree without requiring a dedicated machine profile.
-- The project's root `AGENTS.md` automatically cross-references the operating tree.
+- Mounts the project tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/context/MitosProjects/`).
+- Allows a project checkout to host its own self-contained project tree without requiring a dedicated machine profile.
+- The project's root `AGENTS.md` automatically cross-references the mounted tree.
 
 ---
 

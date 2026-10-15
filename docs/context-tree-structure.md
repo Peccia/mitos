@@ -1,7 +1,7 @@
 # The tree-node header taxonomy
 
-Every file the assistant reads while navigating the deployed tree — the operating root
-`AGENTS.md`, the `Projects/` and `Assistant/` branch roots, each project's `AGENTS.md`,
+Every file the assistant reads while navigating the deployed tree — the roster
+`MitosProjects/AGENTS.md`, each project's `AGENTS.md`,
 and every `AGENTS_DETAILS.md` — shares **one header layout**. The persona (`SOUL.md`) and
 the skills reference sections *by name*, so the names, levels, and order are a contract,
 not a style preference. It is enforced at plan time by `lint_node_markdown`
@@ -15,8 +15,7 @@ same way — only the deploy root differs.
 
 ## The rules
 
-1. **One H1 = the node's identity.** The project name, `Operating Root`, `Projects`,
-   `Personal Assistant`. The description is the prose directly under it — there is no
+1. **One H1 = the node's identity.** The project name, or `Projects` for the roster. The description is the prose directly under it — there is no
    `## About` section. A standalone generated file (a wholly-generated project node with
    no prose, an `AGENTS_DETAILS.md`) takes its H1 from the connection section instead.
 2. **No heading-level skips.** H1 → H2 → H3, never H1 → H3.
@@ -26,7 +25,7 @@ same way — only the deploy root differs.
    | Section | Holds | Act on it with |
    |---|---|---|
    | `## Navigation` | the **local** tree from here — child `AGENTS.md` to open, the routing decision, cloned repo folders | file / `terminal` tools |
-   | `## Workflows` | step-by-step procedures the node performs itself (e.g. the Assistant's email/calendar/task categories) | — |
+   | `## Workflows` | step-by-step procedures the node performs itself | — |
    | `## Tools` | callable capabilities (MCP servers, browser, terminal) **and their rules of use** | invoke the tool |
    | `## Skills` | instruction playbooks in scope at this node | read `SKILL.md`, follow it |
    | `## <Name> (`key`)` | a **connection** section — folder paths and the document map *inside* that store | that connection's tools |
@@ -39,7 +38,7 @@ same way — only the deploy root differs.
    collide with a reserved `##` prose section.
 
    An effort's `###` heading is **`<name> (<id>)`** (`graph.effort_heading`) — the same
-   human-name-then-stable-id form a project roster line uses (`` - `Projects/Website/`
+   human-name-then-stable-id form a project roster line uses (`` - `Website/`
    (website) — … ``). The id is emitted for every effort and rides the heading
    rather than a line of its own: a harness keying a long-lived record on an effort must key it
    on something a rename cannot move, and the heading text is the NAME, which the owner edits
@@ -119,6 +118,5 @@ self-identifies even where frontmatter is stripped) and a short purpose paragrap
 
 Stacked system prompts or identity partials are not navigable tree nodes — having no
 single file identity, they are all-H2 (identity partials) with no H1, and are **not**
-linted as tree nodes. The taxonomy itself is taught **inside the tree**, by the
-operating root's `## Navigation` section (`registry/context/agentic-root.md`) — the
-first node read — so the tree stays self-describing.
+linted as tree nodes. The taxonomy itself is documented here; the tree carries no
+copy of it, and a harness that needs it reads this page.

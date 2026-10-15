@@ -73,7 +73,7 @@ paths:
 
 ### 1. Context delivery (`AGENTS.md`)
 Antigravity natively reads `AGENTS.md` files to understand identity and project background. Mitos writes context in two places:
-- **Context tree** (machines deploying `context-tree`): Deployed to `context_root` — a root `AGENTS.md` (the operating root: routing + personal-context bridge), an `Assistant/AGENTS.md` branch (one-shot workspace tasks), and a `Projects/AGENTS.md` branch root (roster) with a `Projects/<project>/AGENTS.md` per project.
+- **Context tree** (machines deploying `context-tree`): Deployed to `<context_root>/MitosProjects/` — a roster `AGENTS.md` with a `<project>/AGENTS.md` per project.
 - **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
 
 

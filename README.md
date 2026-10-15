@@ -227,10 +227,9 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **machine** | A host (`machines/<name>.yaml`): which targets land there, and the path keys telling each target where to write. One machine can carry any mix of the coding harnesses. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy blocks to prevent overwriting), `harvest` (captured into `inbox/` as a review proposal), or `generated` (regenerated each deploy from the graph). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The human review queue. Proposals from self-improving tools land here as candidates; **only you** approve and merge them via the operator console. |
-| **Operating mount vs. reference mount** | Two ways to mount context, with different edit rules. An **operating tree** (a project's `context_tree:` below) is a full working context — rules, skills, routing — with `drift_policy: protect`, so edits you make in place reconcile back via `adopt`. A **reference index** (`context_root` below) is a lightweight, read-only project and document index generated straight from `registry/graph/` (`drift_policy: generated`); edits there are overwritten on the next deploy. |
-| **context_tree** | *(operating mount, project-wide)* An optional field on a project manifest — `context_tree: <subdir>` — that mounts a full operating tree (Navigation/Workflows/Skills, the project roster, dynamic branches) at `<local_path>/<subdir>/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with a complete, editable context tree rather than a flat `AGENTS.md`. |
-| **Dynamic branch** | A custom folder under an operating mount's root (e.g. `family/`) that you extend without forking `targets/context-tree.yaml` (not overlayable): drop an `AGENTS.md` under `registry/context/<branch>/` and every file in that folder deploys to `<root>/<branch>/`, auto-listed in the root `AGENTS.md`'s routing table. Branch names may not collide with `Projects`/`Assistant`. Applies identically to a machine mount or a project's `context_tree` mount. |
-| **context_root** | *(reference mount, machine-wide)* A machine path key (`machines/<name>.yaml`) that materializes a personal context tree — a roster plus each project's `Projects/<slug>/AGENTS.md` doc index, generated straight from `registry/graph/` — and is also where `claude-code` auto-clones project repos. Independent of `context-tree` target — a plain coding workstation can use it. |
+| **Project tree vs. reference index** | Two ways to materialize context, with different edit rules. A **project tree** (the `context-tree` target, mounted by a project's `context_tree:` or a machine's `context_root`) is a working context — the project roster and one node per project — with `drift_policy: protect`, so edits you make in place reconcile back via `adopt`. A **reference index** (`context_root` below) is a lightweight, read-only project and document index generated straight from `registry/graph/` (`drift_policy: generated`); edits there are overwritten on the next deploy. |
+| **context_tree** | *(project mount, project-wide)* An optional field on a project manifest — `context_tree: <subdir>` — that mounts the project tree (`MitosProjects/AGENTS.md`, the project roster, and one `<Name>/AGENTS.md` per project) at `<local_path>/<subdir>/MitosProjects/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with an editable context tree rather than a flat `AGENTS.md`. |
+| **context_root** | *(machine-wide)* A machine path key (`machines/<name>.yaml`) where the `context-tree` target deploys the project tree at `<context_root>/MitosProjects/` — the roster `AGENTS.md` plus one `<Name>/AGENTS.md` and `AGENTS_DETAILS.md` per project — and where `claude-code` auto-clones project repos beside each node. |
 | **project checkouts** | Deployed files at each project's `local_path` directory. On a **workstation** (claude-code without context-tree), Mitos writes a full-context `AGENTS.md` — the inline doc index from the knowledge graph plus the project's prose — and a thin `CLAUDE.md` stub pointing at it (`@AGENTS.md`). Where `context-tree` is also a target, `CLAUDE.md` carries identity and repo context and the graph materializes separately in the reference tree. |
 
 ## How skills reach a tool
@@ -271,9 +270,8 @@ Optionally, a target can *curate* its compatible set in one place via `include:`
 
 A personal context tree (`targets/context-tree.yaml`) compiles your identity, project rosters, and knowledge graph into a unified directory tree on your machine (specified by `paths.context_root`).
 
-- **Unified navigation:** Harnesses like Claude Code or Antigravity can read a single root `AGENTS.md` that maps all active projects and dynamic context branches.
-- **Project indexes:** Each project gets a clean, generated `Projects/<slug>/AGENTS.md` containing its knowledge graph documents and repo roster.
-- **Dynamic branches:** Add custom folders under `registry/context/<branch>/` (e.g. `family/` or `ops/`) to mount specialized operating context without modifying target definitions.
+- **Unified navigation:** Harnesses like Claude Code or Antigravity can read a single roster `AGENTS.md` (`MitosProjects/AGENTS.md`) that maps all active projects.
+- **Project nodes:** Each project gets a clean, generated `MitosProjects/<Name>/AGENTS.md` containing its knowledge graph documents and repo roster.
 - **Decoupled from harnesses:** The tree is standard Markdown files on disk, readable by any CLI, IDE, or agent harness. See [`docs/context-tree.md`](docs/context-tree.md).
 
 ## Project roster target block
@@ -288,7 +286,7 @@ project_roster:
   drift_policy: generated       # protect | harvest | generated; default generated
 ```
 
-Each line reads `` - `<folder>/` (<slug>) — <description> ``. A folder under the `deploy_to_key` root is written relative to it (a folder name with a space is kept as is); a folder elsewhere is written absolute. A machine deploying the target must set `paths.<deploy_to_key>`. The context tree's own `Projects/<name>/` roster is unchanged.
+Each line reads `` - `<folder>/` (<slug>) — <description> ``. A folder under the `deploy_to_key` root is written relative to it (a folder name with a space is kept as is); a folder elsewhere is written absolute. A machine deploying the target must set `paths.<deploy_to_key>`. The context tree's own roster names each project folder beside its root file (`` - `<Name>/` ``).
 
 ## Agents
 
