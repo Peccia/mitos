@@ -308,13 +308,13 @@ def test_mixed_agents_md_protects_prose_regenerates_doc_block():
     from agentic.commands import classify_output, cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    f = tmp / "home/ContextTree/Projects/Example Project/AGENTS.md"
+    f = tmp / "home/ContextTree/MitosProjects/Example Project/AGENTS.md"
     text = f.read_text(encoding="utf-8")
     assert "## Example Project — Documents" in text         # generated titles block present (H2)
     assert "<!-- " not in text                              # marker-free (invariant #5)
 
     o = next(o for o in planner.plan_machine(treg, "rig")
-             if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
+             if o.deploy_path.endswith("MitosProjects/Example Project/AGENTS.md"))
     assert o.drift_policy == "protect" and o.sources == ["context/projects/example-project.md"]
     assert any(render.is_generated_source(s) for s, _ in o.section_bodies)
 
@@ -385,6 +385,9 @@ def test_classify_conflict_and_untracked_states():
     import json as _json
     lock = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8"))
     o = next(x for x in planner.plan_machine(reg, "example-linux") if x.kind == "text")
+    # the roster file is prose + a generated block (section-aware); this test pins the
+    # whole-file compare, so drop the section split.
+    o = _replace(o, section_bodies=[])
     dest = root / safe_rel(o.deploy_path)
     dest.write_text(dest.read_text(encoding="utf-8") + "\nlocal edit\n",
                     encoding="utf-8", newline="\n")

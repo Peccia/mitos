@@ -168,13 +168,13 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
       publish step reads exactly as it reads an unwired store — say so, print it for the owner,
       and never guess a folder.
     - `connection`: the wired document store, named as the STABLE section label
-      `<Name> (`key`)` that `connection_label` mints — the same string `connections_block`
+      `<Name> (`key`)` that `connection_label` mints — the same string a project node
       renders as a heading, so a skill naming the store and a tree node heading it can
       never drift apart.
 
       This exists because a store being WIRED and a store being NAMED are different facts,
-      and only the second reaches a skill. `connections_block` renders into tree/branch
-      roots only, so a coding-only machine (no `agents-md` target) has a live `mcp.json`
+      and only the second reaches a skill. a project node renders it only on a
+      context-tree machine, so a coding-only machine (no `agents-md` target) has a live `mcp.json`
       and nothing in its always-on context that says so — and every return-lane skill's
       publish step, which looks for that heading, correctly refuses to guess and writes
       nothing. Expanding the label into the skill itself carries the name to exactly the
@@ -358,19 +358,6 @@ def compose_skill_resources(reg: Registry, skill: Skill) -> dict[str, SkillResou
     return dict(skill.resources)
 
 
-def dynamic_branches_block(branches: list[str]) -> str:
-    """The `<generated>` block appended to the assistant root AGENTS.md listing any
-    dynamically discovered branches (registry/context/<branch>/AGENTS.md) — see
-    planner._plan_agents_md. Empty when there are none."""
-    if not branches:
-        return ""
-    lines = ["## Extended Branches", "",
-             "Custom branches discovered under `registry/context/<branch>/AGENTS.md`:", ""]
-    for b in sorted(branches):
-        lines.append(f"- `{b}/`")
-    return "\n".join(lines) + "\n"
-
-
 def navigation_block(repos: list[tuple[str, str]], *, emit_heading: bool = True) -> str:
     """The `<generated:navigation>` repo roster for a project node: one line per cloned
     checkout, `dirname/` plus its `repo_notes:` description. The SINGLE source for a
@@ -399,14 +386,14 @@ def context_tree_note_block(subdir: str) -> str:
     """The `<generated>` cross-reference appended to a project's own root AGENTS.md when
     that project ALSO has a context_tree: mount — the "project within a project" note:
     two AGENTS.md-shaped files legitimately coexist (this one is the project's own
-    document/repo index; the mount is a full operating tree), so name the split
+    document/repo index; the mount is the project roster tree), so name the split
     explicitly rather than leaving a reader to wonder which one is authoritative."""
     subdir = subdir.rstrip("/")
+    tree = f"{subdir}/MitosProjects"
     return (
         f"## Operating Tree\n\n"
-        f"This project also has a full agentic operating tree mounted at `{subdir}/` — "
-        f"the same Navigation/Workflows/Skills shape a dedicated agentic machine gets. "
-        f"See [`{subdir}/AGENTS.md`]({subdir}/AGENTS.md) for that context; this file is "
+        f"This project also has a context tree mounted at `{tree}/`. Its project roster "
+        f"is [`{tree}/AGENTS.md`]({tree}/AGENTS.md); this file is "
         f"this project's own document/repo index, generated separately.\n"
     )
 
@@ -434,57 +421,14 @@ def connection_label(servers: dict, ds: str | None) -> tuple[str, str] | None:
     return f"{name} (`{ds}`)", detail.strip()
 
 
-def connections_block(servers: dict, machine: dict, user: dict) -> str:
-    """The `<generated>` connection section(s) for a tree/branch root (operating root and
-    the Assistant branch): the SHORT form — a `## <Name> (`key`)` heading plus one sentence
-    on what the wired document store is for. Project nodes get the FULL form (folder paths
-    + document map) from graph.py under the same heading. Empty (no section) when the
-    machine has no document store. A machine bound to more than one store (multi
-    connections) renders one such section per store, concatenated — each store gets its
-    own heading/blurb, same as a single-store machine's."""
-    possessive = _user_value(user, "users_given_name") or "the owner's"
-    blocks = []
-    for ds in document_stores(machine.get("document_store")):
-        label = connection_label(servers, ds)
-        if not label:
-            continue
-        heading, detail = label
-        server = servers.get(ds) or {}
-        categories = ", ".join(sorted((server.get("tools") or {}).keys()))
-        suite = f" ({categories})" if categories else ""
-        blurb = f" {detail}" if detail else ""
-        blocks.append(
-            f"## {heading}\n\n"
-            f"Use this suite{suite} as the source of truth for {possessive} data.{blurb}")
-    return ("\n\n".join(blocks) + "\n") if blocks else ""
-
-
-def skills_block(skills: list) -> str:
-    """The `<generated>` "## Skills" section for the operating root: one bullet per
-    skill selected for this machine's deployment, sourced from each skill's frontmatter
-    `description` — the single place that text lives now."""
-    general = sorted(skills, key=lambda s: s.name)
-    if not general:
-        return ""
-    lines = ["## Skills", "",
-             "Local instruction files at `{{skills_root}}/<category>/<name>/SKILL.md` — "
-             "read one with the `read_file` file tool and follow it; a skill is never a "
-             "callable tool.", ""]
-    for s in general:
-        desc = (s.frontmatter.get("description") or "").strip()
-        lines.append(f"- `{s.name}`: {desc}")
-    return "\n".join(lines) + "\n"
-
-
 def project_roster_block(projects: list, paths: dict | None = None) -> str:
-    """The `<generated>` "## Project Roster" section for Projects/AGENTS.md: one bullet
-    per project folder deployed in this tree, sourced from each manifest's `name`,
+    """The `<generated>` "## Project Roster" section for the tree's root AGENTS.md: one
+    bullet per project folder beside that file, sourced from each manifest's `name`,
     `slug`, optional `aliases`, and optional `description` — the single place that text
-    lives (mirrors skills_block, which does the same for skill descriptions).
+    lives.
 
     `paths` (slug → folder text) is for the `project_roster:` target block, whose roster
-    names real checkout folders instead of this tree's generated `Projects/<name>/` nodes.
-    Omitted, the output is byte-identical to what the context tree has always rendered."""
+    names real checkout folders instead of this tree's generated `<name>/` nodes."""
     if not projects:
         return ""
     lines = ["## Project Roster", ""]
@@ -496,7 +440,7 @@ def project_roster_block(projects: list, paths: dict | None = None) -> str:
         if aliases:
             alias_str = ", ".join(aliases) if isinstance(aliases, list) else str(aliases)
             alias_part = f" [aliases: {alias_str}]"
-        folder = f"Projects/{name}" if paths is None else paths[proj.get("slug")]
+        folder = name if paths is None else paths[proj.get("slug")]
         entry = f"- `{folder}/` ({proj.get('slug')}){alias_part}"
         lines.append(entry + (f" — {desc}" if desc else ""))
     return "\n".join(lines) + "\n"

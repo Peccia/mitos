@@ -1256,34 +1256,6 @@ def test_skill_resource_binary_file_rejected():
         assert "must be UTF-8 text" in str(e)
 
 
-# ── dynamic agentic branches — R7 ───────────────────────────────────────────────
-def test_dynamic_branch_discovered_and_deployed():
-    from agentic.loader import Partial
-    rig = _full_windows_rig()
-    rig.partials["context/family/AGENTS.md"] = Partial(
-        rel="context/family/AGENTS.md", audience=None,
-        body="# Family\n\nFamily branch root.")
-    rig.partials["context/family/notes.md"] = Partial(
-        rel="context/family/notes.md", audience=None, body="Family notes.")
-    outs = planner.plan_machine(rig, "example-linux")
-    paths = {o.deploy_path: o for o in outs if o.target == "context-tree"}
-    assert any(p.endswith("/family/AGENTS.md") for p in paths)
-    assert any(p.endswith("/family/notes.md") for p in paths)
-    root_out = next(o for p, o in paths.items() if p.endswith("/AGENTS.md")
-                    and "/family/" not in p and "/Projects/" not in p and "/Assistant/" not in p)
-    assert "family/" in root_out.content
-
-def test_dynamic_branch_reserved_name_collision_rejected():
-    from agentic.loader import Partial, RegistryError
-    rig = _full_windows_rig()
-    rig.partials["context/Projects/AGENTS.md"] = Partial(
-        rel="context/Projects/AGENTS.md", audience=None, body="colliding branch.")
-    try:
-        planner.plan_machine(rig, "example-linux")
-        raise AssertionError("expected RegistryError for reserved branch name")
-    except RegistryError as e:
-        assert "collides with a reserved top-level entry" in str(e)
-
 def test_project_description_must_be_a_nonempty_string():
     """`description:` feeds the generated Project Roster — a non-string (or blank)
     value fails loudly at load, same posture as every other manifest field."""

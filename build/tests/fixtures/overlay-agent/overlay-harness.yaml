@@ -5,7 +5,7 @@
 #
 # ONE INSTALL ROOT: every overlay harness file lands in `assistant_root` (e.g. ~/OverlayHarness) —
 # the SAME directory the agents-md tree mounts at, so a machine has a single install folder:
-#   ~/OverlayHarness/SOUL.md  mcp.json  skills/  AGENTS.md  Assistant/  Projects/  .local-memory/
+#   ~/OverlayHarness/SOUL.md  mcp.json  skills/  MitosProjects/  .local-memory/
 # (`.local-memory/` is the harness's RUNTIME state, written by the harness, never by Mitos —
 # the traversal engine ignores dot-directories; see overlay-harness-platform.md §7.) The former
 # separate `overlay_harness_home` key was collapsed into `assistant_root`.

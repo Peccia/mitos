@@ -327,19 +327,6 @@ def test_multi_store_project_renders_one_connection_section_per_store():
     assert "`GWS_DOC`" in gws_section and "`FAKE_DOC`" not in gws_section
     assert "`FAKE_DOC`" in fake_section and "`GWS_DOC`" not in fake_section
 
-def test_multi_store_machine_connections_block_emits_one_section_per_store():
-    """A machine bound to two stores gets one connection section per store on the
-    operating root (render.connections_block), same as a project."""
-    import copy
-    rig = copy.deepcopy(reg)
-    rig.servers["servers"]["fake2"] = {"description": "Fake Store — a second test store."}
-    block = render.connections_block(
-        rig.servers["servers"],
-        {"document_store": ["gws", "fake2"]},
-        {})
-    assert block.count("## Google Workspace suite") == 1
-    assert block.count("## Fake Store") == 1
-
 def test_two_context_files_in_one_root_drops_identity():
     """When another target on the machine writes a context_file into the same root directory,
     context-tree drops identity partials from project_agents at that root so identity is not
@@ -380,9 +367,9 @@ def test_two_context_files_in_one_root_drops_identity():
     assert any(s.startswith("identity/") for s in out2.sources)
 
 def test_context_tree_project_mount_emits_full_tree():
-    """A workstation project with context_tree: gets the full operating tree (the same
-    Navigation/Workflows/Skills/roster shape an overlay harness machine gets at its context_root)
-    at <local_path>/<subdir>/ — protect policy, edits reconcile back to the registry."""
+    """A workstation project with context_tree: gets the project roster tree (the same
+    MitosProjects/ shape an overlay harness machine gets at its context_root)
+    at <local_path>/<subdir>/MitosProjects/ — protect policy, edits reconcile back to the registry."""
     import copy
     rig = copy.deepcopy(reg)
     rig.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
@@ -396,17 +383,15 @@ def test_context_tree_project_mount_emits_full_tree():
     mount_root = "C:/Projects/example-project/ContextTree"
     by_path = {o.deploy_path: o for o in outs}
 
-    root_agents = by_path.get(f"{mount_root}/AGENTS.md")
-    assert root_agents is not None, "project mount must emit its own root AGENTS.md"
-    assert root_agents.target == "context-tree"
-    assert root_agents.drift_policy == "protect"
+    roster = by_path.get(f"{mount_root}/MitosProjects/AGENTS.md")
+    assert roster is not None, "project mount must emit its own roster AGENTS.md"
+    assert roster.target == "context-tree"
+    assert roster.drift_policy == "protect"
+    assert "example-project" in roster.content, "roster must list the mounting project"
+    assert f"{mount_root}/AGENTS.md" not in by_path, "no root file beside MitosProjects/"
 
-    projects_agents = by_path.get(f"{mount_root}/Projects/AGENTS.md")
-    assert projects_agents is not None
-    assert "example-project" in projects_agents.content, "roster must list the mounting project"
-
-    per_project = by_path.get(f"{mount_root}/Projects/Example Project/AGENTS.md")
-    assert per_project is not None, "the ctx_key dynamic entry must also render at the mount root"
+    per_project = by_path.get(f"{mount_root}/MitosProjects/Example Project/AGENTS.md")
+    assert per_project is not None, "the ctx_key entry must also render under the mount"
 
 def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
     """A workstation project with BOTH a knowledge graph and context_tree: gets a
@@ -431,7 +416,8 @@ def test_context_tree_cross_reference_note_on_claude_code_graph_lane():
     out = by_path.get("C:/Projects/example-project/AGENTS.md")
     assert out is not None
     assert "Operating Tree" in out.content
-    assert "ContextTree/AGENTS.md" in out.content
+    assert "ContextTree/MitosProjects/AGENTS.md" in out.content
+    assert "Navigation/Workflows/Skills" not in out.content
 
 def test_context_tree_cross_reference_note_on_project_agents_lane():
     """The overlay-harness-style project_agents lane (context.builder projects) gets the same
@@ -453,7 +439,8 @@ def test_context_tree_cross_reference_note_on_project_agents_lane():
     by_path = {o.deploy_path: o for o in outs}
     out = by_path["C:/Projects/Mitos/AGENTS.md"]
     assert "Operating Tree" in out.content
-    assert "ContextTree/AGENTS.md" in out.content
+    assert "ContextTree/MitosProjects/AGENTS.md" in out.content
+    assert "Navigation/Workflows/Skills" not in out.content
 
 
 def test_workstation_produces_no_clones_and_context_root_produces_clones():
@@ -952,14 +939,14 @@ def test_project_node_without_repos_has_no_navigation_roster():
 
 def test_plan_clones_lands_in_the_right_tree_per_machine():
     from agentic.planner import plan_clones
-    # overlay-harness machine: clones land beside the OPERATING tree's project node, keyed by the
+    # overlay-harness machine: clones land beside the tree's project node, keyed by the
     # project NAME (_emit_tree uses the name), so the harness resolves a checkout structurally.
     linux = plan_clones(reg, "example-linux")
     lslugs = [c.slug for c in linux]
     assert "mitos" in lslugs                                # non-empty repo → included
     assert "example-project" not in lslugs                 # repo "" → excluded
     lc = next(c for c in linux if c.slug == "mitos")
-    assert lc.dest.endswith("context/Projects/Mitos/mitos")   # project NAME "Mitos"
+    assert lc.dest.endswith("context/MitosProjects/Mitos/mitos")   # project NAME "Mitos"
     assert lc.repo == "git@github.com:Peccia/mitos.git"
     # claude-code + agents-md machine: clones land in the reference tree, keyed by the SLUG.
     win = plan_clones(reg, "example-windows")
@@ -1051,36 +1038,89 @@ def test_project_agents_md_includes_graph_index_and_emits_details():
     assert "https://drive.google.com/open?id=" not in det.content  # no URL — resolved by ID
     assert det.drift_policy == "generated"
 
-def test_assistant_replaces_collaboration_in_agents_md():
-    """Assistant/AGENTS.md is planned; Collaboration/AGENTS.md is gone. SOUL.md stays
+def test_context_tree_plans_no_assistant_branch():
+    """The context tree plans no Assistant/ or Collaboration/ branch. SOUL.md stays
     LEAN (the less-is-more lesson): the session protocol only."""
     treg, tmp = _temp_registry()
     outputs = planner.plan_machine(treg, "rig")
     paths = [o.deploy_path for o in outputs]
-    assert any("Assistant/AGENTS.md" in p for p in paths), "Assistant/AGENTS.md must be planned"
-    assert not any("Collaboration/AGENTS.md" in p for p in paths), \
-        "Collaboration/AGENTS.md must not appear (renamed to Assistant/)"
+    assert not any("/Assistant/" in p or "Collaboration/" in p for p in paths), \
+        "the context tree has no Assistant/ or Collaboration/ branch"
 
     # SOUL carries the session protocol, not the org detail
     soul = next(o for o in outputs if o.deploy_path.endswith("SOUL.md"))
     assert "new session" in soul.content
     assert "org-software" not in soul.content, "org detail must not bloat the lean SOUL"
 
-def test_assistant_root_agents_md_is_the_routing_entry_point():
-    """assistant_root/AGENTS.md is the routing entry point of the context tree. It must
-    be a root-level file (not under Assistant/ or Projects/), carry routing not org detail."""
+def test_context_tree_root_is_the_project_roster():
+    """FR-1: the deployed root of the context tree is MitosProjects/AGENTS.md, the projects
+    index with the generated roster; there is no root AGENTS.md beside it."""
     treg, tmp = _temp_registry()
     outputs = planner.plan_machine(treg, "rig")
-    root = (treg.machines["rig"]["paths"].get("context_root") or treg.machines["rig"]["paths"].get("assistant_root")).rstrip("/")
-    # the root entry point exists at exactly context_root/AGENTS.md
-    root_agents = next((o for o in outputs if o.deploy_path == f"{root}/AGENTS.md"), None)
-    assert root_agents is not None, "assistant_root/AGENTS.md (the entry point) must be planned"
-    # routing content, no org/domain detail leaking into the lean root
-    assert "Assistant/AGENTS.md" in root_agents.content
-    assert "Projects/AGENTS.md" in root_agents.content
-    assert "CTO —" not in root_agents.content, "org roles must not bloat the lean root"
-    projects_root = next(o for o in outputs if o.deploy_path == f"{root}/Projects/AGENTS.md")
-    assert "Projects" in projects_root.content
+    root = treg.machines["rig"]["paths"]["context_root"].rstrip("/")
+    assert not any(o.deploy_path == f"{root}/AGENTS.md" for o in outputs), \
+        "no root AGENTS.md (the retired routing entry point)"
+    roster = next((o for o in outputs if o.deploy_path == f"{root}/MitosProjects/AGENTS.md"), None)
+    assert roster is not None, "MitosProjects/AGENTS.md (the roster) must be planned"
+    assert roster.target == "context-tree" and roster.drift_policy == "protect"
+    assert roster.content.startswith("# Projects")
+    assert "## Project Roster" in roster.content
+    assert "- `Example Project/` (example-project)" in roster.content
+    assert planner.lint_node_markdown(roster) == []
+
+def test_context_tree_targets_name_no_assistant_tree():
+    """CON-2: no shipped target names the retired Assistant tree, the agentic-root partial
+    or an `assistant:` tree key. (`project_context_key: assistant` is the project partial
+    key, CON-1, and is allowed.)"""
+    import re as _re
+    for f in sorted((REPO_ROOT / "targets").glob("*.yaml")):
+        text = f.read_text(encoding="utf-8")
+        assert "Assistant" not in text, f"{f.name} names Assistant"
+        assert "agentic-root" not in text, f"{f.name} names agentic-root"
+        assert not _re.search(r"^\s*assistant:\s*$", text, _re.M), f"{f.name} has an assistant: tree key"
+
+def test_context_assistant_key_feeds_mitosprojects_node():
+    """CON-1: a manifest's context.assistant partial still renders the project's node, now
+    at <root>/MitosProjects/<Name>/AGENTS.md, and the loader accepts the key."""
+    treg, tmp = _temp_registry()
+    treg.projects["example-project"].pop("example", None)
+    loader._validate(treg)
+    outputs = planner.plan_machine(treg, "rig")
+    root = treg.machines["rig"]["paths"]["context_root"].rstrip("/")
+    node = next(o for o in outputs if o.deploy_path == f"{root}/MitosProjects/Example Project/AGENTS.md")
+    assert node.sources == ["context/projects/example-project.md"]
+    assert node.content.startswith("# Example Project")
+
+def test_context_tree_outputs_and_clones_land_under_mitosprojects():
+    """CON-3: every context-tree output and every clone destination on a context_root
+    machine lands under <context_root>/MitosProjects/."""
+    treg, tmp = _temp_registry()
+    root = treg.machines["rig"]["paths"]["context_root"].rstrip("/")
+    prefix = f"{root}/MitosProjects/"
+    tree = [o for o in planner.plan_machine(treg, "rig") if o.target == "context-tree"]
+    assert tree
+    for o in tree:
+        assert o.deploy_path.startswith(prefix), o.deploy_path
+    clones = planner.plan_clones(treg, "rig")
+    assert clones
+    for c in clones:
+        assert c.dest.startswith(prefix), c.dest
+
+def test_builder_project_under_mitosprojects_is_on_roster():
+    """A builder-context project whose local_path lies under <root>/MitosProjects/ is on
+    the roster (the reason both linux-box builder projects move with the tree)."""
+    import copy
+    treg, tmp = _temp_registry()
+    rig = copy.deepcopy(treg)
+    root = rig.machines["rig"]["paths"]["context_root"].rstrip("/")
+    rig.projects["mitos"]["local_path"]["rig"] = f"{root}/MitosProjects/Mitos"
+    roster = next(o for o in planner.plan_machine(rig, "rig")
+                  if o.deploy_path == f"{root}/MitosProjects/AGENTS.md")
+    assert "- `Mitos/` (mitos)" in roster.content
+    rig.projects["mitos"]["local_path"]["rig"] = f"{root}/Projects/Mitos"
+    roster = next(o for o in planner.plan_machine(rig, "rig")
+                  if o.deploy_path == f"{root}/MitosProjects/AGENTS.md")
+    assert "- `Mitos/` (mitos)" not in roster.content
 
 def test_compiler_selfcheck_prefers_upstream_then_origin():
     """The compiler self-check compares against the OFFICIAL remote: `upstream` when a
@@ -2158,8 +2198,8 @@ def test_project_roster_block_aliases():
         {"name": "Mitos", "slug": "mitos", "description": "Human-agentic harness"},
     ]
     roster = render.project_roster_block(projects)
-    assert "- `Projects/Apdict/` (apdict) [aliases: sensual predictions, apdicts] — Financial narrative processing" in roster
-    assert "- `Projects/Mitos/` (mitos) — Human-agentic harness" in roster
+    assert "- `Apdict/` (apdict) [aliases: sensual predictions, apdicts] — Financial narrative processing" in roster
+    assert "- `Mitos/` (mitos) — Human-agentic harness" in roster
 
 def test_agent_only_skills_have_no_harness_shell_steps():
     """A skill deployed only to overlay-harness is read by a harness that runs no shell. A step telling
@@ -2791,17 +2831,17 @@ def test_project_roster_block_malformed_is_refused():
         loader._validate(rig)
 
 
-def test_context_tree_roster_unchanged_by_paths():
-    """The context-tree's own `Projects/<name>/` roster is byte-identical to what 131a865
-    rendered: `paths` is opt-in and the default output did not move."""
+def test_context_tree_roster_names_folders_beside_the_root_file():
+    """The context-tree's own roster names each project folder beside its root file:
+    `paths` is opt-in and the default output is `<name>/`."""
     projects = [
         {"name": "Alpha", "slug": "alpha", "description": "first"},
         {"name": "Beta Two", "slug": "beta", "aliases": ["b2", "bt"]},
     ]
     assert render.project_roster_block(projects) == (
         "## Project Roster\n\n"
-        "- `Projects/Alpha/` (alpha) — first\n"
-        "- `Projects/Beta Two/` (beta) [aliases: b2, bt]\n")
+        "- `Alpha/` (alpha) — first\n"
+        "- `Beta Two/` (beta) [aliases: b2, bt]\n")
     assert render.project_roster_block([]) == ""
 
 

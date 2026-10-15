@@ -346,7 +346,7 @@ def test_reverse_expand_noop_when_nothing_changed():
     assert render.reverse_expand_placeholders(_FakeReg(user), original, live) == original
 
 
-# ── connections_block / skills_block ─────────────────────────────────────────
+# ── connection labels ────────────────────────────────────────────────────────
 def test_connection_label_is_stable_name_and_key():
     label = render.connection_label(reg.servers["servers"], "gws")
     assert label is not None
@@ -359,40 +359,14 @@ def test_connection_label_is_stable_name_and_key():
     assert render.connection_label(reg.servers["servers"], "nope") is None
 
 
-def test_connections_block_empty_without_document_store():
-    assert render.connections_block(reg.servers["servers"], {}, reg.user) == ""
-    assert render.connections_block(reg.servers["servers"], {"document_store": "none"},
-                                    reg.user) == ""
-
-def test_connections_block_lists_the_bound_server():
-    block = render.connections_block(reg.servers["servers"], {"document_store": "gws"},
-                                     reg.user)
-    assert block.lstrip().startswith("## ")   # a `## <Name> (`key`)` connection section
-    assert "(`gws`)" in block                 # stable heading carries the server key
-    assert "calendar" in block   # derived from servers.yaml's tools: groups
-
-def test_skills_block_excludes_org_domain_skills():
-    block = render.skills_block(list(reg.skills.values()))
-    assert "## Skills" in block
-    assert "`gws`" in block
-    assert "org-software" not in block   # org-domain skills get org_domain_table instead
-    # usage line: skills are files to read, never callable tools; the token expands
-    # later via the planner's machine-token pass
-    assert "never a callable tool" in block
-    assert "{{skills_root}}" in block
-
-def test_skills_block_empty_for_no_general_skills():
-    org_only = [s for s in reg.skills.values() if s.frontmatter.get("org_domain")]
-    assert render.skills_block(org_only) == ""
-
 def test_project_roster_block_lists_projects():
     block = render.project_roster_block([
         {"name": "Example Project", "slug": "example-project",
          "description": "a sample"},
         {"name": "Bare", "slug": "bare"}])
     assert "## Project Roster" in block
-    assert "- `Projects/Example Project/` (example-project) — a sample" in block
-    assert "- `Projects/Bare/` (bare)" in block          # no description → no dash
+    assert "- `Example Project/` (example-project) — a sample" in block
+    assert "- `Bare/` (bare)" in block          # no description → no dash
     assert render.project_roster_block([]) == ""
 
 
@@ -418,42 +392,18 @@ def test_expand_output_expands_zip_members():
     out = _expand_output(reg, o)
     assert out.zip_members["skill/SKILL.md"] == "Hi User"
 
-def test_root_agents_md_gets_one_combined_generated_section():
-    treg, tmp = _temp_registry()
-    treg.machines["rig"]["document_store"] = "gws"
-    outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
-    assert "(`gws`)" in root.content   # the connection section, headed by the store key
-    assert "## Skills" in root.content
-    gen = [s for s, _ in root.section_bodies if render.is_generated_source(s)]
-    assert len(gen) == 1, "connections + skills + branches must merge into ONE <generated> section"
-
 def test_projects_agents_md_gets_generated_roster():
-    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster in ONE
+    # acceptance: MitosProjects/AGENTS.md carries the manifest-driven Project Roster in ONE
     # <generated> section; the roster line comes from the manifest's name/slug/description,
     # not hand-written prose.
     treg, tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
-    pa = next(o for o in outs if o.deploy_path.endswith("Projects/AGENTS.md"))
+    pa = next(o for o in outs if o.deploy_path.endswith("MitosProjects/AGENTS.md"))
     assert "## Project Roster" in pa.content
-    assert "- `Projects/Example Project/` (example-project) — one-line summary" \
+    assert "- `Example Project/` (example-project) — one-line summary" \
         in pa.content
     gen = [s for s, _ in pa.section_bodies if render.is_generated_source(s)]
     assert len(gen) == 1, "roster must be in ONE <generated> section"
-
-def test_root_agents_md_omits_connections_without_document_store():
-    treg, tmp = _temp_registry()   # rig has no document_store set
-    outs = planner.plan_machine(treg, "rig")
-    root = next(o for o in outs if o.deploy_path.endswith("ContextTree/AGENTS.md"))
-    assert "## Connections" not in root.content
-
-def test_assistant_agents_md_gets_connections_block():
-    treg, tmp = _temp_registry()
-    treg.machines["rig"]["document_store"] = "gws"
-    outs = planner.plan_machine(treg, "rig")
-    assistant = next(o for o in outs if o.deploy_path.endswith("Assistant/AGENTS.md"))
-    assert "(`gws`)" in assistant.content   # the connection section on the Assistant branch
-
 
 # ── adopt: reversal is applied before the registry write ─────────────────────
 def test_adopt_reverses_expanded_placeholder_in_who_i_am():

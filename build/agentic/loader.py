@@ -163,7 +163,7 @@ class Skill:
         server's tools. Optional; omit for a skill that stands on its own.
 
         A machine declares the connections it actually has via its `document_store:`
-        (the same field render.connections_block reads to decide which connection
+        (the field that decides which connection
         sections a node may name). planner._selected_skills drops a skill whose required
         server this machine never declared, so a coding-harness box with no workspace
         wired never receives instructions for tools it cannot call."""
@@ -902,7 +902,7 @@ def _validate(reg: Registry) -> None:
         # absent/false, same bool-or-nothing shape as `example`.
         if "hidden" in proj and not isinstance(proj["hidden"], bool):
             raise RegistryError(f"project {slug}: 'hidden' must be true/false")
-        # `description:` feeds the generated Project Roster on Projects/AGENTS.md.
+        # `description:` feeds the generated Project Roster on MitosProjects/AGENTS.md.
         # Optional, but a set value must be a non-empty string.
         if "description" in proj:
             d = proj["description"]
@@ -1108,7 +1108,7 @@ def _validate(reg: Registry) -> None:
                 )
             continue
         # document_store (optional): the server this machine's assistant is wired to —
-        # feeds the generated Connections section (render.connections_block). Same
+        # gates connection-bound skills and MCP wiring. Same
         # shape/validation as a project's document_store.
         ds = m.get("document_store")
         if ds is not None:
