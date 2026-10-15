@@ -22,7 +22,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 from ruamel.yaml import YAML
 
-from . import loader, lockfile, render, selfdoc, sshkey
+from . import loader, lockfile, planner, render, selfdoc, sshkey
 from .io import (dump_json, expand, safe_rel, sha256, write_bytes, write_text,
                  zip_bytes, zip_bytes_multiple)
 from .loader import Registry
@@ -597,6 +597,59 @@ def run_deploy(reg: Registry, machine: str, dry_run: bool, force: bool,
                                   machine_os, guard)
 
 
+def _sweep_empty_dirs(reg: Registry, machine: str, root: Path | None,
+                      pruned_paths: list[str], deploying: set[str]) -> int:
+    """After `--prune` has deleted its orphans, remove each directory the deletions left
+    empty. Works on LOGICAL deploy paths (`_dest` maps them to disk, so a `--root` sandbox
+    needs no special case) and never climbs past a configured folder: the stops are the
+    machine's `paths:` values, each project's `local_path` here, and `~`. A pruned path with
+    no configured ancestor adds no candidates. Candidates are judged deepest first, so a
+    parent emptied by two sibling branches goes too. A non-empty candidate is left alone;
+    when nothing this run deploys lives in it, it is reported once as kept. An `rmdir`
+    failure is reported and the sweep carries on. Returns the number of directories removed."""
+    machine_spec = reg.machines.get(machine) or {}
+    stops = {"~"}
+    for v in (machine_spec.get("paths") or {}).values():
+        if isinstance(v, str) and v:
+            stops.add(v.replace("\\", "/").rstrip("/"))
+    for proj in reg.projects.values():
+        local = planner._local(reg, machine, proj)
+        if local:
+            stops.add(local.replace("\\", "/").rstrip("/"))
+
+    def under(q: str, s: str) -> bool:
+        return planner._roster_folder(q, s) != q
+
+    candidates: set[str] = set()
+    for p in pruned_paths:
+        norm = p.replace("\\", "/").rstrip("/")
+        above = [s for s in stops if s and under(norm, s)]
+        if not above:
+            continue
+        stop = max(above, key=len)
+        parent = norm.rsplit("/", 1)[0] if "/" in norm else ""
+        while parent and under(parent, stop):
+            candidates.add(parent)
+            parent = parent.rsplit("/", 1)[0] if "/" in parent else ""
+    planned = [d.replace("\\", "/") for d in deploying]
+    removed = 0
+    for cand in sorted(candidates, key=lambda c: (-c.count("/"), c)):
+        d = _dest(cand, root)
+        if not d.is_dir():
+            continue
+        if not any(d.iterdir()):
+            try:
+                d.rmdir()
+            except OSError as e:
+                print(f"  could not remove dir {cand}/ ({e})")
+                continue
+            print(f"  pruned dir {cand}/")
+            removed += 1
+        elif not any(pp.startswith(cand + "/") for pp in planned):
+            print(f"  kept dir {cand}/ (holds files Mitos did not deploy)")
+    return removed
+
+
 def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
                        root: Path | None, lane: str, prune: bool, target: str | None,
                        machine_os: str | None, guard: contextlib.ExitStack) -> DeployOutcome:
@@ -666,6 +719,7 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
     written = 0
     captured = 0
     pruned = 0
+    pruned_dirs = 0
     if prune:
         for p in orphans:
             dest = _dest(p, root)
@@ -698,6 +752,7 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
                 print(f"  pruned {p}")
             pruned += 1
             files_record.pop(p, None)
+        pruned_dirs = _sweep_empty_dirs(reg, machine, root, list(orphans), deploying)
     for s in statuses:
         o = s.output
         if s.state in ("drift", "conflict") and o.drift_policy == "protect" and not force:
@@ -780,6 +835,7 @@ def _run_deploy_locked(reg: Registry, machine: str, dry_run: bool, force: bool,
             print(f"  clone failed for {c.slug} ({c.repo}): {err} — reported, not fatal")
     tail = f"; captured {captured} inbox candidate(s)" if captured else ""
     tail += f"; pruned {pruned} orphan(s)" if pruned else ""
+    tail += f"; pruned {pruned_dirs} empty dir(s)" if pruned_dirs else ""
     tail += f"; cloned {cloned} repo(s)" if cloned else ""
     tail += f"; pulled {pulled} repo(s)" if pulled else ""
     tail += f"; {pull_skipped} pull(s) skipped" if pull_skipped else ""

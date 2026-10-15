@@ -194,8 +194,11 @@ write lands in `registry/local/` (your private overlay), not the public core.
 
 **6. Retiring something (`orphan` → `--prune`).** Deselect a skill or remove a project and its
 deployed files become orphans — **kept** on every deploy (and reported) until you run
-`deploy --prune`, which deletes them (capturing any drifted ones to `inbox/` first). Deletion is
-never a silent side effect.
+`deploy --prune`, which deletes them (capturing any drifted ones to `inbox/` first). `--prune` then
+removes each folder those deletions left empty, up to the nearest configured machine path or project
+folder, and prints `pruned dir <path>/`. A folder that still holds files Mitos did not deploy (for
+example a repo checkout) is kept and reported as `kept dir <path>/ (holds files Mitos did not deploy)`;
+a folder holding anything else is never removed. Deletion is never a silent side effect.
 
 **7. Third-party configs (`merge`).** Antigravity `config.json` and Claude Desktop `config.json` are
 never overwritten — Mitos owns only specific keys and splices them in, preserving everything else you
@@ -226,7 +229,7 @@ ever overlap.
 | `harvest --machine M [--adopt-all]` | List `harvest`-policy drift across a machine; `--adopt-all` pulls every one into the registry. |
 | `review` | The operator console (localhost): accept/reject every `inbox/` candidate against a live diff, edit the knowledge graph, browse prompts. A skill candidate's full-size file editor (Skills → Properties → Edit files →) proposes the **full replacement set** for `examples/`/`scripts/` — omitted (untouched candidate) leaves existing files alone, an explicit empty set deletes them all on accept. Edits the working tree, never commits. The Knowledge Graph tab's left column is tabbed **Discovery** (staged docs not yet mapped — the union of every *watched listing* a project has staged; `inbox/staging/<slug>.json` can hold more than one, see [connectors/README.md](connectors/README.md#watching-more-than-one-folder-or-query)) / **Recovery** (docs dismissed from Discovery, or auto-dismissed when an accepted removal drops them from the graph — otherwise they'd resurface in Discovery from the untouched staging snapshot). Dismissed/removed docs live in `inbox/staging/<slug>.dismissed.json` (or `unassigned.dismissed.json`, mirroring the staging pool fallback); Restore in Recovery deletes the entry so the doc reappears in Discovery. Each Recovery row is annotated `in_scope`: `True` if still reachable through any current watch, `False` if provably gone (a full/unscoped listing, or that doc's own recorded watch, no longer lists it — offered a **Remove**/bulk **Clear missing** action), `None` if no listing can speak for it yet. A **scoped** listing's silence about a document outside its own scope never counts as proof — only a full enumeration, or the specific watch that once produced the doc, can. **Permanently dismiss** hides a row for good (undo means hand-editing the sidecar); nothing here ever deletes from the actual document store. |
 | `deploy --machine M --force` | Let the registry win over `protect` drift (captures non-exempt drift first). |
-| `deploy --machine M --prune` | Delete orphans (capturing drifted ones first). |
+| `deploy --machine M --prune` | Delete orphans (capturing drifted ones first), then the empty folders they leave. |
 
 `adopt` only works on **text** files. It refuses, with the right instruction, on: `env` files (edit
 `.local/` or the `connections/env/` template), staged `.zip` skills (edit the skill and recompile),

@@ -54,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     p_deploy.add_argument("--prune", action="store_true",
                           help="delete files this compiler previously deployed that "
                                "are no longer planned (deselected skills, retired "
-                               "projects); drifted ones are captured to inbox/ first")
+                               "projects) and the empty folders they leave; drifted "
+                               "ones are captured to inbox/ first")
     p_deploy.add_argument("--target",
                           help="deploy only this adapter's outputs (e.g. claude-app); "
                                "other targets' files and lock entries are untouched")

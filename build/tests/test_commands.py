@@ -1088,3 +1088,150 @@ def test_cmd_graph_complete_effort_keeps_a_multi_goal_work_items_goals():
     parents = {d.drive_id: d.is_part_of for d in pg.documents}
     assert parents["GSPEC"] == graph.goal_iri("auth", 1)
     assert parents["GPLAN"] == graph.goal_iri("auth", 2)
+
+
+# ── --prune also removes the empty folders the retired files leave ─────────────
+def _prune_rig():
+    """A deployed `rig` sandbox: (registry, ctx logical path, sandbox root, lock helpers)."""
+    import tempfile
+    from agentic.commands import cmd_deploy
+    treg, tmp = _temp_registry()
+    root = Path(tempfile.mkdtemp(prefix="ae-sweep-"))
+    assert cmd_deploy(treg, "rig", dry_run=False, force=False, root=root) == 0
+    ctx = treg.machines["rig"]["paths"]["context_root"].rstrip("/")
+    return treg, tmp, ctx, root
+
+
+def _plant_orphans(treg, root, logical_paths, extra_files=()):
+    """Write each logical path under the sandbox and record it in the lockfile as deployed
+    by Mitos (so it is an orphan: in the lock, not planned); `extra_files` are written but
+    NOT recorded — files the owner put there."""
+    import json as _json
+
+    from agentic.io import safe_rel, sha256
+    lockp = root / ".deploy-lock.json"
+    lock = _json.loads(lockp.read_text(encoding="utf-8"))
+    files = lock["machines"]["rig"]["files"]
+    for lp in logical_paths:
+        text = f"retired {lp}\n"
+        dest = root / safe_rel(lp)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8", newline="\n")
+        h = sha256(text)
+        files[lp] = {"source_hash": h, "deployed_hash": h, "drift_policy": "protect", "sources": []}
+    for lp in extra_files:
+        dest = root / safe_rel(lp)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("owner file\n", encoding="utf-8", newline="\n")
+    lockp.write_text(_json.dumps(lock), encoding="utf-8")
+
+
+def _prune_deploy(treg, root):
+    import contextlib
+    import io
+
+    from agentic.commands import cmd_deploy
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_deploy(treg, "rig", dry_run=False, force=False, root=root, prune=True)
+    return rc, buf.getvalue()
+
+
+def test_prune_removes_emptied_legacy_folders():
+    """FR-2: the retired tree files are deleted, the folder that holds only them goes too,
+    and a legacy folder that still holds an owner's checkout is kept, reported once and
+    untouched."""
+    from agentic.io import safe_rel
+    treg, tmp, ctx, root = _prune_rig()
+    _plant_orphans(
+        treg, root,
+        [f"{ctx}/AGENTS.md", f"{ctx}/Assistant/AGENTS.md", f"{ctx}/Projects/AGENTS.md",
+         f"{ctx}/Projects/Alpha/AGENTS.md"],
+        extra_files=[f"{ctx}/Projects/Alpha/repo/README.md"])
+    rc, out = _prune_deploy(treg, root)
+    assert rc == 0
+    assert f"pruned dir {ctx}/Assistant/" in out
+    assert not (root / safe_rel(f"{ctx}/Assistant")).exists()
+    kept_alpha = f"kept dir {ctx}/Projects/Alpha/ (holds files Mitos did not deploy)"
+    kept_projects = f"kept dir {ctx}/Projects/ (holds files Mitos did not deploy)"
+    assert out.count(kept_alpha) == 1 and out.count(kept_projects) == 1
+    assert (root / safe_rel(f"{ctx}/Projects/Alpha/repo/README.md")).exists()
+    assert (root / safe_rel(ctx)).is_dir(), "the configured folder itself is never removed"
+    assert not (root / safe_rel(f"{ctx}/AGENTS.md")).exists()
+    assert "pruned 1 empty dir(s)" in out
+
+
+def test_prune_sweep_removes_a_parent_emptied_by_two_branches():
+    from agentic.io import safe_rel
+    treg, tmp, ctx, root = _prune_rig()
+    _plant_orphans(treg, root, [f"{ctx}/X/Y/f.md", f"{ctx}/X/Z/W/V/g.md"])
+    rc, out = _prune_deploy(treg, root)
+    assert rc == 0
+    assert not (root / safe_rel(f"{ctx}/X")).exists(), "X/ and everything under it goes"
+    assert (root / safe_rel(ctx)).is_dir()
+    assert "pruned 5 empty dir(s)" in out
+
+
+def test_prune_sweep_never_leaves_configured_folders():
+    from agentic.commands import _sweep_empty_dirs
+    from agentic.io import safe_rel
+    treg, tmp, ctx, root = _prune_rig()
+    home = ctx.rsplit("/", 1)[0]
+    treg.machines["rig"]["paths"]["scratch"] = f"{home}/scratch"
+    _plant_orphans(treg, root, [f"{home}/scratch/only.md"])
+    rc, out = _prune_deploy(treg, root)
+    assert rc == 0
+    assert not (root / safe_rel(f"{home}/scratch/only.md")).exists()
+    assert (root / safe_rel(f"{home}/scratch")).is_dir(), "the configured folder stays, empty"
+    assert "pruned dir" not in out
+    # a pruned path with no configured ancestor adds no candidates (the plan filters such
+    # entries out of the orphan list already; the sweep must not rely on that)
+    outside = f"{tmp.as_posix()}/elsewhere/sub"
+    (root / safe_rel(outside)).mkdir(parents=True)
+    assert _sweep_empty_dirs(treg, "rig", root, [f"{outside}/f.md"], set()) == 0
+    assert (root / safe_rel(outside)).is_dir()
+
+
+def test_prune_sweep_survives_rmdir_failure(monkeypatch):
+    import json as _json
+
+    from agentic.io import safe_rel
+    treg, tmp, ctx, root = _prune_rig()
+    _plant_orphans(treg, root, [f"{ctx}/Assistant/AGENTS.md"])
+
+    def boom(self):
+        raise OSError("busy")
+    monkeypatch.setattr(Path, "rmdir", boom)
+    rc, out = _prune_deploy(treg, root)
+    assert rc == 0
+    assert f"could not remove dir {ctx}/Assistant/ (busy)" in out
+    files = _json.loads((root / ".deploy-lock.json").read_text(encoding="utf-8")
+                        )["machines"]["rig"]["files"]
+    assert f"{ctx}/Assistant/AGENTS.md" not in files, "the lockfile is still written"
+    assert (root / safe_rel(f"{ctx}/Assistant")).is_dir()
+
+
+def test_deselected_skill_folder_is_removed_quietly():
+    import json as _json
+    import tempfile
+
+    from agentic.commands import cmd_deploy
+    from agentic.io import safe_rel
+    import contextlib
+    import io
+    reg2 = _connected_rig("example-windows")
+    root = Path(tempfile.mkdtemp(prefix="ae-sweep-skill-"))
+    assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
+    gws_path = next(o.deploy_path for o in planner.plan_machine(reg2, "example-windows")
+                    if o.target == "claude-code" and o.deploy_path.endswith("gws/SKILL.md"))
+    skill_dir = gws_path.rsplit("/", 1)[0]
+    reg2.machines["example-windows"]["skills"] = {"claude-code": {"exclude": ["gws"]}}
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root, prune=True)
+    out = buf.getvalue()
+    assert rc == 0
+    assert f"pruned dir {skill_dir}/" in out
+    assert not (root / safe_rel(skill_dir)).exists()
+    assert (root / safe_rel(skill_dir.rsplit("/", 1)[0])).is_dir(), "the skills folder keeps its siblings"
+    assert "kept dir" not in out, "a routine prune stays quiet about folders still in use"
