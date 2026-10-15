@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
+### Migration Guide: the context tree layout
+
+The context tree now deploys as `Projects/AGENTS.md` (the project roster) plus one `Projects/<Name>/` node per project. The root `AGENTS.md`, `Assistant/` and dynamic branches are gone.
+
+- A machine already on the previous layout keeps every `Projects/` file and every checkout where it is. Run `deploy --machine <name> --prune`: it deletes the old root `AGENTS.md` and `Assistant/AGENTS.md`, then the folders that leaves empty.
+- A project with `context_tree:` now mounts at `<local_path>/<subdir>/Projects/`. Run `deploy --prune` on that workstation to clear the old `<subdir>/AGENTS.md` and `<subdir>/Assistant/`.
+- A `Mitos Agent` build that needs a root `AGENTS.md` must be updated first: the current one finds a tree by `Projects/AGENTS.md`.
+- `deploy --prune` now also removes the empty folders its deletions leave, and reports a folder it keeps because it still holds your files (`kept dir …`).
+
 ### Added
+- Work items can hold several goals. The effort editor's **Goal** box has a `+` that breaks the goal into a numbered list, and a document can be filed under a goal. A multi-goal Work item renders `**Goals:**` with each goal's documents beneath it, and an Inbox card shows `goals n → m` changes.
+- A logo lockup and emblem: the README header and the console sidebar carry them.
 - Console: a full-size file editor for a skill's `SKILL.md` and supporting files (Skills → Properties → **Edit files →**), and for an agent's definition. Inbox cards show each supporting file's diff, and a candidate is flagged stale if a supporting file changed on disk after you proposed it.
 - Console: a **Permissions** view on the Skills tab showing, per machine, which skills and agents reach it and why. On a machine with a profile under `registry/local/machines/` you can curate its `skills:` per target; saving proposes a `kind: machine` candidate that rewrites only that block.
 - Console: `{{#name}}` in a prompt asks for a multi-line field when you copy it. A deploy leaves it as written.
