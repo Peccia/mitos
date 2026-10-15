@@ -5,7 +5,7 @@ example: true   # template — copy into registry/local/machines/ and rename; no
 os: linux
 targets: [context-tree]
 paths:
-  # The context tree (MitosProjects/) mounts here.
+  # The context tree (Projects/) mounts here.
   context_root: "~/context"
 
 # How `mitos sync --machine example-linux` reaches this box. Uncomment and set your own hub.

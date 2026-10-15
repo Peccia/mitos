@@ -393,12 +393,12 @@ def test_expand_output_expands_zip_members():
     assert out.zip_members["skill/SKILL.md"] == "Hi User"
 
 def test_projects_agents_md_gets_generated_roster():
-    # acceptance: MitosProjects/AGENTS.md carries the manifest-driven Project Roster in ONE
+    # acceptance: Projects/AGENTS.md carries the manifest-driven Project Roster in ONE
     # <generated> section; the roster line comes from the manifest's name/slug/description,
     # not hand-written prose.
     treg, tmp = _temp_registry()
     outs = planner.plan_machine(treg, "rig")
-    pa = next(o for o in outs if o.deploy_path.endswith("MitosProjects/AGENTS.md"))
+    pa = next(o for o in outs if o.deploy_path.endswith("Projects/AGENTS.md"))
     assert "## Project Roster" in pa.content
     assert "- `Example Project/` (example-project) — one-line summary" \
         in pa.content

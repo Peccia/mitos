@@ -15,16 +15,16 @@ guidelines, communication style, and documentation. When every harness invents i
 format or siloed configuration, context drifts and diverges.
 
 A Mitos Context Tree solves this by organizing your operating context as a filesystem tree:
-- **`MitosProjects/AGENTS.md` (Root):** The project roster: one line per project folder beside it.
-- **`MitosProjects/<name>/AGENTS.md`:** Per-project context, repositories, and documentation graphs.
-- **`MitosProjects/<name>/AGENTS_DETAILS.md`:** On-demand document index with deep links and summaries.
+- **`Projects/AGENTS.md` (Root):** The project roster: one line per project folder beside it.
+- **`Projects/<name>/AGENTS.md`:** Per-project context, repositories, and documentation graphs.
+- **`Projects/<name>/AGENTS_DETAILS.md`:** On-demand document index with deep links and summaries.
 
 ---
 
 ## How Harnesses Read It
 
 Any AI harness with basic filesystem and file-reading tools can navigate a context tree:
-1. **Entry Point:** The harness starts at the roster `MitosProjects/AGENTS.md` (or a project checkout's root `AGENTS.md`).
+1. **Entry Point:** The harness starts at the roster `Projects/AGENTS.md` (or a project checkout's root `AGENTS.md`).
 2. **Navigation:** Harnesses read the `## Navigation` section to discover child nodes, project directories, and cloned repositories.
 3. **Progressive Disclosure:** High-level indexes provide immediate orientation, while deep files (`AGENTS_DETAILS.md`) are read only when needed for specific tasks.
 4. **Symlinks and Stubs:** Coding harnesses that expect specific filenames (e.g. `CLAUDE.md`) receive lightweight stubs pointing to `@AGENTS.md`, ensuring all tools share the same ground truth without duplicated text.
@@ -44,8 +44,8 @@ targets:
 paths:
   context_root: "~/context-tree"
 ```
-- Deploys the machine-wide project tree at `<context_root>/MitosProjects/` (e.g., `~/context-tree/MitosProjects/`).
-- Clones project repositories beside project nodes in `MitosProjects/<Name>/<repo>`.
+- Deploys the machine-wide project tree at `<context_root>/Projects/` (e.g., `~/context-tree/Projects/`).
+- Clones project repositories beside project nodes in `Projects/<Name>/<repo>`.
 - Deploys universal identity partials (`who-i-am.md`, `operating-rules.md`, `security.md`).
 
 ### 2. Project Mount (`context_tree`)
@@ -54,7 +54,7 @@ Configured on an individual project (`registry/projects/<slug>.yaml`):
 name: Family
 context_tree: context
 ```
-- Mounts the project tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/context/MitosProjects/`).
+- Mounts the project tree directly inside that specific project repository's checkout under the named subdirectory (e.g., `<checkout>/context/Projects/`).
 - Allows a project checkout to host its own self-contained project tree without requiring a dedicated machine profile.
 - The project's root `AGENTS.md` automatically cross-references the mounted tree.
 

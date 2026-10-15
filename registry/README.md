@@ -162,7 +162,7 @@ context:                      # label → registry-relative partial (must resolv
 | `example` | no | Set `true` on shipped sample projects (e.g. `example-project.yaml`). Example projects step aside automatically once you add your own overlay projects. Must be a boolean if set. |
 | `stage` | **yes** | Lifecycle phase — must be exactly one of `ideation`, `speccing`, `build`, `maintain`. Anything else aborts compile. |
 | `hidden` | no | Set `true` to keep a finished or parked project out of every deployed tree — no tree node, no roster entry, no clone, no per-project `AGENTS.md`/`CLAUDE.md`, on any machine. Its manifest and `graph/<slug>.jsonld` still load and query fine (`mitos graph`, the console); only planning is blind to it. Deployed files a prior deploy left behind become ordinary orphans (invariant #9 — `deploy --prune` removes them). Must be a boolean if set. Deliberately separate from `stage`: a `maintain` project still needs its context deployed, so stage can't double as visibility. |
-| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `context-tree`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **context-tree machines** (`context-tree` also in targets), it clones into `<context_root>/MitosProjects/<Name>/<basename>` instead. |
+| `repo` | no | Git URL. How it clones depends on the machine's targets: on **workstation machines** (`claude-code` without `context-tree`), the repo is **cloned if absent** (non-destructive) into `<local_path>/<basename>` — co-located with the project's workspace folder. On **context-tree machines** (`context-tree` also in targets), it clones into `<context_root>/Projects/<Name>/<basename>` instead. |
 | `document_store` | no | Binds the project to the MCP server that backs knowledge-graph init (`mitos connect`). Must name a server in `connections/servers.yaml`, or the literal `none`. An unknown name is refused. |
 | `local_path` | no | Map of **machine name → checkout directory**. Each key must be a machine the loader knows. A *relative* value resolves under that machine's `projects_root`; a value starting `~`, `/`, or a drive letter (`D:/…`) is taken as-is. This is how one manifest stays correct on a C:\ box and a D:\ box at once. |
 | `exclude_folders` | no | List of folder **names or IDs** to skip during `mitos connect` staging. Merged with any `exclude_folders` defined on the server in `connections/servers.yaml` (server entries first, then project entries, deduped). |
@@ -188,7 +188,7 @@ targets: [claude-code, antigravity, claude-app, context-tree]   # which adapters
 document_store: gws           # optional — the connection(s) THIS box has; gates all MCP wiring
 paths:
   projects_root: "C:/Projects"          # base for relative project local_paths
-  context_root: "C:/Mitos"              # where the context tree (MitosProjects/ roster + project nodes) lands
+  context_root: "C:/Mitos"              # where the context tree (Projects/ roster + project nodes) lands
   antigravity_config: "~/.gemini/config"
   antigravity_skills: "~/.gemini/config/skills"
   claude_skills_staging: "~/ClaudeSkills"   # where skill .zip bundles are staged for manual upload
@@ -219,7 +219,7 @@ sync:                                   # optional — consumed only by `mitos s
 | Path key | Used by | Points at |
 |---|---|---|
 | `projects_root` | all | Base directory that relative project `local_path` entries resolve under. |
-| `context_root` | claude-code (context-tree machines) | Root of the Context tree (`MitosProjects/AGENTS.md` roster + `MitosProjects/<Name>/` project nodes). Used only on machines with **`context-tree`** in `targets`. On pure workstation machines (without `context-tree`), project AGENTS.md files deploy directly to each project's `local_path` instead — `context_root` is not required. |
+| `context_root` | claude-code (context-tree machines) | Root of the Context tree (`Projects/AGENTS.md` roster + `Projects/<Name>/` project nodes). Used only on machines with **`context-tree`** in `targets`. On pure workstation machines (without `context-tree`), project AGENTS.md files deploy directly to each project's `local_path` instead — `context_root` is not required. |
 | `antigravity_config` | antigravity | Antigravity config dir (`mcp_config.json` + `config.json`) — also shared with the classic Gemini CLI it succeeds, until that CLI retires 2026-06-18. |
 | `antigravity_skills` | antigravity | Antigravity's **global** skills dir (`~/.gemini/config/skills/`, per the official Antigravity 2.0 docs). Skills deploy as Agent Skills standard folders (`<name>/SKILL.md` + supporting files). `scope: global` (default) skills targeting `antigravity` deploy here; `scope: project` skills deploy to `<project>/.agents/skills/` (Antigravity's workspace-level location) instead — see [skill scope](../docs/authoring-capabilities.md#skill-scope-global-vs-project). |
 | `claude_code_skills` | claude-code | Claude Code's personal/user-level skill dir (`~/.claude/skills/`, [confirmed](https://code.claude.com/docs/en/skills)). `scope: global` (default) skills targeting `claude-code` deploy here; `scope: project` skills deploy only to the projects that bind them instead. |
@@ -235,7 +235,7 @@ The `claude-code` target behaves differently depending on whether `context-tree`
 | Machine type | `targets` includes | Project AGENTS.md lands at | Repo clones into |
 |---|---|---|---|
 | **Workstation** | `claude-code` (no `context-tree`) | `<local_path>/AGENTS.md` — full doc context inline, no companion details file | `<local_path>/<repo_basename>/` |
-| **Context-tree** | `claude-code` + `context-tree` | `<context_root>/MitosProjects/<Name>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<context_root>/MitosProjects/<Name>/<repo_basename>/` |
+| **Context-tree** | `claude-code` + `context-tree` | `<context_root>/Projects/<Name>/AGENTS.md` — lightweight title index, full details in `AGENTS_DETAILS.md` | `<context_root>/Projects/<Name>/<repo_basename>/` |
 
 On a **workstation machine**, for each project that has a knowledge graph (`registry/local/graph/<slug>.jsonld`) and a `local_path` on that machine, deploy writes two files into the project's directory:
 

@@ -902,7 +902,7 @@ def _validate(reg: Registry) -> None:
         # absent/false, same bool-or-nothing shape as `example`.
         if "hidden" in proj and not isinstance(proj["hidden"], bool):
             raise RegistryError(f"project {slug}: 'hidden' must be true/false")
-        # `description:` feeds the generated Project Roster on MitosProjects/AGENTS.md.
+        # `description:` feeds the generated Project Roster on Projects/AGENTS.md.
         # Optional, but a set value must be a non-empty string.
         if "description" in proj:
             d = proj["description"]

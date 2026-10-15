@@ -228,8 +228,8 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy blocks to prevent overwriting), `harvest` (captured into `inbox/` as a review proposal), or `generated` (regenerated each deploy from the graph). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The human review queue. Proposals from self-improving tools land here as candidates; **only you** approve and merge them via the operator console. |
 | **Project tree vs. reference index** | Two ways to materialize context, with different edit rules. A **project tree** (the `context-tree` target, mounted by a project's `context_tree:` or a machine's `context_root`) is a working context — the project roster and one node per project — with `drift_policy: protect`, so edits you make in place reconcile back via `adopt`. A **reference index** (`context_root` below) is a lightweight, read-only project and document index generated straight from `registry/graph/` (`drift_policy: generated`); edits there are overwritten on the next deploy. |
-| **context_tree** | *(project mount, project-wide)* An optional field on a project manifest — `context_tree: <subdir>` — that mounts the project tree (`MitosProjects/AGENTS.md`, the project roster, and one `<Name>/AGENTS.md` per project) at `<local_path>/<subdir>/MitosProjects/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with an editable context tree rather than a flat `AGENTS.md`. |
-| **context_root** | *(machine-wide)* A machine path key (`machines/<name>.yaml`) where the `context-tree` target deploys the project tree at `<context_root>/MitosProjects/` — the roster `AGENTS.md` plus one `<Name>/AGENTS.md` and `AGENTS_DETAILS.md` per project — and where `claude-code` auto-clones project repos beside each node. |
+| **context_tree** | *(project mount, project-wide)* An optional field on a project manifest — `context_tree: <subdir>` — that mounts the project tree (`Projects/AGENTS.md`, the project roster, and one `<Name>/AGENTS.md` per project) at `<local_path>/<subdir>/Projects/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with an editable context tree rather than a flat `AGENTS.md`. |
+| **context_root** | *(machine-wide)* A machine path key (`machines/<name>.yaml`) where the `context-tree` target deploys the project tree at `<context_root>/Projects/` — the roster `AGENTS.md` plus one `<Name>/AGENTS.md` and `AGENTS_DETAILS.md` per project — and where `claude-code` auto-clones project repos beside each node. |
 | **project checkouts** | Deployed files at each project's `local_path` directory. On a **workstation** (claude-code without context-tree), Mitos writes a full-context `AGENTS.md` — the inline doc index from the knowledge graph plus the project's prose — and a thin `CLAUDE.md` stub pointing at it (`@AGENTS.md`). Where `context-tree` is also a target, `CLAUDE.md` carries identity and repo context and the graph materializes separately in the reference tree. |
 
 ## How skills reach a tool
@@ -270,8 +270,8 @@ Optionally, a target can *curate* its compatible set in one place via `include:`
 
 A personal context tree (`targets/context-tree.yaml`) compiles your identity, project rosters, and knowledge graph into a unified directory tree on your machine (specified by `paths.context_root`).
 
-- **Unified navigation:** Harnesses like Claude Code or Antigravity can read a single roster `AGENTS.md` (`MitosProjects/AGENTS.md`) that maps all active projects.
-- **Project nodes:** Each project gets a clean, generated `MitosProjects/<Name>/AGENTS.md` containing its knowledge graph documents and repo roster.
+- **Unified navigation:** Harnesses like Claude Code or Antigravity can read a single roster `AGENTS.md` (`Projects/AGENTS.md`) that maps all active projects.
+- **Project nodes:** Each project gets a clean, generated `Projects/<Name>/AGENTS.md` containing its knowledge graph documents and repo roster.
 - **Decoupled from harnesses:** The tree is standard Markdown files on disk, readable by any CLI, IDE, or agent harness. See [`docs/context-tree.md`](docs/context-tree.md).
 
 ## Project roster target block

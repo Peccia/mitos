@@ -18,9 +18,9 @@ from .io import safe_rel
 from .loader import (Registry, RegistryError, is_manual_skill_target, resolve_local_path,
                      _repo_basename, document_stores, selected_agents)
 
-# The folder a context-tree mount deploys into: <mount>/MitosProjects/ holds the project
+# The folder a context-tree mount deploys into: <mount>/Projects/ holds the project
 # roster (AGENTS.md), one folder per project and the repo clones beside each node.
-TREE_DIR = "MitosProjects"
+TREE_DIR = "Projects"
 
 def hosts_context_tree(machine) -> bool:
     """Does this machine deploy the context-tree target?"""
@@ -379,7 +379,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
 
     Two lanes:
     - context_root (context-tree machines): clone into
-      <context_root>/MitosProjects/<name>/<basename> — a SIBLING of the tree's
+      <context_root>/Projects/<name>/<basename> — a SIBLING of the tree's
       project node (_emit_tree uses the project NAME for that folder), so the
       harness resolves a checkout structurally from the node's own directory.
     - agentic_context_root (context-tree + claude-code machines): clone into
@@ -883,7 +883,7 @@ _plan_agentic_tree_mounts = _plan_context_tree_mounts
 
 
 def _emit_tree(reg, machine_name, tree, root) -> list[Output]:
-    """Render one project tree at `root` — `<mount>/MitosProjects`, where the mount is a
+    """Render one project tree at `root` — `<mount>/Projects`, where the mount is a
     machine's tree-root path key or a project's `context_tree` folder inside its own
     checkout. Mount-point-agnostic: the output (the project roster `AGENTS.md` and one
     node per project) is identical either way, only the deploy root differs.
@@ -949,7 +949,7 @@ def _emit_tree(reg, machine_name, tree, root) -> list[Output]:
         from . import graph as graphmod
         suppressed = _suppressed_examples(reg)
         # On a context-tree machine, plan_clones drops each repo checkout beside this
-        # project node (<context_root>/MitosProjects/<name>/<basename>), so the generated
+        # project node (<context_root>/Projects/<name>/<basename>), so the generated
         # `## Navigation` repo roster is real here — the harness resolves a checkout from the
         # node's own directory.
         clone_siblings = hosts_context_tree(machine)

@@ -308,13 +308,13 @@ def test_mixed_agents_md_protects_prose_regenerates_doc_block():
     from agentic.commands import classify_output, cmd_adopt, cmd_deploy
     treg, tmp = _temp_registry()
     assert cmd_deploy(treg, "rig", dry_run=False, force=False) == 0
-    f = tmp / "home/ContextTree/MitosProjects/Example Project/AGENTS.md"
+    f = tmp / "home/ContextTree/Projects/Example Project/AGENTS.md"
     text = f.read_text(encoding="utf-8")
     assert "## Example Project — Documents" in text         # generated titles block present (H2)
     assert "<!-- " not in text                              # marker-free (invariant #5)
 
     o = next(o for o in planner.plan_machine(treg, "rig")
-             if o.deploy_path.endswith("MitosProjects/Example Project/AGENTS.md"))
+             if o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
     assert o.drift_policy == "protect" and o.sources == ["context/projects/example-project.md"]
     assert any(render.is_generated_source(s) for s, _ in o.section_bodies)
 
@@ -1138,24 +1138,24 @@ def _prune_deploy(treg, root):
 
 
 def test_prune_removes_emptied_legacy_folders():
-    """FR-2: the retired tree files are deleted, the folder that holds only them goes too,
-    and a legacy folder that still holds an owner's checkout is kept, reported once and
-    untouched."""
+    """FR-2: the retired tree files (the old root file, Assistant/ and the unreleased
+    MitosProjects/ layout) are deleted, the folder that holds only them goes too, and a
+    legacy folder that still holds an owner's checkout is kept, reported once and untouched."""
     from agentic.io import safe_rel
     treg, tmp, ctx, root = _prune_rig()
     _plant_orphans(
         treg, root,
-        [f"{ctx}/AGENTS.md", f"{ctx}/Assistant/AGENTS.md", f"{ctx}/Projects/AGENTS.md",
-         f"{ctx}/Projects/Alpha/AGENTS.md"],
-        extra_files=[f"{ctx}/Projects/Alpha/repo/README.md"])
+        [f"{ctx}/AGENTS.md", f"{ctx}/Assistant/AGENTS.md", f"{ctx}/MitosProjects/AGENTS.md",
+         f"{ctx}/MitosProjects/Alpha/AGENTS.md"],
+        extra_files=[f"{ctx}/MitosProjects/Alpha/repo/README.md"])
     rc, out = _prune_deploy(treg, root)
     assert rc == 0
     assert f"pruned dir {ctx}/Assistant/" in out
     assert not (root / safe_rel(f"{ctx}/Assistant")).exists()
-    kept_alpha = f"kept dir {ctx}/Projects/Alpha/ (holds files Mitos did not deploy)"
-    kept_projects = f"kept dir {ctx}/Projects/ (holds files Mitos did not deploy)"
+    kept_alpha = f"kept dir {ctx}/MitosProjects/Alpha/ (holds files Mitos did not deploy)"
+    kept_projects = f"kept dir {ctx}/MitosProjects/ (holds files Mitos did not deploy)"
     assert out.count(kept_alpha) == 1 and out.count(kept_projects) == 1
-    assert (root / safe_rel(f"{ctx}/Projects/Alpha/repo/README.md")).exists()
+    assert (root / safe_rel(f"{ctx}/MitosProjects/Alpha/repo/README.md")).exists()
     assert (root / safe_rel(ctx)).is_dir(), "the configured folder itself is never removed"
     assert not (root / safe_rel(f"{ctx}/AGENTS.md")).exists()
     assert "pruned 1 empty dir(s)" in out
@@ -1235,3 +1235,20 @@ def test_deselected_skill_folder_is_removed_quietly():
     assert not (root / safe_rel(skill_dir)).exists()
     assert (root / safe_rel(skill_dir.rsplit("/", 1)[0])).is_dir(), "the skills folder keeps its siblings"
     assert "kept dir" not in out, "a routine prune stays quiet about folders still in use"
+
+
+def test_prune_from_the_v020_layout_removes_only_the_root_file_and_assistant():
+    """A machine on the v0.2.0 layout keeps every Projects/ file and checkout: the tree
+    folder is the same, so only the root AGENTS.md and Assistant/ are retired."""
+    from agentic.io import safe_rel
+    treg, tmp, ctx, root = _prune_rig()
+    _plant_orphans(treg, root, [f"{ctx}/AGENTS.md", f"{ctx}/Assistant/AGENTS.md"],
+                   extra_files=[f"{ctx}/Projects/Example Project/repo/README.md"])
+    rc, out = _prune_deploy(treg, root)
+    assert rc == 0
+    assert not (root / safe_rel(f"{ctx}/Assistant")).exists()
+    assert f"pruned dir {ctx}/Assistant/" in out
+    assert "kept dir" not in out
+    assert (root / safe_rel(f"{ctx}/Projects/AGENTS.md")).is_file()
+    assert (root / safe_rel(f"{ctx}/Projects/Example Project/AGENTS.md")).is_file()
+    assert (root / safe_rel(f"{ctx}/Projects/Example Project/repo/README.md")).is_file()

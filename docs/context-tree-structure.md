@@ -1,7 +1,7 @@
 # The tree-node header taxonomy
 
 Every file the assistant reads while navigating the deployed tree — the roster
-`MitosProjects/AGENTS.md`, each project's `AGENTS.md`,
+`Projects/AGENTS.md`, each project's `AGENTS.md`,
 and every `AGENTS_DETAILS.md` — shares **one header layout**. The persona (`SOUL.md`) and
 the skills reference sections *by name*, so the names, levels, and order are a contract,
 not a style preference. It is enforced at plan time by `lint_node_markdown`

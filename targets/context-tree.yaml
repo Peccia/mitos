@@ -10,7 +10,7 @@ target: context-tree
 # no provenance markers, no per-file template (invariant #5). render.plain_document
 # joins the sections; there is no .j2 layer.
 
-# Tree 1 — the project roster tree, deployed under a `MitosProjects/` folder (planner.TREE_DIR).
+# Tree 1 — the project roster tree, deployed under a `Projects/` folder (planner.TREE_DIR).
 # Two mount kinds render this same tree shape (a roster AGENTS.md and one folder per
 # project): a MACHINE mount at `root_key` (a path in machines/*.yaml — the
 # agentic-machine combo), or a PROJECT mount inside a project's own checkout (a

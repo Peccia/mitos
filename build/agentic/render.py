@@ -389,7 +389,7 @@ def context_tree_note_block(subdir: str) -> str:
     document/repo index; the mount is the project roster tree), so name the split
     explicitly rather than leaving a reader to wonder which one is authoritative."""
     subdir = subdir.rstrip("/")
-    tree = f"{subdir}/MitosProjects"
+    tree = f"{subdir}/Projects"
     return (
         f"## Operating Tree\n\n"
         f"This project also has a context tree mounted at `{tree}/`. Its project roster "
