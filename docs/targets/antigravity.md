@@ -5,8 +5,8 @@ Google's agentic IDE + CLI (`target: antigravity`) — the successor to Gemini C
 2026-06-18. One target key covers both the Antigravity IDE and Antigravity CLI; there is no
 separate `gemini` target.
 
-Mitos has first-class integration with Antigravity, deploying assistant personas, project
-builder instructions, and custom skills directly to the paths consumed by the IDE/CLI.
+Mitos deploys Antigravity's MCP wiring and custom skills directly to the paths the IDE/CLI
+reads. Antigravity takes its context from the `AGENTS.md` files other targets write (below).
 Antigravity follows the directory-based **Agent Skills open standard** (the same shape
 Claude Code consumes), so Mitos treats it like the other harnesses — one skill folder with
 `SKILL.md` plus supporting files, no Antigravity-specific packaging.
@@ -72,9 +72,15 @@ paths:
 ## 📂 Deployed surfaces
 
 ### 1. Context delivery (`AGENTS.md`)
-Antigravity natively reads `AGENTS.md` files to understand identity and project background. Mitos writes context in two places:
-- **Context tree** (machines deploying `context-tree`): Deployed to `<context_root>/Projects/` — a roster `AGENTS.md` with a `<project>/AGENTS.md` per project.
-- **Code project roots**: Deployed to each active project directory as a unified `AGENTS.md` file combining who you are, operating rules, and project-specific guidelines.
+Antigravity natively reads `AGENTS.md` files to understand identity and project background. The
+`antigravity` target writes none itself; on the same machine these do:
+- **`claude-code`** (a workstation, no `context-tree`): `<local_path>/AGENTS.md` for each project
+  with a knowledge graph — the project's prose plus its document index.
+- **`context-tree`**: the roster `<context_root>/Projects/AGENTS.md` with a `<Name>/AGENTS.md` per
+  project, or the same tree inside one project's checkout (`context_tree:`); and, for a
+  project with `builder` context, an `AGENTS.md` at its `local_path`.
+
+A machine whose only target is `antigravity` gets skills and MCP wiring but no context file.
 
 
 ### 2. Custom skills

@@ -46,7 +46,7 @@ paths:
 ```
 - Deploys the machine-wide project tree at `<context_root>/Projects/` (e.g., `~/context-tree/Projects/`).
 - Clones project repositories beside project nodes in `Projects/<Name>/<repo>`.
-- Deploys universal identity partials (`who-i-am.md`, `operating-rules.md`, `security.md`).
+- Nothing is written beside `Projects/` — there is no root `AGENTS.md`.
 
 ### 2. Project Mount (`context_tree`)
 Configured on an individual project (`registry/projects/<slug>.yaml`):

@@ -66,10 +66,9 @@ def _visible_projects(reg: Registry) -> Registry:
     `.graphs` — the single choke point `plan_machine` and `plan_clones` route every
     project-planning loop through, so a hidden project contributes NO planned output on any
     machine: no tree node, no roster entry, no clone, no per-project AGENTS.md/CLAUDE.md.
-    Both collections have to be filtered: most lanes iterate `reg.projects`, but
-    `_plan_graph_tree` (the agentic-graph reference tree) drives its roster and per-project
-    doc index straight from `reg.graphs`, independently of `reg.projects` — missing either
-    one leaves the project half-hidden. `loader.load()` itself never filters, so the
+    Both collections are filtered: the lanes iterate `reg.projects` and look each graph up
+    in `reg.graphs`, so dropping only one would leave the project half-hidden to any caller
+    that reads the other. `loader.load()` itself never filters, so the
     manifest and graph still load and query fine outside planning (`mitos graph`, the
     console) — this copy exists only for the duration of one plan call. A no-op copy when
     nothing is hidden, so the common case costs nothing."""
@@ -105,7 +104,6 @@ def plan_machine(reg: Registry, machine_name: str) -> list[Output]:
         else:
             outputs += _plan_generic(reg, machine_name, spec, paths)
     outputs += _plan_env(reg, machine_name, paths)
-    outputs += _plan_graph_tree(reg, machine_name, paths)
     outputs += _plan_context_tree_mounts(reg, machine_name)
 
     # Validate output path collisions (prevent two targets/rules from deploying to the
@@ -329,7 +327,7 @@ def _plan_env(reg: Registry, machine_name: str, paths: dict) -> list[Output]:
 class CloneSpec:
     slug: str
     repo: str          # git URL from the manifest
-    dest: str          # POSIX checkout dir — under agentic_context_root or local_path
+    dest: str          # POSIX checkout dir — under <context_root>/Projects/<name>
     branch: str = ""   # branch to check out / fast-forward (repo_branches:); "" = default
     ssh_key: str = ""  # private key to auth with (repo_ssh_keys:); "" = ambient default identity
 
@@ -377,14 +375,11 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     """Repos to clone (and keep current) on machines that host a project tree, absent-only
     for the clone / fast-forward-only for the pull — never destructive.
 
-    Two lanes:
-    - context_root (context-tree machines): clone into
-      <context_root>/Projects/<name>/<basename> — a SIBLING of the tree's
-      project node (_emit_tree uses the project NAME for that folder), so the
-      harness resolves a checkout structurally from the node's own directory.
-    - agentic_context_root (context-tree + claude-code machines): clone into
-      <agentic_context_root>/Projects/<slug>/<basename> — the reference context tree
-      (_plan_graph_tree uses the SLUG for that folder).
+    One lane: a context-tree machine with a `context_root` clones into
+    <context_root>/Projects/<name>/<basename> — a SIBLING of the tree's project node
+    (_emit_tree uses the project NAME for that folder), so the harness resolves a checkout
+    structurally from the node's own directory. Workstation checkouts (`local_path`) are
+    developer-managed and never cloned or pulled.
 
     The deploy executor clones each only when its checkout is ABSENT, and fast-forwards an
     existing checkout (never resetting or deleting one — design rule #8). Machines that host
@@ -392,7 +387,6 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
     """
     reg = _visible_projects(reg)
     machine = reg.machines.get(machine_name) or {}
-    targets = machine.get("targets", [])
     paths = machine.get("paths") or {}
     suppressed = _suppressed_examples(reg)
 
@@ -420,79 +414,7 @@ def plan_clones(reg: Registry, machine_name: str) -> list[CloneSpec]:
                 name = proj.get("name", slug)
                 out += _repo_specs(slug, proj, f"{aroot}/{TREE_DIR}/{name}")
 
-    if "claude-code" not in targets or "context-tree" not in targets:
-        return out
-
-    # agentic_context_root lane (context-tree machines that also run claude-code)
-    root = paths.get("agentic_context_root")
-    if root:
-        root = str(root).rstrip("/")
-        for slug, proj in sorted(reg.projects.items()):
-            out += _repo_specs(slug, proj, f"{root}/Projects/{slug}")
-
     return out
-
-
-# ── agentic-graph: the deployed project tree (the deployed project-tree design) ───
-def _plan_graph_tree(reg: Registry, machine_name: str, paths: dict) -> list[Output]:
-    """Materialize the Agentic Context tree from the knowledge graph, on Claude Code
-    environments only:
-
-        <agentic_context_root>/AGENTS.md                       roster: every Project + desc
-        <agentic_context_root>/Projects/<slug>/AGENTS.md          lightweight doc index
-        <agentic_context_root>/Projects/<slug>/AGENTS_DETAILS.md  detailed doc reference
-
-    The index/details split keeps the harness's always-loaded prompt tiny. All three files
-    are GENERATED and non-adoptable (drift_policy
-    "generated"): regenerated from registry/graph/ every deploy, in-place edits overwritten
-    by design — they have no registry partial to route an edit back to. Repo auto-clone
-    into Projects/<slug>/ is handled separately (plan_clones).
-    """
-    machine = reg.machines[machine_name]
-    root = (paths or {}).get("agentic_context_root")
-    # gate: a harness environment (claude-code target) that opts in via the path key,
-    # and at least one project graph to render.
-    if not root or "claude-code" not in machine.get("targets", []) or not reg.graphs:
-        return []
-    from . import graph as graphmod
-    root = str(root).rstrip("/")
-
-    # Example sample projects step aside once the user supplies their own (overlay) projects
-    # — the same guard the assistant tree applies, so the graph roster never lists samples
-    # on a configured fleet. On a fresh clone the set is empty and examples render.
-    suppressed = _suppressed_examples(reg)
-    active_graphs = {slug: g for slug, g in reg.graphs.items() if slug not in suppressed}
-
-    def _generated(deploy_path: str, content: str) -> Output:
-        return Output(
-            target="agentic-graph", kind="text", deploy_path=deploy_path,
-            dist_rel=f"agentic-graph/{safe_rel(deploy_path)}",
-            content=content, drift_policy="generated", sources=[])
-
-    outputs: list[Output] = [
-        _generated(f"{root}/AGENTS.md",
-                   graphmod.roster_markdown(list(active_graphs.values())))]
-    for slug, pg in sorted(active_graphs.items()):
-        base = f"{root}/Projects/{slug}"
-        proj = reg.projects.get(slug) or {}
-        agents_path = f"{base}/AGENTS.md"
-        # full document context inline (no details file); repos cloned beside this file
-        # render as the generated `## Navigation` roster inside _project_node_regions
-        prose_src, prose = _project_prose(reg, proj, "context-tree")
-        gen_body = _project_doc_block(
-            reg, proj, pg, graphmod.project_full_markdown,
-            level=2 if prose_src else 1,
-            emit_heading=_connection_emit(proj, prose))
-        regions = _project_node_regions(proj, prose_src, prose, gen_body)
-        if prose_src:
-            # prose (protected) interleaved with the generated nav + doc regions
-            outputs.append(_mixed_doc_output(
-                "agentic-graph", agents_path, regions, prose_src, "protect"))
-        else:
-            # no human prose for this project → the file is wholly generated
-            outputs.append(_generated(agents_path, render.plain_document(
-                [(s, b.rstrip("\n")) for s, b in regions if b.strip()])))
-    return outputs
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -851,7 +773,7 @@ def _agent_servers(reg: Registry, machine_name: str) -> dict:
 def _plan_context_tree_mounts(reg: Registry, machine_name: str) -> list[Output]:
     """Project-mounted operating trees (context_tree: on a project manifest) — the
     workstation-side counterpart to a machine's context_root mount. Called
-    unconditionally from plan_machine (like _plan_graph_tree), deliberately independent
+    unconditionally from plan_machine, deliberately independent
     of whether THIS machine lists context-tree as a target: context-tree is a context format a
     project opts into, not a harness a machine opts into, so one project's mount must not
     require a machine-wide target-list edit.

@@ -3,12 +3,15 @@
 
 Usage:
   python build/compile.py compile [--target T]
-  python build/compile.py deploy --machine M [--dry-run] [--force] [--root DIR]
-  python build/compile.py diff   --machine M [--root DIR]
+  python build/compile.py deploy --machine M [--dry-run] [--force] [--root DIR] [--lane L]
+                                 [--prune] [--target T]
+  python build/compile.py diff   --machine M [--root DIR] [--lane L] [--target T]
   python build/compile.py adopt  <deployed-path>
   python build/compile.py harvest [--machine M] [--adopt-all]
   python build/compile.py review [--port N] [--no-open]
   python build/compile.py graph  [--project SLUG] [--query NAME]
+                                 [--complete-effort ID [--evaluation-doc DOC_ID]]
+  python build/compile.py graph  strip-retired (--project SLUG | --all)
 """
 from __future__ import annotations
 

@@ -722,24 +722,7 @@ def run_query(pg: ProjectGraph, name: str) -> list[dict]:
     return rows
 
 
-# ── Materialization (the generated, non-adoptable project tree) ──────────────
-def roster_markdown(graphs: list[ProjectGraph]) -> str:
-    """The Agentic Context root AGENTS.md: every Project + its description. Generated
-    from the graph, overwritten every deploy (non-adoptable). Pure markdown, no banner."""
-    lines = [
-        "# Projects",
-        "",
-        "Index of active projects, generated from the knowledge graph and current as of "
-        "the last deploy. Open a project's folder under `Projects/` for its document "
-        "index and source.",
-        "",
-    ]
-    for pg in sorted(graphs, key=lambda p: p.name.lower()):
-        desc = f" — {pg.description}" if pg.description else ""
-        lines.append(f"- **{pg.name}** (`{pg.slug}`){desc}")
-    return "\n".join(lines).rstrip("\n") + "\n"
-
-
+# ── Materialization (the generated, non-adoptable document blocks) ───────────
 # The detail file's name, referenced by the lightweight index's pointer line.
 DETAILS_FILENAME = "AGENTS_DETAILS.md"
 

@@ -238,8 +238,7 @@ def test_connection_survives_a_registry_stand_in_with_no_servers():
 # ── {{project_root}} (the machine-scoped token) ──────────────────────────────
 def test_expand_project_root_prefers_assistant_root():
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
-    paths = {"context_root": "~/ContextTree/", "agentic_context_root": "C:/ContextTree",
-             "projects_root": "C:/Projects"}
+    paths = {"context_root": "~/ContextTree/", "projects_root": "C:/Projects"}
     out = render.expand_placeholders(_FakeReg(user), "cd {{project_root}}", paths)
     assert out == "cd ~/ContextTree"   # trailing slash normalized, context_root wins
 
@@ -248,8 +247,9 @@ def test_expand_project_root_fallback_chain():
     r = _FakeReg(user)
     assert render.expand_placeholders(
         r, "{{project_root}}", {"assistant_root": "~/LegacyAgent"}) == "~/LegacyAgent"
+    # the retired agentic_context_root is no root (the loader refuses the key outright)
     assert render.expand_placeholders(
-        r, "{{project_root}}", {"agentic_context_root": "C:/ContextTree"}) == "C:/ContextTree"
+        r, "{{project_root}}", {"agentic_context_root": "C:/ContextTree"}) == "{{project_root}}"
     assert render.expand_placeholders(
         r, "{{project_root}}", {"projects_root": "D:/Projects"}) == "D:/Projects"
 
@@ -285,7 +285,7 @@ def test_reverse_expand_project_root_matches_any_machines_root():
     # machine's root value must fold back, still scoped to token-bearing partials.
     user = {"given_name": "", "full_name": "", "email": "", "location": ""}
     machines = {"linux-box": {"paths": {"assistant_root": "~/ContextTree"}},
-                "win": {"paths": {"agentic_context_root": "C:/ContextTree"}}}
+                "win": {"paths": {"context_root": "C:/ContextTree"}}}
     r = _FakeReg(user, machines)
     original = "Navigate to {{project_root}} first."
     assert render.reverse_expand_placeholders(

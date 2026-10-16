@@ -113,9 +113,6 @@ def test_graph_materialization_markdown_split():
                             description="forecasting",
                             documents=[_doc("1AbC", "Forecast Spec", long_desc,
                                             "2026-06-14")])
-    roster = graph.roster_markdown([pg])
-    assert "Example Project" in roster and "`example-project`" in roster and "forecasting" in roster
-
     # lightweight index: titles only (bullet list), pointer to details; no link/ID/desc/date
     idx = graph.project_index_markdown(pg)
     assert "Forecast Spec" in idx                               # title present
@@ -736,11 +733,15 @@ def test_propose_graph_change_with_efforts():
     d1 = next(d for d in merged2.documents if d.drive_id == "D1")
     assert d1.is_part_of == ""    # reset to project root
 
-def test_graph_tree_emits_single_self_contained_agents_md():
+def test_workstation_emits_single_self_contained_agents_md():
+    """A workstation (claude-code, no context tree) gets ONE self-contained project
+    AGENTS.md: protected prose plus the full generated document block, no details file."""
     from agentic import render
     import copy
     from agentic.loader import Partial
     rig = copy.deepcopy(reg)
+    rig.machines["example-windows"]["targets"] = ["claude-code"]
+    rig.machines["example-windows"]["paths"].pop("context_root", None)
     rig.projects["sampledict"] = {
         "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
         "local_path": {"example-windows": "sampledict"},
@@ -758,12 +759,10 @@ def test_graph_tree_emits_single_self_contained_agents_md():
         rig.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
 
     win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
-           if o.target == "agentic-graph"}
-    # real (local) graphs are present — example-project core graph steps aside
-    proj = next(o for p, o in win.items() if p.endswith("Projects/sampledict/AGENTS.md"))
-    # one self-contained file: NO companion details file on the agentic-harness side
+           if o.target == "claude-code"}
+    proj = win["C:/Projects/sampledict/AGENTS.md"]
+    # one self-contained file: NO companion details file on a workstation
     assert not any(p.endswith("AGENTS_DETAILS.md") for p in win)
-    assert not any(p.endswith("Projects/example-project/AGENTS.md") for p in win)
     # the project AGENTS.md is prose (protected) + a generated doc block in one file
     assert proj.drift_policy == "protect" and proj.kind == "text"
     assert proj.sources and not render.is_generated_source(proj.sources[0])
@@ -777,9 +776,6 @@ def test_graph_tree_emits_single_self_contained_agents_md():
     assert "## Google Workspace suite (`gws`)" in proj.content
     assert proj.content.count("\n# ") <= 1 and not proj.content.startswith("# Google")
     assert "Sample Predictions — Documents" not in proj.content
-    # the roster stays wholly generated (no prose, non-adoptable)
-    roster = next(o for p, o in win.items() if p.endswith("ContextTree/AGENTS.md"))
-    assert roster.drift_policy == "generated" and roster.sources == []
 
 def test_graph_candidate_propose_accept_upserts_registry():
     from agentic import review
@@ -986,70 +982,44 @@ def test_propose_graph_change_rejects_unknown_project_and_empty():
     assert not review.propose_graph_change(treg, "example-project", [])["ok"]
 
 
-def test_graph_tree_deploys_only_on_claude_code_env():
-    import copy
-    from agentic.loader import Partial
-    rig = copy.deepcopy(reg)
-    rig.projects["sampledict"] = {
-        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
-        "local_path": {"example-windows": "sampledict"},
-        "context": {"assistant": "registry/context/projects/sampledict.md"},
-    }
-    rig.partials["context/projects/sampledict.md"] = Partial(
-        rel="context/projects/sampledict.md", audience=["agents-md"],
-        body="# Sampledict\n\nSampledict prose context"
-    )
-    from agentic.graph import ProjectGraph
-    rig.graphs["sampledict"] = ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
-
-    # example-linux has no claude-code target → no Agentic Context tree
-    linux = [o for o in planner.plan_machine(rig, "example-linux")
-             if o.target == "agentic-graph"]
-    assert linux == []
-    # example-windows (claude-code + agentic_context_root) → roster + per-project index
-    win = {o.deploy_path: o for o in planner.plan_machine(rig, "example-windows")
-           if o.target == "agentic-graph"}
-    assert any(p.endswith("ContextTree/AGENTS.md") for p in win)
-    # local graphs present → local project entries, not core example-project
-    assert any(p.endswith("ContextTree/Projects/sampledict/AGENTS.md") for p in win)
-    assert not any(p.endswith("ContextTree/Projects/example-project/AGENTS.md") for p in win)
-    for o in win.values():
-        # roster is generated; per-project files are prose(protect) + generated block
-        assert o.kind == "text" and o.drift_policy in ("generated", "protect")
-        assert "DO NOT EDIT" not in o.content and "begin:" not in o.content  # raw context
-        assert "<!-- " not in o.content   # marker-free (invariant #5)
-
-def test_graph_tree_round_trips_and_regenerates_without_capture():
+def test_context_tree_details_regenerate_without_capture():
+    """A context-tree project's AGENTS_DETAILS.md is wholly generated: a hand edit is
+    silently regenerated on the next deploy and nothing is captured to inbox/ (there is no
+    partial to route it back to). No root AGENTS.md is written beside Projects/."""
     import copy
 
     from agentic import graph
     from agentic.commands import cmd_deploy
     from agentic.io import safe_rel
-    # inject a document into a local (active) graph so the per-project index renders a table row;
-    # sampledict is a local graph so it is always in active_graphs regardless of overlay state
+    from agentic.loader import Partial
     reg2 = copy.deepcopy(reg)
-    if "sampledict" not in reg2.projects:
-        reg2.projects["sampledict"] = {
-            "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
-            "local_path": {"example-windows": "sampledict"}, "context": {},
-        }
-    if "sampledict" not in reg2.graphs:
-        reg2.graphs["sampledict"] = graph.ProjectGraph(slug="sampledict", name="Sample Predictions", description="forecasts", efforts=[], path=None)
+    reg2.projects.pop("mitos", None)   # its repo would trigger a real clone on deploy
+    reg2.projects["sampledict"] = {
+        "name": "Sample Predictions", "slug": "sampledict", "_is_local": True,
+        "local_path": {"example-windows": "sampledict"},
+        "context": {"assistant": "registry/context/projects/sampledict.md"},
+    }
+    reg2.partials["context/projects/sampledict.md"] = Partial(
+        rel="context/projects/sampledict.md", audience=["context-tree"],
+        body="# Sample Predictions\n\nSampledict prose context")
     reg2.graphs["sampledict"] = graph.upsert_document(
-        reg2.graphs["sampledict"], _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
+        graph.ProjectGraph(slug="sampledict", name="Sample Predictions",
+                           description="forecasts", efforts=[], path=None),
+        _doc("1AbCxyz", "Forecast UI Spec", "spec", "2026-06-14"))
     root = Path(__import__("tempfile").mkdtemp(prefix="ae-graph-"))
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    idx = root / safe_rel("C:/ContextTree/Projects/sampledict/AGENTS.md")
-    assert "Forecast UI Spec" in idx.read_text(encoding="utf-8")
-    roster = root / safe_rel("C:/ContextTree/AGENTS.md")
+    roster = root / safe_rel("C:/ContextTree/Projects/AGENTS.md")
     assert "Sample Predictions" in roster.read_text(encoding="utf-8")
+    assert not (root / safe_rel("C:/ContextTree/AGENTS.md")).exists()
+    details = root / safe_rel("C:/ContextTree/Projects/Sample Predictions/AGENTS_DETAILS.md")
+    assert "`1AbCxyz`" in details.read_text(encoding="utf-8")
 
-    # edit the generated roster in place, then redeploy: it is silently regenerated
+    # edit the generated details file in place, then redeploy: it is silently regenerated
     # (non-adoptable) and nothing is captured to inbox/ (no partial to route back to)
-    roster.write_text("hand edit\n", encoding="utf-8", newline="\n")
+    details.write_text("hand edit\n", encoding="utf-8", newline="\n")
     before = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert cmd_deploy(reg2, "example-windows", dry_run=False, force=False, root=root) == 0
-    assert "Sample Predictions" in roster.read_text(encoding="utf-8")   # overwritten
+    assert "`1AbCxyz`" in details.read_text(encoding="utf-8")   # overwritten
     after = sorted((_inbox(root)).iterdir()) if (_inbox(root)).exists() else []
     assert before == after, "a generated file must not capture an inbox candidate"
 

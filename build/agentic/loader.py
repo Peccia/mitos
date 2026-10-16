@@ -1117,6 +1117,10 @@ def _validate(reg: Registry) -> None:
         paths = m.get("paths") or {}
         if "assistant_root" in paths:
             raise RegistryError(f"machine {name}: path 'assistant_root' is retired — use 'context_root'")
+        if "agentic_context_root" in paths:
+            raise RegistryError(
+                f"machine {name}: path 'agentic_context_root' is retired — use 'context_root' "
+                f"(with 'context-tree' in targets), which deploys <context_root>/Projects/")
         # 1. Detect invalid/control characters in machine path keys (escape sequence bugs)
         for key, pval in paths.items():
             if not pval:
@@ -1128,26 +1132,11 @@ def _validate(reg: Registry) -> None:
                 raise RegistryError(
                     f"machine {name}: path key '{key}' contains invalid/garbled characters (hex {char_hex}). "
                     f"Ensure you are using forward slashes '/' and not unescaped backslashes '\\' in double-quoted strings.")
-        # 2. Prevent agentic_context_root from overlapping with code project checkouts (git pollution/collision)
-        ac_root = paths.get("agentic_context_root")
-        if ac_root:
-            from .io import expand
-            ac_root_resolved = expand(resolve_local_path(name, m, ac_root)).resolve()
-            for slug, proj in reg.projects.items():
-                local = (proj.get("local_path") or {}).get(name)
-                if not local:
-                    continue
-                proj_path = expand(resolve_local_path(name, m, local)).resolve()
-                if ac_root_resolved == proj_path or proj_path in ac_root_resolved.parents or ac_root_resolved in proj_path.parents:
-                    raise RegistryError(
-                        f"machine {name}: 'agentic_context_root' ({ac_root}) must not overlap with "
-                        f"project '{slug}' workspace path ({proj_path.as_posix()}). Keep the Agentic Context tree separate "
-                        f"from project checkouts to avoid path collisions and git pollution.")
-        # 3. `example: true` marks a shipped template profile (skipped by compile once a real
+        # 2. `example: true` marks a shipped template profile (skipped by compile once a real
         #    machine exists; refused by a real deploy). Optional, but must be a bool if set.
         if "example" in m and not isinstance(m["example"], bool):
             raise RegistryError(f"machine {name}: 'example' must be true/false")
-        # 4. Sync transport (consumed only by `mitos sync`, never the compiler) — validate
+        # 3. Sync transport (consumed only by `mitos sync`, never the compiler) — validate
         #    its SHAPE here without importing the sync package, so the deterministic verbs
         #    stay free of network code. Sync is git-only: a `git.hub` remote URL.
         sync = m.get("sync")

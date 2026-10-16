@@ -1,6 +1,6 @@
 # Mitos Operator Console Guide
 
-The Mitos **Operator Console** is a local web application that serves as the human steering wheel for your agent organization. 
+The Mitos **Operator Console** is a local web app for reviewing proposals, mapping documents into your knowledge graph, and editing skills, agents and prompts. Nothing it does reaches the registry until you accept it in the Inbox.
 
 Run the console to:
 1. Review and accept self-improvement proposals or drift from your tools (**Inbox**).
@@ -56,7 +56,7 @@ Reload.
 If the registry loader encounters non-fatal configuration anomalies, a prominent **Registry Warning(s)**
 callout banner appears across the top of the console:
 - **Retired `user.yaml` keys**: Warnings if retired keys such as `default_deliverables` are found, naming the exact line to remove.
-- **Retired graph predicates**: Alerts if any project graph contains retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, `peccia:orgDomain`), prompting you to run `python build/mitos.py graph strip-retired --all`.
+- **Retired graph predicates**: Alerts if any project graph contains retired predicates (`peccia:deliverable`, `peccia:requirementsCoverage`, `peccia:orgDomain`), prompting you to run `./mitos graph strip-retired --all` (or `python build/compile.py graph strip-retired --all`).
 - **Unknown targets**: Alerts if a machine profile lists an unknown or missing target adapter, which safely skips deployment for that target on that machine.
 
 ---
@@ -71,7 +71,7 @@ When a self-improving tool refines its own copy of a skill, or when you edit a d
 - Selecting a candidate shows a live **Diff View** comparing the proposed changes with the version currently in your registry.
 - A **Routing System** determines if the change can be applied automatically:
   - **Acceptable**: Plain Markdown prose edits (e.g. edits to a skill body or identity partial) can be accepted directly. Accepting updates your registry overlay (`registry/local/`) and marks the candidate as resolved.
-  - **Unacceptable**: Generated configurations (like `mcp_config.json` or `config.json` permissions) or structural files (like project YAML manifests) must be merged manually in `connections/servers.yaml` or project manifests. The console will display a clear message indicating where the manual change must land.
+  - **Unacceptable**: Generated MCP configurations (like `mcp_config.json` or `config.json` permissions) can't be accepted — make the change in `connections/servers.yaml` instead. The console says where the manual change must land. Project and machine candidates (`kind: project`, `kind: machine`) are accepted like any other.
 
 - **Supporting files**: A skill candidate that carries a replacement file set lists each added, changed or removed file with its own diff, beneath the `SKILL.md` diff.
 - **Machine candidates**: A `kind: machine` candidate (from the Permissions view) diffs the whole profile; accepting rewrites only its `skills:` block.
@@ -98,7 +98,7 @@ The **Knowledge Graph** tab is Stage 3 of mapping your workspace documents into 
 3. The console lists all staged files (either from the project-scoped staging file or the unassigned staging pool `unassigned.json`). Files that are already mapped are automatically filtered out.
 4. Select the checkboxes for the authoritative documents you want to provide to your agents (e.g. project specifications, designs, or logs).
 5. Click **Propose selected**. This writes a `kind: graph` candidate into your Inbox.
-6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which compiles into the Agentic Context roster on your next deploy.
+6. Navigate to the **Inbox** tab, review the candidate's canonical JSON-LD diff, and click **Accept**. This writes or updates `registry/local/graph/<project-slug>.jsonld`, which renders into the project's `AGENTS.md` and `AGENTS_DETAILS.md` on your next deploy.
 
 ### 🖼️ Document type and images
 The document editor carries a **Type** dropdown over the supported kinds (`document`,
@@ -241,10 +241,6 @@ provenance, so they sit there as a single compact line rather than a grid of car
   Contextual Editor for the body. Creating proposes a `kind: new` candidate; nothing is written to
   `registry/` until you Accept it in the Inbox, and it always lands in your private overlay
   (`registry/local/skills/<name>/SKILL.md`), never core.
-- **Disable**: Not yet wired to a candidate — the console can't route a frontmatter-only change
-  through the accept path today. Edit the skill's `targets:` list by hand in its `SKILL.md` to
-  exclude a tool.
-- **Import from .zip**: A placeholder for a future release — no backend yet.
 
 ### 🌲 Context Tree in the Console
 
@@ -291,7 +287,7 @@ The **Prompt Library** acts as a scratchpad and library for one-shot chat sessio
 - **Browse & Filter**: Access all authored Skills, first-class Prompts, and Partials (identity/context) from your registry. Like the Skills tab, the Library opens **scoped to your machines** — a coding-harness box isn't handed context-tree partials (`projects-index.md`, `operating-rules.md`) if it doesn't deploy them; the **All** chip reveals them. The scope pair only appears when something is actually being withheld. Kind/category chips reflect what the active scope contains, so a chip never yields an empty list. A prompt with no `targets:` is console-only by design and always shows. The list-scoped filter box narrows what's visible in the current tab. Example-project context partials are listed only on a fresh clone — once your overlay defines its own projects they step aside, like everywhere else in Mitos.
 - **Find anything (Ctrl/⌘K)**: Opens a command palette that searches every skill, prompt, and partial at once, from any tab — pick a result to jump straight to it in the Prompt Library.
 - **Favorites**: Toggle the star icon to pin a skill or prompt to your favorites list (drag to reorder, or use **Manage** for batch-unpin). Pins persist to `registry/local/prompt-favorites.yaml` and sync across sessions/devices.
-- **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal. Write **`{{#name}}`** instead of `{{name}}` for a **multi-line** field (Enter types a newline; copy with the button): both forms share one field and fill every occurrence. `{{#name}}` is console-only — a deploy never matches it, so a deployed prompt keeps it as written.
+- **Fillable inputs on copy**: A prompt body may carry `{{tokens}}`. Mitos-owned tokens are handled for you — the personalization tokens (`{{user_given_name}}`, `{{user_email}}`, …) are substituted from `user.yaml` exactly as a deploy would expand them, and the machine-scoped ones (`{{project_root}}`, `{{skills_root}}`, `{{returns_root}}`, `{{returns_container}}`, `{{connection}}`) are left literal, since a copied prompt goes to a chat app rather than a machine. **Every other `{{token}}` is treated as a fillable input**: copying opens a small modal asking for each one, then puts the filled text on your clipboard. Leave a field blank to keep its `{{token}}` literal, so an incomplete prompt is visibly incomplete rather than silently missing a word. A prompt with no custom tokens copies immediately, with no modal. Write **`{{#name}}`** instead of `{{name}}` for a **multi-line** field (Enter types a newline; copy with the button): both forms share one field and fill every occurrence. `{{#name}}` is console-only — a deploy never matches it, so a deployed prompt keeps it as written.
 - **Contextual Editor**: Select an item to edit it — a line-numbered textarea with a markdown toolbar (Bold/Italic/Code/Link/Heading/List) and a sanitized live preview toggle.
 - **+ New prompt**: Click the button above the prompt list to scaffold a brand-new prompt. Fill in its name, description, version, category, target checkboxes, and body. Creating it proposes a `kind: new` candidate; nothing is written to `registry/` until you Accept it in the Inbox, and it always lands in your private overlay (`registry/local/prompts/<name>.md`). This is for *brand-new* prompts, whereas **Save to inbox** edits an *existing* one.
 - **Save to inbox**: If you refine an existing prompt and want to save it as a permanent registry asset, type a short reasoning note and click **Save to inbox**. It will land in the **Inbox** tab as a new candidate for review.

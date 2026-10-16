@@ -90,10 +90,9 @@ def test_non_assistant_machine_coproduces_agents_md():
         rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     from agentic.graph import ProjectGraph
     rig.graphs["apoc"] = ProjectGraph(slug="apoc", name="Apocalyptic Adventure", description="test description", documents=[], efforts=[], path=None)
-    # configure example-windows as a pure workstation: remove context-tree and the
-    # agentic_context_root (that's the separate overlay harness tree, not needed here)
+    # configure example-windows as a pure workstation: remove context-tree and its root
     rig.machines["example-windows"]["targets"] = ["claude-code"]
-    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    rig.machines["example-windows"]["paths"].pop("context_root", None)
     # give apoc a local_path on example-windows so _local() resolves it
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
 
@@ -138,7 +137,7 @@ def test_stub_claude_md_inlines_builder_when_agents_md_absent():
     # claude-code-only machine: context-tree (which generates AGENTS.md) is NOT a target.
     rig = copy.deepcopy(reg)
     rig.machines["example-windows"]["targets"] = ["claude-code"]
-    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    rig.machines["example-windows"]["paths"].pop("context_root", None)
     # give mitos a local_path on example-windows so _local() resolves it (the live overlay
     # binds mitos only to the user's real machines, so the test pins its own)
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
@@ -240,7 +239,6 @@ def _builder_rig(targets, repos=True, context_root=None):
     rig.machines["example-windows"]["targets"] = targets
     if context_root:
         rig.machines["example-windows"]["paths"]["context_root"] = context_root
-        rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
     else:
         rig.machines["example-windows"]["paths"].pop("context_root", None)
     rig.projects["mitos"]["local_path"]["example-windows"] = "Mitos"
@@ -445,30 +443,30 @@ def test_context_tree_cross_reference_note_on_project_agents_lane():
 
 def test_workstation_produces_no_clones_and_context_root_produces_clones():
     """Workstations (claude-code without context-tree) never auto-clone or pull checkouts.
-    agentic_context_root machines produce clones in the reference tree."""
+    A context-tree machine with a context_root clones beside each project node."""
     import copy
     rig = copy.deepcopy(reg)
     if "apoc" not in rig.projects:
         rig.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig.machines["example-windows"]["targets"] = ["claude-code"]
-    rig.machines["example-windows"]["paths"].pop("agentic_context_root", None)
+    rig.machines["example-windows"]["paths"].pop("context_root", None)
     rig.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     rig.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
 
     clones = planner.plan_clones(rig, "example-windows")
     assert clones == [], "workstations must never auto-clone into local_path"
 
-    # agentic_context_root lane fires when agentic_context_root + context-tree are present
+    # the context_root lane fires when context-tree + context_root are present
     rig2 = copy.deepcopy(reg)
     if "apoc" not in rig2.projects:
         rig2.projects["apoc"] = {"name": "Apocalyptic Adventure", "slug": "apoc", "local_path": {}, "context": {}}
     rig2.machines["example-windows"]["targets"] = ["claude-code", "context-tree"]
-    rig2.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/ContextTree"
+    rig2.machines["example-windows"]["paths"]["context_root"] = "C:/ContextTree"
     rig2.projects["apoc"]["local_path"]["example-windows"] = "apocalyptic_adventure"
     rig2.projects["apoc"]["repo"] = "git@github.com:Peccia/apoc.git"
     clones2 = planner.plan_clones(rig2, "example-windows")
     dests = {c.dest for c in clones2 if c.slug == "apoc"}
-    assert any("ContextTree" in d for d in dests), "agentic_context_root lane must fire"
+    assert dests == {"C:/ContextTree/Projects/Apocalyptic Adventure/apoc"}, dests
     assert not any("apocalyptic_adventure" in d for d in dests), "local_path lane must not fire"
 
 def test_hidden_project_disappears_from_every_planned_output():
@@ -478,7 +476,7 @@ def test_hidden_project_disappears_from_every_planned_output():
     restores byte-identical outputs, proving the filter adds no side effect of its own."""
     import copy
     rig = _full_windows_rig()
-    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/ContextTree"
+    rig.machines["example-windows"]["paths"]["context_root"] = "C:/ContextTree"
     proj = rig.projects["example-project"]
     proj.pop("example", None)                    # don't let the shipped-sample guard hide it
     proj["local_path"]["example-windows"] = "example-project"
@@ -876,8 +874,8 @@ def _rig_with_repos(prose_body: str | None = None):
 def _example_node(rig):
     from agentic import planner
     return next(o for o in planner.plan_machine(rig, "example-windows")
-                if o.target == "agentic-graph"
-                and o.deploy_path.endswith("Projects/example-project/AGENTS.md"))
+                if o.target == "context-tree"
+                and o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
 
 
 def test_project_node_renders_repo_roster_inside_navigation():
@@ -894,7 +892,7 @@ def test_project_node_renders_repo_roster_inside_navigation():
     assert "github.com/you/frontend.git" not in node.content   # URL is deploy machinery
     # Navigation leads the generated document block (reserved-section order, invariant #12)
     assert node.content.index("## Navigation") < node.content.index(
-        "Knowledge-graph documents for this project")
+        "Document titles from the knowledge graph")
     assert render.GENERATED_NAV in [s for s, _ in node.section_bodies]
 
 
@@ -930,8 +928,8 @@ def test_project_node_without_repos_has_no_navigation_roster():
     from agentic import planner, render
     rig = _full_windows_rig()   # example-project ships repo: "" (absent)
     outs = planner.plan_machine(rig, "example-windows")
-    node = next(o for o in outs if o.target == "agentic-graph"
-                and o.deploy_path.endswith("Projects/example-project/AGENTS.md"))
+    node = next(o for o in outs if o.target == "context-tree"
+                and o.deploy_path.endswith("Projects/Example Project/AGENTS.md"))
     assert "## Navigation" not in node.content
     assert render.GENERATED_NAV not in [s for s, _ in node.section_bodies]
     assert [s for s, _ in node.section_bodies].count(
@@ -948,10 +946,10 @@ def test_plan_clones_lands_in_the_right_tree_per_machine():
     lc = next(c for c in linux if c.slug == "mitos")
     assert lc.dest.endswith("context/Projects/Mitos/mitos")   # project NAME "Mitos"
     assert lc.repo == "git@github.com:Peccia/mitos.git"
-    # claude-code + agents-md machine: clones land in the reference tree, keyed by the SLUG.
+    # claude-code + context-tree machine: the same tree, the same NAME-keyed folder.
     win = plan_clones(reg, "example-windows")
     wc = next(c for c in win if c.slug == "mitos")
-    assert wc.dest.endswith("ContextTree/Projects/mitos/mitos")   # project SLUG "mitos"
+    assert wc.dest == "C:/ContextTree/Projects/Mitos/mitos"
     # workstation machine (claude-code only / no agents-md): workstation checkouts are
     # never auto-cloned or pulled.
     workstation = plan_clones(reg, "example-workstation")

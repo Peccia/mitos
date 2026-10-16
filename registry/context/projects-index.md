@@ -15,15 +15,6 @@ read it whenever you need to operate on a document).
    to its ID via `AGENTS_DETAILS.md` and operate on the ID — search the document store
    by name only when the maps don't list it, and never create a document whose title the
    map lists.
-3. Pick the org skill **per task, never per project** — the same project can hold
-   software, design, and marketing work side by side:
-   - An effort (a `###` document group under the connection section) tagged "runs under
-     the `<domain>` org" names the skill: `org-<domain>`.
-   - No matching or tagged effort → classify the request itself:
-     building/refactoring/debugging → `org-software`; visual, UX, or brand-asset work →
-     `org-design`; positioning, launch, or content work → `org-marketing`.
-4. Load that one skill — read `{{skills_root}}/productivity/org-<domain>/SKILL.md` — and
-   apply its delegation chain. Re-run this routing whenever the work shifts, not once
-   per project.
+3. Re-run this routing whenever the work shifts to another project.
 
-The project roster and available domain organizations are listed below.
+The project roster is listed below.

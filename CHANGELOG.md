@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- The `agentic_context_root` path key and the generated reference tree it deployed (a root `AGENTS.md` plus `Projects/<slug>/`, the layout 0.2.0 retired everywhere else). A machine profile that still sets the key now stops the load and names `context_root` as the replacement: switch the key, keep `context-tree` in `targets:`, then run `deploy --machine <name> --prune` to remove the old files. Repo checkouts are kept where they are; new clones land in `Projects/<Name>/`. `machines/example-windows.yaml` now uses `context_root`.
+- The Google client libraries from `pyproject.toml`'s `connectors` extra. No connector imports them; Google Workspace is reached through its MCP server (`requests`).
+
+### Fixed
+- `mitos init` → **[1] Scaffold a fresh one** crashed with `NameError: name 'use_case' is not defined` after the last question. It now writes your machine profile. Its menu and closing text no longer mention org templates or deliverable skills core doesn't ship.
+- The roster prose deployed as `Projects/AGENTS.md` (`registry/context/projects-index.md`) told the agent to load `org-*` skills, which were retired in 0.1.9. That step is gone; redeploy to pick it up. If your overlay has its own `projects-index.md`, remove the same steps there.
+- `identity/operating-rules.md` now sends the agent to `Projects/AGENTS.md` under the project root, not to the root `AGENTS.md` that 0.2.0 removed.
+- `connect --store` help said `--stage` can't loop several stores; it can.
+- Documentation now matches the code: Antigravity takes its `AGENTS.md` from `claude-code` or `context-tree` and deploys none itself; a context-tree machine mount writes no identity files; skill curation lives on machine profiles (`targets/*.yaml` refuses it); `{{returns_root}}` is `<context_root>/.local-memory/returns` when `context_root` is set; a leftover retired-flag line in `user.yaml` stops the load rather than warning; `mitos update` exists; the overlay reference covers `agents/`, `targets/`, `inbox/`, machine `skills:`/`agents:` curation and every project-manifest field. Removed descriptions of features that no longer exist (skill extensions, `SOUL.md`, the console's Disable and Import-from-zip buttons).
+
 ## [0.2.0] - 2026-10-15
 
 ### Migration Guide: the context tree layout

@@ -47,9 +47,9 @@ skills:
   deploy_to_key: claude_skills_staging  # resolved per machine
   frontmatter: claude-app           # Agent Skills standard: name + description
   drift_policy: protect
-  # No include:/exclude: here — curating which compatible skills actually stage is a
-  # personal choice, and this file is core (not overlayable). Set it per machine in
-  # machines/<name>.yaml's `skills: {claude-app: {include: [...] | exclude: [...]}}`.
+  # No include:/exclude: here, and none on a machine profile either — claude-app is a
+  # manual (mode: zip) target: every compatible skill is staged and you choose at upload
+  # time. `requires_server:` still gates what stages.
 
 server_alias: gws-mcp-local
 

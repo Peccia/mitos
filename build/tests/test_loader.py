@@ -202,19 +202,18 @@ def test_path_validation_control_characters():
         assert "contains invalid/garbled characters" in str(e)
 
 
-def test_path_validation_workspace_overlap():
+def test_retired_agentic_context_root_key_is_refused():
+    """The reference-tree lane (`agentic_context_root`) is retired: a leftover key stops the
+    load and names `context_root` as the replacement, rather than silently deploying nothing."""
     import copy
     from agentic.loader import _validate, RegistryError
-    # uses example-project (core registry, overlay-independent) to trigger the overlap guard
     rig = copy.deepcopy(reg)
-    rig.machines["example-windows"]["paths"]["projects_root"] = "C:/Projects"
-    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/Projects/example-project"
-    rig.projects["example-project"]["local_path"]["example-windows"] = "example-project"
+    rig.machines["example-windows"]["paths"]["agentic_context_root"] = "C:/ContextTree"
     try:
         _validate(rig)
-        raise AssertionError("expected RegistryError due to workspace path overlap")
+        raise AssertionError("expected RegistryError for the retired agentic_context_root key")
     except RegistryError as e:
-        assert "must not overlap with project 'example-project' workspace path" in str(e)
+        assert "'agentic_context_root' is retired" in str(e) and "context_root" in str(e)
 
 
 
@@ -682,22 +681,38 @@ def test_scaffold_machine_document_store_is_asked_not_assumed():
     reg3 = loader.load(tmp2)
     assert reg3.machines["box"]["document_store"] == "gws"
 
+def test_init_fresh_scaffold_runs_to_completion(tmp_path, monkeypatch):
+    """`mitos init` → [1] answers every question and writes a machine profile. Guards the
+    path end to end: it once referenced variables that no longer existed and crashed with a
+    NameError after the user had answered everything."""
+    import mitos
+    from agentic import init as initmod
+    answers = iter(["Ada", "Lovelace", "", "ada@example.com", "",   # identity
+                    "0",                                             # no document store
+                    "1",                                             # first coding harness
+                    "n",                                             # no context tree
+                    "box", "windows"])                               # machine name, OS
+    monkeypatch.setattr(mitos, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mitos, "_ask", lambda prompt: next(answers))
+    assert mitos._init_scaffold_fresh(initmod, has_local=False) == 0
+    profile = tmp_path / "registry" / "local" / "machines" / "box.yaml"
+    assert profile.is_file()
+    assert "targets: [" + next(iter(initmod.CODING_TARGETS)) in profile.read_text(encoding="utf-8")
+
+
 def test_example_project_suppressed_when_overlay_projects_exist():
-    """An `example: true` sample steps aside once overlay projects exist — across BOTH
-    enumeration trees (agents-md assistant tree + agentic-graph roster). Real reg carries
-    overlay projects (apdict, apoc, personal-brand), so example-project must not deploy."""
+    """An `example: true` sample steps aside once overlay projects exist — on every machine
+    that hosts the context tree, and in the clone plan beside it."""
     rig = _full_windows_rig()
     # Inject a local project and its graph to trigger example project suppression hermetically
     rig.projects["apdict"] = {"name": "Apdict", "slug": "apdict", "_is_local": True, "local_path": {"example-windows": "apdict"}}
     from agentic.graph import ProjectGraph
     rig.graphs["apdict"] = ProjectGraph(slug="apdict", name="Apdict", description="test description", documents=[], efforts=[], path=None)
     outs = planner.plan_machine(rig, "example-windows")
-    # agentic-graph roster: example-project absent, real overlay projects present
-    graph_paths = [o.deploy_path for o in outs if o.target == "agentic-graph"]
-    assert not any("example-project" in p for p in graph_paths), (
-        "example-project graph appeared despite overlay projects being present")
-    assert any("apdict" in p for p in graph_paths)
-    # agents-md assistant tree: "Example Project" folder must not be emitted
+    tree_paths = [o.deploy_path for o in outs if o.target == "context-tree"]
+    assert not any("Example Project" in p for p in tree_paths), (
+        "Example Project tree node appeared despite overlay projects being present")
+    # context tree on the other example machine: "Example Project" folder must not be emitted
     assistant_paths = [o.deploy_path for o in planner.plan_machine(rig, "example-linux")
                        if o.target == "context-tree"]
     assert not any("Example Project" in p for p in assistant_paths), (

@@ -13,9 +13,9 @@ Usage:
                                 [--store SERVER] [--backend NAME]
   python build/mitos.py connectors
   python build/mitos.py peek --id ID [--store SERVER | --backend NAME]   (console-internal)
-  python build/mitos.py sync --machine NAME init|clone --hub URL [--branch B] [--ssh-key PATH]
+  python build/mitos.py sync --machine NAME init|clone --hub URL [--branch B] [--remote R] [--ssh-key PATH]
   python build/mitos.py sync --machine NAME [all|pull|push|refresh|status] [--dry-run]
-  python build/mitos.py update --machine NAME [--dry-run] [--json]
+  python build/mitos.py update --machine NAME [--scheduled] [--dry-run] [--json]
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def _init_dispatch() -> int:
         print(f"Note: an overlay already exists at {overlay.as_posix()} — your files there are "
               f"never overwritten.\n")
     print("How do you want to set up this machine's overlay?")
-    print("  [1] Scaffold a fresh one (name, org template, backend)")
+    print("  [1] Scaffold a fresh one (your name, this machine's harnesses, a document store)")
     print("  [2] Pull an overlay you already keep on a git hub (another machine's mitos-local)")
     print("  [3] Use the files already in registry/local/ as-is")
     default = "3" if has_local else "1"
@@ -137,8 +137,8 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
     os_name = _ask(f"OS (windows/linux/macos) [{default_os}]: ") or default_os
     try:
         machine_written = initmod.scaffold_machine(REPO_ROOT, name=machine_name,
-                                                    os_name=os_name, use_case=use_case,
-                                                    targets=targets, document_store=store)
+                                                    os_name=os_name, targets=targets,
+                                                    document_store=store)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -152,10 +152,8 @@ def _init_scaffold_fresh(initmod, has_local: bool) -> int:
         print(f"\nNext: stand up the {store} MCP server (see docs/connectors/), point the "
               f"`{store}` entry in connections/servers.yaml at it, then run "
               f"`python build/mitos.py connect --project <slug>`.")
-    elif not is_agent:
-        print("\nYour first deploy will install the 7 standard deliverable skills "
-              "(documentation, tests, changelog, deploy-book, runbook, migration-notes, "
-              "requirements-receipt). You can add your own custom skills:")
+    else:
+        print("\nAdd your own skills:")
         print("  - registry/local/skills/<name>/SKILL.md (your overlay, gitignored), or")
         print("  - the console's Skills tab: python build/compile.py review")
         print("  See README.md's \"How skills reach a tool\" and docs/authoring-capabilities.md; "
@@ -815,7 +813,7 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--store", default=None,
                     help="which of the project's document_store entries to use — only "
                          "needed when the project binds more than one store; omit to loop "
-                         "all of them (one candidate per store; not supported with --stage)")
+                         "all of them (one candidate, or one staged listing, per store)")
     sub.add_parser("connectors", help="list available workspace connectors")
     pk = sub.add_parser("peek",
                         help="print one document's raw content to stdout (console-only "

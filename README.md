@@ -158,9 +158,9 @@ materializes.
 | `targets:` | What deploys |
 |---|---|
 | `claude-code` | Per-project `CLAUDE.md` + `AGENTS.md`, skills in `.claude/skills/`, and prompts as slash commands. |
-| `antigravity` | Native `AGENTS.md` context, MCP wiring, and global or project-scoped skills. Covers Antigravity IDE and CLI. |
+| `antigravity` | MCP wiring and global or project-scoped skills. Covers Antigravity IDE and CLI. Antigravity reads the `AGENTS.md` that `claude-code` or `context-tree` deploys; this target writes none. |
 | `claude-app` | Skill `.zip`s staged for upload to your claude.ai account, plus an `npx mcp-remote` bridge for Claude Desktop. |
-| `context-tree` | A personal context tree providing unified project rosters, docs, and identity for any harness. |
+| `context-tree` | A project tree: `Projects/AGENTS.md` (the roster) plus one folder per project with its documents and repos, readable by any harness. |
 
 The harness question is a multi-select: each target has its own deploy paths, so any non-empty
 subset is a legal machine (Antigravity alone, Claude Desktop alone, all three). The `paths:`
@@ -210,7 +210,7 @@ Once your overlay defines a real machine profile, `compile` automatically **skip
 templates** (and a real `deploy` of an example template is refused) — so you only ever build and deploy
 your own configured machines.
 
-Similarly, the shipped `example-project` is a sample project manifest (`example: true`). It renders on a fresh clone for the Quick Start, but automatically **steps aside** as soon as you define your own local overlay projects under `registry/local/projects/`. This prevents sample projects from polluting your fleet's rosters, graphs, and assistant context trees.
+Similarly, the shipped `example-project` is a sample project manifest (`example: true`). It renders on a fresh clone for the Quick Start, but automatically **steps aside** as soon as you define your own local overlay projects under `registry/local/projects/`. This prevents sample projects from polluting your fleet's rosters, graphs, and context trees.
 
 
 ## Core concepts
@@ -220,17 +220,16 @@ Similarly, the shipped `example-project` is a sample project manifest (`example:
 | **registry/** | Your single source of truth. Where you author everything: identity (`identity/`), context (`context/`), skills (`skills/`), harness-agnostic prompts (`prompts/`), the knowledge graph (`graph/`), and project manifests (`projects/`). |
 | **Prompt** | A harness-agnostic reusable text asset in `registry/prompts/<name>.md`. The substrate every harness understands. Skills are progressive enhancement on top. Always available in the **Prompt Library** tab of the console; deployed to harnesses whose `targets/<tool>.yaml` has a `prompts:` block. |
 | **Skill resources** | A skill's supporting files — `registry/skills/<name>/examples/` (expected-output samples) and `.../scripts/` (executables Claude can run) — auto-discovered, deployed alongside `SKILL.md`, and bundled into claude.ai zips. Each file adopts/harvests back to its own path, never `SKILL.md`. |
-| **Skill extension** | A skill that declares `extends_skill`/`extends_role` in its frontmatter: its body splices into the named parent skill's matching role section **at render time only** (the parent's registry file is never touched) and it never deploys standalone. |
 | **registry/local/** | Your gitignored overlay — private identity, projects, graph, machines, and connections that override the public core. Field-by-field reference: [`registry/README.md`](registry/README.md). |
 | **connections/** | MCP server definitions + env templates. Wiring, not content — it deploys on its own `--lane connections`. |
 | **target** | An adapter (`targets/<tool>.yaml`): how one tool consumes the registry — what to emit and where. |
 | **machine** | A host (`machines/<name>.yaml`): which targets land there, and the path keys telling each target where to write. One machine can carry any mix of the coding harnesses. |
 | **drift policy** | Per-file rule for edits to deployed copies: `protect` (deploy blocks to prevent overwriting), `harvest` (captured into `inbox/` as a review proposal), or `generated` (regenerated each deploy from the graph). Full mechanics: [managing-state.md](docs/managing-state.md). |
 | **inbox/** | The human review queue. Proposals from self-improving tools land here as candidates; **only you** approve and merge them via the operator console. |
-| **Project tree vs. reference index** | Two ways to materialize context, with different edit rules. A **project tree** (the `context-tree` target, mounted by a project's `context_tree:` or a machine's `context_root`) is a working context — the project roster and one node per project — with `drift_policy: protect`, so edits you make in place reconcile back via `adopt`. A **reference index** (`context_root` below) is a lightweight, read-only project and document index generated straight from `registry/graph/` (`drift_policy: generated`); edits there are overwritten on the next deploy. |
+| **Project tree** | The `context-tree` target's output, mounted at a machine's `context_root` or inside one project by its `context_tree:` — the roster `Projects/AGENTS.md` and one `Projects/<Name>/` node per project. Prose is `drift_policy: protect`, so edits you make in place reconcile back via `adopt`; the generated parts (roster, repo list, document index, `AGENTS_DETAILS.md`) are rebuilt from `registry/graph/` on every deploy. |
 | **context_tree** | *(project mount, project-wide)* An optional field on a project manifest — `context_tree: <subdir>` — that mounts the project tree (`Projects/AGENTS.md`, the project roster, and one `<Name>/AGENTS.md` per project) at `<local_path>/<subdir>/Projects/` inside that one project's checkout. It lets a coding harness like Antigravity work against a single project with an editable context tree rather than a flat `AGENTS.md`. |
-| **context_root** | *(machine-wide)* A machine path key (`machines/<name>.yaml`) where the `context-tree` target deploys the project tree at `<context_root>/Projects/` — the roster `AGENTS.md` plus one `<Name>/AGENTS.md` and `AGENTS_DETAILS.md` per project — and where `claude-code` auto-clones project repos beside each node. |
-| **project checkouts** | Deployed files at each project's `local_path` directory. On a **workstation** (claude-code without context-tree), Mitos writes a full-context `AGENTS.md` — the inline doc index from the knowledge graph plus the project's prose — and a thin `CLAUDE.md` stub pointing at it (`@AGENTS.md`). Where `context-tree` is also a target, `CLAUDE.md` carries identity and repo context and the graph materializes separately in the reference tree. |
+| **context_root** | *(machine-wide)* A machine path key (`machines/<name>.yaml`) where the `context-tree` target deploys the project tree at `<context_root>/Projects/` — the roster `AGENTS.md` plus one `<Name>/AGENTS.md` and `AGENTS_DETAILS.md` per project — and where project repos are cloned beside each node. |
+| **project checkouts** | Deployed files at each project's `local_path` directory. On a **workstation** (claude-code without context-tree), Mitos writes a full-context `AGENTS.md` — the inline doc index from the knowledge graph plus the project's prose — and a thin `CLAUDE.md` stub pointing at it (`@AGENTS.md`). Where `context-tree` is also a target, `CLAUDE.md` carries identity and repo context and the graph materializes in the context tree's project node. |
 
 ## How skills reach a tool
 
@@ -262,9 +261,11 @@ human uploads the ones they want, so it takes no `include:`/`exclude:` curation 
 for it on a machine profile is refused) and never reports a `scope: project` skill as leaking —
 a staged zip is inert until someone chooses it. Its `requires_server:` gate still applies.
 
-Optionally, a target can *curate* its compatible set in one place via `include:`/`exclude:` under
-`skills:` in `targets/<tool>.yaml`. Full field details: the `skills` rows in the
-[overlay configuration reference](registry/README.md).
+Optionally, a machine can *curate* the compatible set it receives with
+`skills: {<target>: {include: [...]}}` (or `exclude:`) in its `machines/<name>.yaml` — never in
+`targets/<tool>.yaml`, which the loader refuses. The console's **Skills → Permissions** view edits
+it for you. Full field details: the `skills` row in the
+[overlay configuration reference](registry/README.md#machine-profile--machinesnameyaml).
 
 ## Personal context tree
 
@@ -436,8 +437,8 @@ proposes the documents as a `kind: graph` candidate, and you accept it in the co
 If the project has no `document_store` set, `connect` defaults to the **local-file connector**
 — no credentials required; point it at any local directory with `--folder-id /path/to/docs`.
 Bound to more than one store? `connect` loops all of them — one enumeration, one candidate
-per store, each reviewable independently. Pass `--store <name>` to run against just one
-(required for `--stage`, which doesn't loop multiple stores yet).
+per store, each reviewable independently (`--stage` loops the same way, one staged listing
+per store). Pass `--store <name>` to run against just one.
 
 Three connector backends feed the same valve, all **beside** the compiler with lazy, optional
 deps (the deterministic verbs never import them):
@@ -462,8 +463,8 @@ a concise added/changed/removed document summary first, full line diff behind a 
 re-running `connect` on a whole store doesn't bury what's new under unchanged lines),
 **Knowledge Graph** (propose
 document mappings, and describe each effort's goal and status), **Skills**
-(browse, create, and edit skills as cards, including their supporting files under `examples/`
-and `scripts/`), and **Prompt Library** (browse, copy, and
+(browse, create, and edit skills as cards, with a full-size editor for each skill's supporting
+files, and a **Permissions** view of what reaches each machine), and **Prompt Library** (browse, copy, and
 compose your registry prose for one-shot use in any chat app — plus a Ctrl/⌘K command
 palette that searches all of it). It edits the working tree and never commits
 — `git status` shows you exactly what changed. A status bar can also trigger **Compile**
@@ -494,7 +495,7 @@ reference:
 | `adopt <path>` | Pull an in-place edit on a deployed file back into the registry. |
 | `harvest [--machine M] [--adopt-all]` | Digest of `harvest`-policy drift — proposals from self-improving tools. |
 | `review [--port N] [--no-open]` | The operator console (localhost; default port 8765). |
-| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. Add `--complete-effort <id> [--evaluation-doc <doc-id>]` to propose marking an effort Done (creates an Inbox candidate only). |
+| `graph [--project <slug>] [--query Q]` | Inspect/query a project's knowledge graph; omit `--project` to list every graph. Add `--complete-effort <id> [--evaluation-doc <doc-id>]` to propose marking an effort Done (creates an Inbox candidate only). `graph strip-retired --project <slug>` (or `--all`) proposes graphs without the predicates v0.1.9 retired. |
 | `mitos.py init` / `project add` / `connect` / `connectors` | Scaffold the overlay / create a project (Stage 1) / map its docs into the graph (Stage 3) / list the available connectors — the separate, optional entrypoint. |
 | `mitos.py sync --machine M [init\|clone --hub URL\|status]` | Set up (`init`/`clone`) or run git-only overlay sync across your machines: pull → deploy → push. |
 | `mitos.py update --machine M [--dry-run] [--json]` | Unattended core pull → overlay pull → deploy; never force, prune, or push. `--json` prints one `schema: 1` outcome (see [managing state](docs/managing-state.md#automating-an-update)). |

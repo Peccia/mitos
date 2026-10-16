@@ -96,23 +96,23 @@ The two flags you'll see on `drift`/`conflict` lines:
 Every emitted file carries a **drift policy** (set in its target spec) that decides what happens
 when its deployed copy drifts:
 
-- **`protect`** — the safe default for authored prose (SOUL.md, AGENTS.md, the Antigravity prompt files,
+- **`protect`** — the safe default for authored prose (`AGENTS.md`, `CLAUDE.md`,
   staged skill zips). If it drifts, **deploy refuses the whole run** (exit 1) and tells you to
   resolve it. Nothing is overwritten until you decide. Override for one run with `--force` (which
   still captures the drift to `inbox/` first, unless the file is exempt — see below).
-- **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill the assistant tunes).
+- **`harvest`** — for files a self-improving tool is *expected* to edit (e.g. a skill a tool tunes).
   On drift, deploy **captures the edit to `inbox/` and then overwrites** (registry wins), so the
   proposal is preserved for you to accept later, and the machine still converges on the registry.
-- **`generated`** — knowledge-graph-derived files with no human prose: the Context Tree
-  **roster** (`AGENTS.md` at the tree root) and, in a context tree, each project's
-  `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
+- **`generated`** — knowledge-graph-derived files with no human prose: each context-tree
+  project's `AGENTS_DETAILS.md`. Regenerated from `registry/graph/` on every deploy; in-place edits are
   **overwritten silently** and are **non-adoptable** (there's no registry partial to route an edit
   back to — edit `registry/graph/<slug>.jsonld` instead). A picture lives there as a
   `schema:ImageObject` node beside the `DigitalDocument`s — same identifier/`isPartOf`
   rules and the same accept/removal path, a reference only (never image bytes).
 
   A project's **`AGENTS.md`** is a special case: it is the project's prose (a registry partial,
-  **`protect`**) followed by a generated document block. The two are split in the lockfile, not by
+  **`protect`**) followed by a generated document block. The roster `Projects/AGENTS.md` is the
+  same shape: `projects-index.md` prose followed by the generated project list. The two are split in the lockfile, not by
   any in-file marker (invariant #5): only the **prose** is protected and adoptable, while the
   generated block regenerates every deploy — a hand-edit of the block never blocks a deploy and is
   silently overwritten, exactly as a `generated` file would be. So one file carries both policies,
@@ -122,7 +122,8 @@ when its deployed copy drifts:
 source is your `.local/` overlay), staged `.zip` skills (binary build artifacts), and
 `generated` files (no partial to route to) are never snapshotted to `inbox/`.
 
-**Skill supporting files.** A skill's `examples/` and `scripts/` files deploy alongside
+**Skill supporting files.** A skill's `examples/`, `scripts/`, `references/`, `templates/` and
+`resources/` files deploy alongside
 `SKILL.md` as their own separately-tracked outputs, each carrying the skill's own drift
 policy (`harvest` on claude-code) — an edited script drifts, captures, and
 adopts/harvests **back to its own file**, never to `SKILL.md`. Deploy also sets the executable
@@ -130,7 +131,7 @@ bit on files under `scripts/` when the target machine isn't Windows.
 
 ## Worked example: a first deploy onto a populated machine
 
-This is the exact plan from a first real deploy where the machine already had Antigravity/Claude files:
+This is a plan from a first real deploy where the machine already had Antigravity/Claude files:
 
 ```
 deploy plan for windows-laptop (apply):
@@ -139,10 +140,10 @@ deploy plan for windows-laptop (apply):
   [unchanged] ~/.gemini/config/skills/gws/SKILL.md — untracked existing file
   [conflict ] ~/.gemini/config/skills/changelog/SKILL.md — untracked existing file  <-- will capture to inbox/, then overwrite
   [conflict ] ~/ClaudeSkills/gws.zip — untracked existing file  <-- protected, blocked
-  [create   ] C:/Projects/ContextTree/AGENTS.md
-  [create   ] C:/Projects/ContextTree/Projects/apdict/AGENTS.md
+  [create   ] C:/Projects/ContextTree/Projects/AGENTS.md
+  [create   ] C:/Projects/ContextTree/Projects/Apdict/AGENTS.md
   ...
-  [clone    ] C:/Projects/ContextTree/Projects/mitos/mitos — absent -> will clone
+  [clone    ] C:/Projects/ContextTree/Projects/Mitos/mitos — absent -> will clone
 
 refusing to deploy: 2 protected file(s) drifted. Resolve with `adopt` / `harvest`, or pass --force.
 ```

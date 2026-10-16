@@ -1,6 +1,6 @@
 # Authoring Custom Capabilities Guide
 
-Mitos allows you to extend your agent organization by authoring three kinds of reusable text assets: **Skills**, **Agents**, and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
+Mitos lets you extend the context your harnesses share by authoring three kinds of reusable text assets: **Skills**, **Agents**, and **Prompts**. You write these assets once in your private overlay (`registry/local/`), and Mitos handles compiling and deploying them to your active AI tools.
 
 ---
 

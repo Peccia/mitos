@@ -2,9 +2,8 @@
 
 Interactive setup belongs to a SEPARATE entrypoint (build/mitos.py), never the deterministic
 compiler verbs (Phase E constraint #1). This module holds the pure, testable scaffolding;
-mitos.py wraps it with prompts. Selecting an org template here is how the selectable templates
-**replace** the single fixed Phase C′ org: the chosen seed lands in the overlay and overrides
-the core by last-layer-wins.
+mitos.py wraps it with prompts. What it writes lands in the overlay and overrides the core by
+last-layer-wins.
 """
 from __future__ import annotations
 

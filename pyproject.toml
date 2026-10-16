@@ -39,12 +39,10 @@ dev = [
     "pytest>=8.0",
 ]
 # Workspace connector backends are lazy-imported, optional, and installed only if you use them:
-#   gws (direct OAuth): google-api-python-client, google-auth-oauthlib
-#   mcp (talk to a running MCP server): requests
+#   mcp (talk to a running MCP server, e.g. Google Workspace): requests
+#   local, mock: standard library only
 connectors = [
     "requests>=2.31",
-    "google-api-python-client>=2.0",
-    "google-auth-oauthlib>=1.0",
 ]
 
 [tool.pytest.ini_options]

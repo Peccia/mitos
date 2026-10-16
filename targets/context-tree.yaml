@@ -18,9 +18,8 @@ target: context-tree
 # e.g. Antigravity operating against one project the way a harness operates against a
 # whole machine). project_mountable opts this tree into the second kind;
 # drift_policy: protect applies to both — every mount is an operating surface whose
-# edits reconcile back to the registry (contrast the `agentic_context_root`/agentic-graph
-# lane, which is drift_policy: generated — a read-only reference map, never an editing
-# surface).
+# edits reconcile back to the registry. Only each project's AGENTS_DETAILS.md and the
+# generated blocks inside a node (roster, repo list, document index) are regenerated.
 trees:
   projects:
     root_key: context_root

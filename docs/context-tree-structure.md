@@ -1,9 +1,9 @@
 # The tree-node header taxonomy
 
-Every file the assistant reads while navigating the deployed tree — the roster
+Every file a harness reads while navigating the deployed tree — the roster
 `Projects/AGENTS.md`, each project's `AGENTS.md`,
-and every `AGENTS_DETAILS.md` — shares **one header layout**. The persona (`SOUL.md`) and
-the skills reference sections *by name*, so the names, levels, and order are a contract,
+and every `AGENTS_DETAILS.md` — shares **one header layout**. Skills and always-on prose
+reference sections *by name*, so the names, levels, and order are a contract,
 not a style preference. It is enforced at plan time by `lint_node_markdown`
 (`build/agentic/planner.py`); a violation fails `compile`/`deploy` with the offending
 file and problem named.

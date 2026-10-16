@@ -72,7 +72,7 @@ test runner has no verb, so run it with the interpreter path as shown below.
    [Make it yours](README.md#make-it-yours) for the machine-profile walkthrough.
 
 Working on a connector backend? Install its optional deps too — `requests` for the `mcp`
-connector, the Google client libraries for `gws` (see `pyproject.toml` `[connectors]`).
+connector (see `pyproject.toml` `[connectors]`). The `local` and `mock` connectors need nothing.
 
 ## What to Contribute
 

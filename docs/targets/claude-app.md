@@ -138,7 +138,7 @@ two opt-in-by-path-key halves is the honest model:
 
 A web-only machine sets only `claude_skills_staging`; a Desktop machine that needs a LAN/HTTP
 MCP server sets `claude_desktop_config` too. The precedent for one target spanning two
-lanes is `antigravity` (MCP config on connections + prompts on content).
+lanes is `antigravity` (MCP config on connections + skills on content).
 
 **Path key (`claude_desktop_config`), per install:**
 

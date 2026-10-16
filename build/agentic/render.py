@@ -145,9 +145,9 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
                    servers: dict | None = None) -> str | None:
     """The expansion for one machine-scoped placeholder on one machine, or None.
 
-    - `project_root`: the agent tree root the machine hosts. Precedence mirrors which
-      tree the persona navigates — `context_root` (the context tree root) over
-      `agentic_context_root` (the reference context tree) over `projects_root` (plain workstation checkouts).
+    - `project_root`: the root the machine's agent works from — `context_root` (the folder
+      that holds the context tree's `Projects/`) over `projects_root` (plain workstation
+      checkouts). Prose that means the roster names `Projects/AGENTS.md` beneath it.
     - `skills_root`: where deployed skills live — `<context_root>/skills`.
     - `returns_root`: where a coding harness writes what it produced, for the return lane.
       On a machine hosting a planning harness this is its state directory's `returns/` — the folder
@@ -222,7 +222,7 @@ def _machine_value(paths: dict | None, key: str, machine: dict | None = None,
     if key == "project_root":
         if "project_root" in paths:
             return str(paths["project_root"]).rstrip("/")
-        for k in ("context_root", "assistant_root", "agentic_context_root", "projects_root"):
+        for k in ("context_root", "assistant_root", "projects_root"):
             val = paths.get(k)
             if val:
                 return str(val).rstrip("/")
